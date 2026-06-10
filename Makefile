@@ -438,10 +438,14 @@ test-api: ## Quick smoke-test the inference API
 	@echo "Testing API health..."; \
 	curl -s http://localhost:${API_PORT:-8080}/health | python3 -m json.tool; \
 	echo ""; \
-	echo "Testing /predict with sample payload..."; \
+	echo "Testing /predict with 4-step draft (phase 1 bans)..."; \
 	curl -s -X POST http://localhost:${API_PORT:-8080}/predict \
 		-H "Content-Type: application/json" \
-		-d '{"patch_id":1,"draft":[{"hero_id":1,"is_pick":false,"team":0,"order":1}]}' | python3 -m json.tool
+		-d '{"patch_id":1,"first_pick_team":0,"draft":[\
+{"hero_id":1,"is_pick":false,"team":0,"order":1},\
+{"hero_id":2,"is_pick":false,"team":1,"order":2},\
+{"hero_id":3,"is_pick":false,"team":0,"order":3},\
+{"hero_id":4,"is_pick":false,"team":1,"order":4}]}' | python3 -m json.tool
 
 .PHONY: migrate-ml
 migrate-ml: ## Apply only the ML migration (005_ml_tables.sql)

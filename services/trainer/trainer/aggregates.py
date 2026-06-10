@@ -20,12 +20,9 @@ logger = logging.getLogger(__name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
-_PRIOR = 3.0   # prior pseudo-count for Bayesian shrinkage
-_PRIOR_WR = 0.5  # prior win rate
-
-
-def _shrunk_wr(wins: int, games: int) -> float:
-    return (wins + _PRIOR * _PRIOR_WR) / (games + _PRIOR) if games > 0 else _PRIOR_WR
+def _shrunk_wr(wins: int, games: int, prior_games: float = 3.0, prior_wr: float = 0.5) -> float:
+    """Bayesian-shrunken win rate: (wins + prior_games * prior_wr) / (games + prior_games)."""
+    return (wins + prior_games * prior_wr) / (games + prior_games) if games > 0 else prior_wr
 
 
 def _batched(rows: list[tuple], batch_size: int):
@@ -58,6 +55,8 @@ POPULATE_TEAM_HERO = """
 def populate_team_hero(cfg: TrainerConfig, conn) -> int:
     """Populate ml.team_hero_agg for *patch_id*."""
     patch_id = cfg.patch_id
+    pg = cfg.prior_games
+    pw = cfg.prior_win_rate
     with conn.cursor() as cur:
         cur.execute("""
             SELECT
@@ -84,7 +83,7 @@ def populate_team_hero(cfg: TrainerConfig, conn) -> int:
             team_id, hero_id, games, wins, bans_, ag, ax, ak, ad, aa, lp = r
             rows.append((
                 patch_id, team_id, hero_id, games, wins, 0,
-                _shrunk_wr(wins, games), ag, ax, ak, ad, aa, lp,
+                _shrunk_wr(wins, games, pg, pw), ag, ax, ak, ad, aa, lp,
             ))
 
     # Write in batches
@@ -122,6 +121,8 @@ POPULATE_PLAYER_HERO = """
 
 def populate_player_hero(cfg: TrainerConfig, conn) -> int:
     patch_id = cfg.patch_id
+    pg = cfg.prior_games
+    pw = cfg.prior_win_rate
     with conn.cursor() as cur:
         cur.execute("""
             SELECT
@@ -148,7 +149,7 @@ def populate_player_hero(cfg: TrainerConfig, conn) -> int:
         for r in cur.fetchall():
             aid, hid, games, wins, ag, ax, ak, ad, aa, akda, lr, lp = r
             rows.append((
-                patch_id, aid, hid, games, wins, _shrunk_wr(wins, games),
+                patch_id, aid, hid, games, wins, _shrunk_wr(wins, games, pg, pw),
                 ag, ax, ak, ad, aa, akda, lr, lp,
             ))
 
@@ -178,6 +179,8 @@ POPULATE_SYNERGY = """
 
 def populate_synergy(cfg: TrainerConfig, conn) -> int:
     patch_id = cfg.patch_id
+    pg = cfg.prior_games
+    pw = cfg.prior_win_rate
     with conn.cursor() as cur:
         cur.execute("""
             SELECT
@@ -198,7 +201,7 @@ def populate_synergy(cfg: TrainerConfig, conn) -> int:
         rows = []
         for r in cur.fetchall():
             ha, hb, games, wins = r
-            rows.append((patch_id, ha, hb, games, wins, _shrunk_wr(wins, games)))
+            rows.append((patch_id, ha, hb, games, wins, _shrunk_wr(wins, games, pg, pw)))
 
     total = 0
     with conn.cursor() as cur:
@@ -227,6 +230,8 @@ POPULATE_COUNTER = """
 
 def populate_counter(cfg: TrainerConfig, conn) -> int:
     patch_id = cfg.patch_id
+    pg = cfg.prior_games
+    pw = cfg.prior_win_rate
     with conn.cursor() as cur:
         cur.execute("""
             SELECT
@@ -247,7 +252,7 @@ def populate_counter(cfg: TrainerConfig, conn) -> int:
         rows = []
         for r in cur.fetchall():
             hid, ehid, games, wins, akd = r
-            rows.append((patch_id, hid, ehid, games, wins, _shrunk_wr(wins, games), akd))
+            rows.append((patch_id, hid, ehid, games, wins, _shrunk_wr(wins, games, pg, pw), akd))
 
     total = 0
     with conn.cursor() as cur:
@@ -275,6 +280,8 @@ POPULATE_H2H = """
 
 def populate_h2h(cfg: TrainerConfig, conn) -> int:
     patch_id = cfg.patch_id
+    pg = cfg.prior_games
+    pw = cfg.prior_win_rate
     with conn.cursor() as cur:
         cur.execute("""
             SELECT
@@ -299,9 +306,7 @@ def populate_h2h(cfg: TrainerConfig, conn) -> int:
         rows = []
         for r in cur.fetchall():
             tid, etid, games, wins = r
-            # enemy_times_picked is the number of times this enemy_team_id was
-            # encountered by team_id — that is games.
-            rows.append((patch_id, tid, etid, games, wins, _shrunk_wr(wins, games)))
+            rows.append((patch_id, tid, etid, games, wins, _shrunk_wr(wins, games, pg, pw)))
 
     total = 0
     with conn.cursor() as cur:
@@ -337,15 +342,11 @@ POPULATE_BASELINE = """
 
 def populate_baseline(cfg: TrainerConfig, conn) -> int:
     patch_id = cfg.patch_id
+    pg = cfg.prior_games
+    pw = cfg.prior_win_rate
     with conn.cursor() as cur:
         cur.execute("""
-            WITH match_heroes AS (
-                SELECT DISTINCT p.match_id, p.hero_id
-                FROM matches m
-                INNER JOIN players p ON p.match_id = m.match_id
-                WHERE m.patch_id = %s
-            ),
-            hero_picks AS (
+            WITH hero_picks AS (
                 SELECT
                     p.hero_id,
                     COUNT(*)                                    AS total_picks,
@@ -389,7 +390,7 @@ def populate_baseline(cfg: TrainerConfig, conn) -> int:
             ban_rate  = bans / tot if tot > 0 else 0.0
             rows.append((
                 patch_id, hid, picks, wins, bans,
-                _shrunk_wr(wins, picks),
+                _shrunk_wr(wins, picks, pg, pw),
                 pick_rate, ban_rate, ag, ax, ak, ad, aa,
             ))
 

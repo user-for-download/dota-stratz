@@ -52,6 +52,13 @@ class TrainerConfig:
     val_ratio: float = float(os.getenv("TRAINER_VAL_RATIO", "0.15"))
     """Fraction of matches held out for validation."""
 
+    # ── Bayesian shrinkage priors ─────────────────────────────────────────
+    prior_games: float = float(os.getenv("TRAINER_PRIOR_GAMES", "3.0"))
+    """Prior pseudo-count for Bayesian shrinkage of win rates."""
+
+    prior_win_rate: float = float(os.getenv("TRAINER_PRIOR_WR", "0.5"))
+    """Prior win rate toward which sparse observations are shrunk."""
+
     # ── Aggregates ────────────────────────────────────────────────────────
     agg_batch_size: int = int(os.getenv("TRAINER_AGG_BATCH_SIZE", "500"))
     """Rows per chunk when populating aggregate tables via INSERT."""

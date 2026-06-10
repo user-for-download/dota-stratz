@@ -79,7 +79,7 @@ async def health():
 @app.post("/predict", response_model=PredictResponse)
 async def predict(req: PredictRequest):
     try:
-        ctx = build_draft_context(req.draft)
+        ctx = build_draft_context(req.draft, first_pick_team=req.first_pick_team)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 

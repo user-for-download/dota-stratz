@@ -20,11 +20,15 @@ class PredictRequest(BaseModel):
     radiant_team_id: int | None = Field(None, description="Steam team ID for radiant")
     dire_team_id: int | None = Field(None, description="Steam team ID for dire")
     patch_id: int = Field(..., ge=0, description="Dota 2 patch ID")
+    first_pick_team: int = Field(
+        0, ge=0, le=1,
+        description="0 = Radiant first pick (standard), 1 = Dire first pick",
+    )
     draft: list[DraftSlot] = Field(
         ...,
         min_length=1,
-        max_length=24,
-        description="Current draft state (1-24 slots filled)",
+        max_length=20,
+        description="Current draft state (1-20 slots filled)",
     )
     num_recommendations: int = Field(
         5, ge=1, le=20,
