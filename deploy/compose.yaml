@@ -254,6 +254,61 @@ services:
             timeout: 10s
             retries: 3
             start_period: 40s
+    trainer:
+        profiles:
+            - train
+        build:
+            context: ..
+            dockerfile: services/trainer/Dockerfile
+        container_name: dota2-ml-trainer
+        env_file:
+            - .env
+        environment:
+            - POSTGRES_HOST=postgres
+            - TRAINER_MODEL_DIR=/models
+        volumes:
+            - "ml-models:/models"
+        depends_on:
+            postgres:
+                condition: service_healthy
+        networks:
+            - dota2-net
+        # trainer is a batch/CLI service — override entrypoint per run.
+        # Default: do nothing (user exec into it or uses `make train`).
+        entrypoint: ["sleep", "infinity"]
+    api:
+        profiles:
+            - all
+            - api
+        build:
+            context: ..
+            dockerfile: services/api/Dockerfile
+        container_name: dota2-ml-api
+        restart: unless-stopped
+        env_file:
+            - .env
+        environment:
+            - POSTGRES_HOST=postgres
+            - API_MODEL_DIR=/models
+            - API_HOST=0.0.0.0
+            - API_PORT=8080
+        ports:
+            - "${API_PORT:-8080}:8080"
+        volumes:
+            - "ml-models:/models"
+        depends_on:
+            postgres:
+                condition: service_healthy
+        networks:
+            - dota2-net
+        healthcheck:
+            test:
+                - CMD-SHELL
+                - "wget -qO- http://localhost:8080/health | grep -q '\"status\":\"ok\"' || exit 1"
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 15s
 networks:
     dota2-net:
         driver: bridge
@@ -263,4 +318,5 @@ volumes:
     redis-data: null
     prometheus-data: null
     grafana-data: null
+    ml-models: null
 

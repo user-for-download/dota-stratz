@@ -26,7 +26,11 @@ dump_out/
 *.swo
 *~
 opencode.json
-.opencode/
+# OpenCode: track context, ignore transient files
+.opencode/config
+.opencode/node_modules/
+.opencode/package.json
+.opencode/package-lock.json
 # OS
 .DS_Store
 Thumbs.db

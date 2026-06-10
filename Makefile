@@ -23,6 +23,9 @@ COMPOSE := docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE)
 SERVICES := detail-fetcher id-fetcher parser proxy-manager
 MODULES  := shared/go-common $(addprefix services/,$(SERVICES))
 
+# ── ML Services ─────────────────────────────────────────────────────────
+ML_SERVICES := trainer api
+
 # ------------------------------------------------------------------------------
 # Containers / Defaults
 # ------------------------------------------------------------------------------
@@ -392,6 +395,81 @@ run-%: env-sync ## Run service locally, e.g. make run-parser
 		echo "Valid services: $(SERVICES)"; \
 		exit 1; \
 	fi
+
+# ==============================================================================
+# ML Training & Inference API
+# ==============================================================================
+
+.PHONY: build-ml
+build-ml: ## Build ML service images (trainer + api)
+	$(COMPOSE) build trainer api
+
+.PHONY: train
+train: ## Train LightGBM model: make train PATCH=<id> (default: auto-detect)
+	$(COMPOSE) run --rm trainer python -m trainer.main $(if $(PATCH),--patch $(PATCH),)
+
+.PHONY: train-agg-only
+train-agg-only: ## Populate aggregate tables only: make train-agg-only PATCH=<id>
+	$(COMPOSE) run --rm trainer python -m trainer.main $(if $(PATCH),--patch $(PATCH),) --agg-only
+
+.PHONY: up-api
+up-api: ## Start ML inference API (foreground)
+	$(COMPOSE) --profile api up
+
+.PHONY: up-api-d
+up-api-d: ## Start ML inference API (background)
+	$(COMPOSE) --profile api up -d
+
+.PHONY: down-api
+down-api: ## Stop ML inference API
+	$(COMPOSE) --profile api down
+
+.PHONY: reload-api
+reload-api: ## Hot-reload model for a patch: make reload-api PATCH=<id> TOKEN=<admin_token>
+	@if [ -z "$(PATCH)" ]; then \
+		echo "Usage: make reload-api PATCH=<patch_id> [TOKEN=<admin_token>]"; \
+		exit 1; \
+	fi
+	@token=$${TOKEN:-$$(grep -oP '^STRATZ_ADMIN_TOKEN=\K.*' $(ENV_FILE) 2>/dev/null || echo "")}; \
+	curl -X POST -H "Authorization: Bearer $$token" http://localhost:${API_PORT:-8080}/reload/$(PATCH)
+
+.PHONY: test-api
+test-api: ## Quick smoke-test the inference API
+	@echo "Testing API health..."; \
+	curl -s http://localhost:${API_PORT:-8080}/health | python3 -m json.tool; \
+	echo ""; \
+	echo "Testing /predict with sample payload..."; \
+	curl -s -X POST http://localhost:${API_PORT:-8080}/predict \
+		-H "Content-Type: application/json" \
+		-d '{"patch_id":1,"draft":[{"hero_id":1,"is_pick":false,"team":0,"order":1}]}' | python3 -m json.tool
+
+.PHONY: migrate-ml
+migrate-ml: ## Apply only the ML migration (005_ml_tables.sql)
+	@echo "$(YELLOW)Applying ML migration...$(RESET)"
+	@name="005_ml_tables.sql"; \
+	applied=$$(docker exec -i $(POSTGRES_CONTAINER) psql \
+		-U $(POSTGRES_USER) \
+		-d $(POSTGRES_DB) \
+		-tAc "SELECT 1 FROM _migrations WHERE name = '$$name';"); \
+	if [ "$$applied" = "1" ]; then \
+		echo "  SKIP  $$name (already applied)"; \
+	else \
+		echo "  APPLY $$name"; \
+		docker exec -i $(POSTGRES_CONTAINER) psql \
+			-U $(POSTGRES_USER) \
+			-d $(POSTGRES_DB) \
+			-v ON_ERROR_STOP=1 < $(MIGRATION_DIR)/$$name || exit 1; \
+		docker exec -i $(POSTGRES_CONTAINER) psql \
+			-U $(POSTGRES_USER) \
+			-d $(POSTGRES_DB) \
+			-v ON_ERROR_STOP=1 \
+			-c "INSERT INTO _migrations (name) VALUES ('$$name') ON CONFLICT DO NOTHING;" || exit 1; \
+		echo "$(CYAN)ML migration applied.$(RESET)"; \
+	fi
+
+.PHONY: build-ml-images
+build-ml-images: ## Build ML Docker images
+	$(COMPOSE) build trainer api
 
 # ==============================================================================
 # Docker Buildx Bake

@@ -1,0 +1,430 @@
+"""Populate the six patch-aware ML aggregate tables.
+
+Each function reads from the core tables (matches, players, picks_bans, teams,
+team_games, etc.) and writes into the corresponding ml.*_agg table, filtered
+to a single patch_id.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import psycopg2
+
+from .config import TrainerConfig
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_PRIOR = 3.0   # prior pseudo-count for Bayesian shrinkage
+_PRIOR_WR = 0.5  # prior win rate
+
+
+def _shrunk_wr(wins: int, games: int) -> float:
+    return (wins + _PRIOR * _PRIOR_WR) / (games + _PRIOR) if games > 0 else _PRIOR_WR
+
+
+def _batched(rows: list[tuple], batch_size: int):
+    """Yield successive chunks of *rows*."""
+    for i in range(0, len(rows), batch_size):
+        yield rows[i : i + batch_size]
+
+
+# ---------------------------------------------------------------------------
+# 1. ml.team_hero_agg
+# ---------------------------------------------------------------------------
+
+POPULATE_TEAM_HERO = """
+    INSERT INTO ml.team_hero_agg (patch_id, team_id, hero_id, games, wins, bans, win_rate, avg_gpm, avg_xpm, avg_kills, avg_deaths, avg_assists, last_played)
+    VALUES %s
+    ON CONFLICT (patch_id, team_id, hero_id) DO UPDATE SET
+        games      = EXCLUDED.games,
+        wins       = EXCLUDED.wins,
+        bans       = EXCLUDED.bans,
+        win_rate   = EXCLUDED.win_rate,
+        avg_gpm    = EXCLUDED.avg_gpm,
+        avg_xpm    = EXCLUDED.avg_xpm,
+        avg_kills  = EXCLUDED.avg_kills,
+        avg_deaths = EXCLUDED.avg_deaths,
+        avg_assists= EXCLUDED.avg_assists,
+        last_played= EXCLUDED.last_played;
+"""
+
+
+def populate_team_hero(cfg: TrainerConfig, conn) -> int:
+    """Populate ml.team_hero_agg for *patch_id*."""
+    patch_id = cfg.patch_id
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT
+                CASE WHEN p.is_radiant THEN m.radiant_team_id ELSE m.dire_team_id END AS team_id,
+                p.hero_id,
+                COUNT(*)                                           AS games,
+                SUM(CASE WHEN p.win = 1 THEN 1 ELSE 0 END)        AS wins,
+                0::INT                                             AS bans,
+                AVG(p.gold_per_min)::FLOAT                         AS avg_gpm,
+                AVG(p.xp_per_min)::FLOAT                           AS avg_xpm,
+                AVG(p.kills)::FLOAT                                AS avg_kills,
+                AVG(p.deaths)::FLOAT                               AS avg_deaths,
+                AVG(p.assists)::FLOAT                              AS avg_assists,
+                MAX(m.start_time)                                  AS last_played
+            FROM matches m
+            INNER JOIN players p ON p.match_id = m.match_id
+            WHERE m.patch_id = %s
+              AND CASE WHEN p.is_radiant THEN m.radiant_team_id ELSE m.dire_team_id END IS NOT NULL
+            GROUP BY team_id, p.hero_id
+            ORDER BY team_id, p.hero_id
+        """, (patch_id,))
+        rows: list[tuple[Any, ...]] = []
+        for r in cur.fetchall():
+            team_id, hero_id, games, wins, bans_, ag, ax, ak, ad, aa, lp = r
+            rows.append((
+                patch_id, team_id, hero_id, games, wins, 0,
+                _shrunk_wr(wins, games), ag, ax, ak, ad, aa, lp,
+            ))
+
+    # Write in batches
+    total = 0
+    with conn.cursor() as cur:
+        for batch in _batched(rows, cfg.agg_batch_size):
+            psycopg2.extras.execute_values(cur, POPULATE_TEAM_HERO, batch, template=None)
+            total += len(batch)
+    conn.commit()
+    logger.info("populate_team_hero: %s rows for patch %s", total, patch_id)
+    return total
+
+
+# ---------------------------------------------------------------------------
+# 2. ml.player_hero_agg
+# ---------------------------------------------------------------------------
+
+POPULATE_PLAYER_HERO = """
+    INSERT INTO ml.player_hero_agg (patch_id, account_id, hero_id, games, wins, win_rate, avg_gpm, avg_xpm, avg_kills, avg_deaths, avg_assists, avg_kda, lane_role, last_played)
+    VALUES %s
+    ON CONFLICT (patch_id, account_id, hero_id) DO UPDATE SET
+        games       = EXCLUDED.games,
+        wins        = EXCLUDED.wins,
+        win_rate    = EXCLUDED.win_rate,
+        avg_gpm     = EXCLUDED.avg_gpm,
+        avg_xpm     = EXCLUDED.avg_xpm,
+        avg_kills   = EXCLUDED.avg_kills,
+        avg_deaths  = EXCLUDED.avg_deaths,
+        avg_assists = EXCLUDED.avg_assists,
+        avg_kda     = EXCLUDED.avg_kda,
+        lane_role   = EXCLUDED.lane_role,
+        last_played = EXCLUDED.last_played;
+"""
+
+
+def populate_player_hero(cfg: TrainerConfig, conn) -> int:
+    patch_id = cfg.patch_id
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT
+                p.account_id,
+                p.hero_id,
+                COUNT(*)                                    AS games,
+                SUM(CASE WHEN p.win = 1 THEN 1 ELSE 0 END) AS wins,
+                AVG(p.gold_per_min)::FLOAT                  AS avg_gpm,
+                AVG(p.xp_per_min)::FLOAT                    AS avg_xpm,
+                AVG(p.kills)::FLOAT                         AS avg_kills,
+                AVG(p.deaths)::FLOAT                        AS avg_deaths,
+                AVG(p.assists)::FLOAT                       AS avg_assists,
+                AVG(p.kda)::FLOAT                           AS avg_kda,
+                MODE() WITHIN GROUP (ORDER BY p.lane_role)  AS lane_role,
+                MAX(m.start_time)                           AS last_played
+            FROM matches m
+            INNER JOIN players p ON p.match_id = m.match_id
+            WHERE m.patch_id = %s
+              AND p.account_id IS NOT NULL
+            GROUP BY p.account_id, p.hero_id
+            ORDER BY p.account_id, p.hero_id
+        """, (patch_id,))
+        rows = []
+        for r in cur.fetchall():
+            aid, hid, games, wins, ag, ax, ak, ad, aa, akda, lr, lp = r
+            rows.append((
+                patch_id, aid, hid, games, wins, _shrunk_wr(wins, games),
+                ag, ax, ak, ad, aa, akda, lr, lp,
+            ))
+
+    total = 0
+    with conn.cursor() as cur:
+        for batch in _batched(rows, cfg.agg_batch_size):
+            psycopg2.extras.execute_values(cur, POPULATE_PLAYER_HERO, batch, template=None)
+            total += len(batch)
+    conn.commit()
+    logger.info("populate_player_hero: %s rows for patch %s", total, patch_id)
+    return total
+
+
+# ---------------------------------------------------------------------------
+# 3. ml.hero_synergy_agg
+# ---------------------------------------------------------------------------
+
+POPULATE_SYNERGY = """
+    INSERT INTO ml.hero_synergy_agg (patch_id, hero_a, hero_b, games, wins, win_rate)
+    VALUES %s
+    ON CONFLICT (patch_id, hero_a, hero_b) DO UPDATE SET
+        games    = EXCLUDED.games,
+        wins     = EXCLUDED.wins,
+        win_rate = EXCLUDED.win_rate;
+"""
+
+
+def populate_synergy(cfg: TrainerConfig, conn) -> int:
+    patch_id = cfg.patch_id
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT
+                p1.hero_id AS hero_a,
+                p2.hero_id AS hero_b,
+                COUNT(*)                                           AS games,
+                SUM(CASE WHEN CASE WHEN p1.is_radiant THEN m.radiant_win ELSE NOT m.radiant_win END THEN 1 ELSE 0 END) AS wins
+            FROM matches m
+            INNER JOIN players p1 ON p1.match_id = m.match_id
+            INNER JOIN players p2 ON p2.match_id = m.match_id
+                AND p2.is_radiant = p1.is_radiant
+                AND p2.hero_id > p1.hero_id
+            WHERE m.patch_id = %s
+            GROUP BY p1.hero_id, p2.hero_id
+            HAVING COUNT(*) >= 3
+            ORDER BY p1.hero_id, p2.hero_id
+        """, (patch_id,))
+        rows = []
+        for r in cur.fetchall():
+            ha, hb, games, wins = r
+            rows.append((patch_id, ha, hb, games, wins, _shrunk_wr(wins, games)))
+
+    total = 0
+    with conn.cursor() as cur:
+        for batch in _batched(rows, cfg.agg_batch_size):
+            psycopg2.extras.execute_values(cur, POPULATE_SYNERGY, batch, template=None)
+            total += len(batch)
+    conn.commit()
+    logger.info("populate_synergy: %s rows for patch %s", total, patch_id)
+    return total
+
+
+# ---------------------------------------------------------------------------
+# 4. ml.hero_counter_agg
+# ---------------------------------------------------------------------------
+
+POPULATE_COUNTER = """
+    INSERT INTO ml.hero_counter_agg (patch_id, hero_id, enemy_hero_id, games, wins, win_rate, avg_kd_diff)
+    VALUES %s
+    ON CONFLICT (patch_id, hero_id, enemy_hero_id) DO UPDATE SET
+        games       = EXCLUDED.games,
+        wins        = EXCLUDED.wins,
+        win_rate    = EXCLUDED.win_rate,
+        avg_kd_diff = EXCLUDED.avg_kd_diff;
+"""
+
+
+def populate_counter(cfg: TrainerConfig, conn) -> int:
+    patch_id = cfg.patch_id
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT
+                p1.hero_id,
+                p2.hero_id AS enemy_hero_id,
+                COUNT(*)                                           AS games,
+                SUM(CASE WHEN CASE WHEN p1.is_radiant THEN m.radiant_win ELSE NOT m.radiant_win END THEN 1 ELSE 0 END) AS wins,
+                AVG(p1.kills - p1.deaths)::FLOAT                   AS avg_kd_diff
+            FROM matches m
+            INNER JOIN players p1 ON p1.match_id = m.match_id
+            INNER JOIN players p2 ON p2.match_id = m.match_id
+                AND p2.is_radiant != p1.is_radiant
+            WHERE m.patch_id = %s
+            GROUP BY p1.hero_id, p2.hero_id
+            HAVING COUNT(*) >= 3
+            ORDER BY p1.hero_id, p2.hero_id
+        """, (patch_id,))
+        rows = []
+        for r in cur.fetchall():
+            hid, ehid, games, wins, akd = r
+            rows.append((patch_id, hid, ehid, games, wins, _shrunk_wr(wins, games), akd))
+
+    total = 0
+    with conn.cursor() as cur:
+        for batch in _batched(rows, cfg.agg_batch_size):
+            psycopg2.extras.execute_values(cur, POPULATE_COUNTER, batch, template=None)
+            total += len(batch)
+    conn.commit()
+    logger.info("populate_counter: %s rows for patch %s", total, patch_id)
+    return total
+
+
+# ---------------------------------------------------------------------------
+# 5. ml.team_h2h_agg
+# ---------------------------------------------------------------------------
+
+POPULATE_H2H = """
+    INSERT INTO ml.team_h2h_agg (patch_id, team_id, enemy_team_id, games, wins, win_rate)
+    VALUES %s
+    ON CONFLICT (patch_id, team_id, enemy_team_id) DO UPDATE SET
+        games    = EXCLUDED.games,
+        wins     = EXCLUDED.wins,
+        win_rate = EXCLUDED.win_rate;
+"""
+
+
+def populate_h2h(cfg: TrainerConfig, conn) -> int:
+    patch_id = cfg.patch_id
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT
+                tg.team_id,
+                te.enemy_team_id,
+                COUNT(*)                                               AS games,
+                SUM(CASE WHEN tg.won THEN 1 ELSE 0 END)               AS wins
+            FROM (
+                SELECT DISTINCT match_id, team_id, won
+                FROM team_games
+                WHERE match_id IN (SELECT match_id FROM matches WHERE patch_id = %s)
+            ) tg
+            INNER JOIN (
+                SELECT DISTINCT match_id, team_id AS enemy_team_id
+                FROM team_games
+                WHERE match_id IN (SELECT match_id FROM matches WHERE patch_id = %s)
+            ) te ON te.match_id = tg.match_id AND te.enemy_team_id != tg.team_id
+            GROUP BY tg.team_id, te.enemy_team_id
+            HAVING COUNT(*) >= 2
+            ORDER BY tg.team_id, te.enemy_team_id
+        """, (patch_id, patch_id))
+        rows = []
+        for r in cur.fetchall():
+            tid, etid, games, wins = r
+            # enemy_times_picked is the number of times this enemy_team_id was
+            # encountered by team_id — that is games.
+            rows.append((patch_id, tid, etid, games, wins, _shrunk_wr(wins, games)))
+
+    total = 0
+    with conn.cursor() as cur:
+        for batch in _batched(rows, cfg.agg_batch_size):
+            psycopg2.extras.execute_values(cur, POPULATE_H2H, batch, template=None)
+            total += len(batch)
+    conn.commit()
+    logger.info("populate_h2h: %s rows for patch %s", total, patch_id)
+    return total
+
+
+# ---------------------------------------------------------------------------
+# 6. ml.hero_baseline_agg
+# ---------------------------------------------------------------------------
+
+POPULATE_BASELINE = """
+    INSERT INTO ml.hero_baseline_agg (patch_id, hero_id, total_picks, total_wins, total_bans, win_rate, pick_rate, ban_rate, avg_gpm, avg_xpm, avg_kills, avg_deaths, avg_assists)
+    VALUES %s
+    ON CONFLICT (patch_id, hero_id) DO UPDATE SET
+        total_picks  = EXCLUDED.total_picks,
+        total_wins   = EXCLUDED.total_wins,
+        total_bans   = EXCLUDED.total_bans,
+        win_rate     = EXCLUDED.win_rate,
+        pick_rate    = EXCLUDED.pick_rate,
+        ban_rate     = EXCLUDED.ban_rate,
+        avg_gpm      = EXCLUDED.avg_gpm,
+        avg_xpm      = EXCLUDED.avg_xpm,
+        avg_kills    = EXCLUDED.avg_kills,
+        avg_deaths   = EXCLUDED.avg_deaths,
+        avg_assists  = EXCLUDED.avg_assists;
+"""
+
+
+def populate_baseline(cfg: TrainerConfig, conn) -> int:
+    patch_id = cfg.patch_id
+    with conn.cursor() as cur:
+        cur.execute("""
+            WITH match_heroes AS (
+                SELECT DISTINCT p.match_id, p.hero_id
+                FROM matches m
+                INNER JOIN players p ON p.match_id = m.match_id
+                WHERE m.patch_id = %s
+            ),
+            hero_picks AS (
+                SELECT
+                    p.hero_id,
+                    COUNT(*)                                    AS total_picks,
+                    SUM(CASE WHEN p.win = 1 THEN 1 ELSE 0 END) AS total_wins,
+                    AVG(p.gold_per_min)::FLOAT                  AS avg_gpm,
+                    AVG(p.xp_per_min)::FLOAT                    AS avg_xpm,
+                    AVG(p.kills)::FLOAT                         AS avg_kills,
+                    AVG(p.deaths)::FLOAT                        AS avg_deaths,
+                    AVG(p.assists)::FLOAT                       AS avg_assists
+                FROM matches m
+                INNER JOIN players p ON p.match_id = m.match_id
+                WHERE m.patch_id = %s
+                GROUP BY p.hero_id
+            ),
+            hero_bans AS (
+                SELECT pb.hero_id, COUNT(*) AS total_bans
+                FROM matches m
+                INNER JOIN picks_bans pb ON pb.match_id = m.match_id AND pb.is_pick = FALSE
+                WHERE m.patch_id = %s
+                GROUP BY pb.hero_id
+            ),
+            total_matches AS (
+                SELECT COUNT(DISTINCT match_id) AS total FROM matches WHERE patch_id = %s
+            )
+            SELECT
+                COALESCE(p.hero_id, b.hero_id) AS hero_id,
+                COALESCE(p.total_picks, 0)     AS total_picks,
+                COALESCE(p.total_wins, 0)      AS total_wins,
+                COALESCE(b.total_bans, 0)      AS total_bans,
+                p.avg_gpm, p.avg_xpm, p.avg_kills, p.avg_deaths, p.avg_assists,
+                tm.total
+            FROM hero_picks p
+            FULL OUTER JOIN hero_bans b ON b.hero_id = p.hero_id
+            CROSS JOIN total_matches tm
+            ORDER BY hero_id
+        """, (patch_id, patch_id, patch_id, patch_id))
+        rows = []
+        for r in cur.fetchall():
+            hid, picks, wins, bans, ag, ax, ak, ad, aa, tot = r
+            pick_rate = picks / tot if tot > 0 else 0.0
+            ban_rate  = bans / tot if tot > 0 else 0.0
+            rows.append((
+                patch_id, hid, picks, wins, bans,
+                _shrunk_wr(wins, picks),
+                pick_rate, ban_rate, ag, ax, ak, ad, aa,
+            ))
+
+    total = 0
+    with conn.cursor() as cur:
+        for batch in _batched(rows, cfg.agg_batch_size):
+            psycopg2.extras.execute_values(cur, POPULATE_BASELINE, batch, template=None)
+            total += len(batch)
+    conn.commit()
+    logger.info("populate_baseline: %s rows for patch %s", total, patch_id)
+    return total
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+ALL_POPULATORS = [
+    ("ml.team_hero_agg",    populate_team_hero),
+    ("ml.player_hero_agg",  populate_player_hero),
+    ("ml.hero_synergy_agg", populate_synergy),
+    ("ml.hero_counter_agg", populate_counter),
+    ("ml.team_h2h_agg",     populate_h2h),
+    ("ml.hero_baseline_agg", populate_baseline),
+]
+
+
+def populate_all(cfg: TrainerConfig, conn) -> dict[str, int]:
+    """Run all six populator functions.
+
+    Returns a dict of ``{table_name: row_count}``.
+    """
+    counts: dict[str, int] = {}
+    for name, fn in ALL_POPULATORS:
+        logger.info("Populating %s ...", name)
+        cnt = fn(cfg, conn)
+        counts[name] = cnt
+    return counts
