@@ -8,11 +8,19 @@ An event-driven pipeline that ingests, processes, and stores Dota 2 match data f
 OpenDota API  ──►  ID Fetcher  ──►  Detail Fetcher  ──►  Parser  ──►  PostgreSQL
                        │                                      │
                        │                         (analytics materialized views)
-                       │
-                  Proxy Manager  ──►  Redis (proxy pool)
+                       │                                            │
+                  Proxy Manager  ──►  Redis (proxy pool)            │
+                                                                    ▼
+                                                              [Trainer]
+                                                                    │
+                                                                    ▼
+                                                              [ML Models]
+                                                                    │
+                                                                    ▼
+                                                              [Inference API]  :8080
 ```
 
-Four Go microservices connected via RabbitMQ message queues, with a Redis-backed proxy pool for API rate-limit avoidance. The ID Fetcher owns its own schedule (cron-based) and no longer requires a coordinator service.
+Five microservices (4 Go + 2 Python) connected via RabbitMQ message queues, with a Redis-backed proxy pool for API rate-limit avoidance. The ID Fetcher owns its own schedule (cron-based). The ML pipeline (Trainer + API) sits downstream of PostgreSQL, consuming aggregated data for LightGBM lambdarank model training and serving draft predictions.
 
 **See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full system design, service details, database schema, and deployment topology.**
 
@@ -72,11 +80,19 @@ make up-db-d     # Data layer in background
 make up-proxy    # Data layer + proxy-manager
 make up-fetcher  # Data layer + id-fetcher + detail-fetcher
 make up-parser   # Data layer + parser
+make up-api-d    # Data layer + ML inference API (background)
 make up-mon      # Monitoring (Prometheus + Grafana)
+
+# ML pipeline
+make train PATCH=60      # Train LightGBM model for patch 60
+make train-agg-only PATCH=60  # Populate aggregates only
+make test-api             # Smoke test the inference API
+make reload-api PATCH=60  # Hot-reload model (no restart)
 
 # Build Docker images
 make bake
 make bake-parser    # Build a single service image
+make build-ml-images  # Build trainer + api images
 
 # Stop
 make down
@@ -111,15 +127,19 @@ See `deploy/.env.example` for all variables across 10 configuration sections.
 
 ### Workspace
 
-The project uses a Go workspace spanning 5 modules:
+The project uses a Go workspace spanning 5 modules, plus 2 Python services:
 
 ```
-go.work
+go.work (Go modules)
 ├── services/detail-fetcher
 ├── services/id-fetcher
 ├── services/parser
 ├── services/proxy-manager
 └── shared/go-common
+
+services/ (Python — no workspace)
+├── trainer/      # LightGBM lambdarank training (batch CLI)
+└── api/          # FastAPI inference server (:8080)
 ```
 
 ### Commands
@@ -172,7 +192,9 @@ make proxies-show   # Inspect proxy pool state
 │   ├── detail-fetcher/    # Match detail fetcher (API consumer)
 │   ├── id-fetcher/        # Match ID fetcher (API explorer queries, self-cron)
 │   ├── parser/            # Match parser & DB writer
-│   └── proxy-manager/     # Autonomous proxy pool manager
+│   ├── proxy-manager/     # Autonomous proxy pool manager
+│   ├── trainer/           # LightGBM lambdarank training (Python)
+│   └── api/               # FastAPI inference server (Python, :8080)
 ├── shared/
 │   └── go-common/         # Shared library
 │       ├── cache/         # Redis connection helper
@@ -185,9 +207,11 @@ make proxies-show   # Inspect proxy pool state
 │   ├── compose.yaml       # Docker Compose with profiles
 │   ├── docker-bake.hcl    # Buildx bake config
 │   ├── .env.example       # Environment variable template
-│   ├── migration/         # SQL migration files (001_core–004_verify)
+│   ├── migration/         # SQL migration files (001_core–006)
+│   ├── rabbitmq/          # RabbitMQ definitions + init script
 │   ├── prometheus/        # Prometheus config + alert rules
 │   └── grafana/           # Pre-provisioned dashboards
+├── .opencode/             # AI context system (29 files)
 ├── Makefile               # Build/deploy/test orchestration
 ├── go.work                # Go workspace
 ├── ARCHITECTURE.md        # Full system architecture docs
@@ -198,14 +222,15 @@ make proxies-show   # Inspect proxy pool state
 
 ### Metrics
 
-Each service exposes Prometheus metrics:
+Each service exposes Prometheus metrics (ML services expose via `/metrics` on their API port):
 
 | Service | Port | Endpoint |
 |---|---|---|
 | Proxy Manager | 9090 | `/metrics` |
-| ID Fetcher | 9094 | `/metrics` |
 | Detail Fetcher | 9091 | `/metrics` |
 | Parser | 9093 | `/metrics` |
+| ID Fetcher | 9094 | `/metrics` |
+| ML API | 8080 | `/metrics` |
 
 ### Alerts
 
@@ -242,6 +267,8 @@ Access the management UI at `http://localhost:15672` (default: guest/guest). Key
 3. **Parser** consumes raw JSON, accumulates batches (size 100 or 2s timeout), validates, and bulk-inserts into PostgreSQL
 4. Failures route to **dead-letter queues** for manual inspection and replay
 5. **Analytics materialized views** refresh periodically for ML feature extraction
+6. **Trainer** computes patch-aware aggregate tables (`team_hero_agg`, `player_hero_agg`, etc.) and trains LightGBM lambdarank models
+7. **Inference API** loads trained models and serves draft predictions via HTTP (`POST /predict`)
 
 ## License
 

@@ -19,19 +19,31 @@ An event-driven microservice pipeline that ingests Dota 2 match data from the [O
 [OpenDota API] ──► [ID Fetcher] ──► [queue.match_ids] ──► [Detail Fetcher]
                                                                 │
                                                                 ▼
-                                                       [queue.raw_matches]
+                                                        [queue.raw_matches]
                                                                 │
                                                                 ▼
-                                                           [Parser]
+                                                            [Parser]
                                                                 │
                                                                 ▼
-                                                         [PostgreSQL]
+                                                          [PostgreSQL]
                                                                 │
-                                                     (materialized views)
+                                                    (materialized views)
                                                                 │
                                                                 ▼
-                                                     [Analytics Schema]
-                                                          (ML features)
+                                                    [Analytics Schema]
+                                                    (ML aggregate tables)
+                                                                │
+                                                                ▼
+                                                          [Trainer]
+                                                    (LightGBM lambdarank)
+                                                                │
+                                                                ▼
+                                                       [ML Models]
+                                                    (per-patch .txt files)
+                                                                │
+                                                                ▼
+                                                      [Inference API]
+                                                    (FastAPI, port 8080)
 ```
 
 **Trigger flow** (orchestration):
@@ -186,6 +198,62 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 
 ---
 
+### 5. Trainer
+
+**Purpose:** Batch CLI service. Computes patch-aware aggregate tables from PostgreSQL and trains LightGBM lambdarank models for draft prediction.
+
+| Aspect | Detail |
+|---|---|
+| Package | `services/trainer/` |
+| Dependencies | PostgreSQL (psycopg2 + SQLAlchemy) |
+| Memory | ~2G (patch 58 with 372k draft slots) |
+| Config | Environment variables (`TRAINER_*`) |
+
+**Pipeline stages:**
+1. **Aggregate population** — 6 populator functions compute `ml.*_agg` tables per patch via bulk INSERT (TRUNCATE + insert). Queries aggregate match data grouped by team/hero/player/patch.
+2. **Feature extraction** — `TRAINING_FEATURES_SQL` computes 196-dim feature vectors (36 aggregate columns + 160 one-hot hero ID) with `LEAST`/`GREATEST` index-friendly joins (~11s for 108k draft slots). NULL-safe with `COALESCE`.
+3. **Training** — LightGBM lambdarank with NDCG evaluation, 80/15 train/val split at match level. Writes model, metadata JSON, and `feature_schema.json` (column order contract with API).
+4. **Output** — Model per patch (`model_patch_N.txt`), metadata (`model_patch_N_meta.json`), and shared `feature_schema.json` to `/models` volume.
+
+**Key behaviors:**
+- Idempotent: aggregates are TRUNCATE + re-insert on each run
+- Feature column order is frozen in `feature_schema.json` at training time; API loads this to guarantee agreement
+- Draft phase reconstruction uses per-patch patterns from `DRAFT_PATTERNS` dict with a normalizer that ensures 0 = first-pick team
+- Bayesian shrinkage applied to win rates (`prior_games` / `prior_win_rate` config)
+
+---
+
+### 6. Inference API
+
+**Purpose:** Online FastAPI service. Loads trained LightGBM models and serves draft predictions via HTTP.
+
+| Aspect | Detail |
+|---|---|
+| Package | `services/api/` |
+| Port | 8080 (health `/health`, predict `/predict`) |
+| Dependencies | PostgreSQL (psycopg2 `ThreadedConnectionPool`) |
+| Config | Environment variables (`API_*`) |
+
+**Endpoints:**
+- `GET /health` — Returns status and list of loaded model patches
+- `POST /predict` — Accepts draft state (`patch_id`, `first_pick_team`, `draft[]`), returns top-5 hero recommendations with model scores
+- `POST /reload/{patch_id}` — Hot-reload a model (requires admin token)
+
+**Prediction flow:**
+1. Client sends current draft state (picks/bans, teams, patch)
+2. API validates draft order against per-patch pattern, reconstructs `DraftContext`
+3. Pre-fetches batch aggregate data (baselines, team-hero, H2H) per request
+4. For each candidate hero not yet picked/banned, builds 196-dim feature vector (matching trainer's schema) and scores via LightGBM
+5. Returns top-5 recommendations sorted by score
+
+**Key behaviors:**
+- Thread-safe: uses `psycopg2.pool.ThreadedConnectionPool` for concurrent requests
+- Feature computation mirrors trainer logic exactly (same column order via `feature_schema.json`)
+- NULL-safe: all aggregate lookups guarded by `_float()`/`_int()` helpers with sensible defaults
+- Draft patterns dynamically selected by `patch_id` from per-patch dict (supports patches 8–60 with fallback)
+
+---
+
 ## Shared Library
 
 **Module:** `github.com/dota-stratz/shared/go-common` at `shared/go-common/`
@@ -225,11 +293,13 @@ dota2:proxies:ratelimit:{proxy} STRING — rate-limit tracking
 ### Migration Files
 
 | File | Description |
-|---|---|
+|---|---|---|
 | `001_core.sql` | Core schema: `matches`, `players` (RANGE-partitioned), all child event tables, indexes, `ingestion_checkpoints`, partition management functions + initialization. FKs are `DEFERRABLE INITIALLY DEFERRED` for batch-insert throughput. |
 | `002_constants.sql` | Static reference data: `const_game_mode`, `const_lobby_type`, `const_region`, `const_patch`, `const_hero`, `const_item`, `const_ability` — table definitions + seed data combined. Internal FK constraints within constants schema. |
 | `003_analytics.sql` | Analytics schema: Bayesian shrinkage config, materialized views (`mv_team_hero_profile`, `mv_hero_synergy`, `mv_hero_counter`, `mv_player_team_history`), `feature_snapshots_player_hero`, `featurizer_runs`, `refresh_all_mv()`, `update_feature_snapshots()`, roles. |
 | `004_partition_verify.sql` | Idempotent assertion that the 6 expected `players` partitions exist. Performs no schema changes on a healthy database — safety check for CI/testing. |
+| `005_ml_tables.sql` | 6 patch-aware ML aggregate tables in `ml` schema: `team_hero_agg`, `player_hero_agg`, `hero_synergy_agg`, `hero_counter_agg`, `team_h2h_agg`, `hero_baseline_agg`. All UNLOGGED for write speed. |
+| `006_postgres_best_practices_fixes.sql` | Runtime fixes: grants on `ml` schema, `grant_ml_access()` function for new users. |
 
 ### Table Structure
 
@@ -252,6 +322,16 @@ dota2:proxies:ratelimit:{proxy} STRING — rate-limit tracking
 - `feature_snapshots_player_hero` — Point-in-time feature snapshots for ML
 - `featurizer_runs` — Tracking table for snapshot generation runs
 
+**ML schema (`ml`):**
+- 6 UNLOGGED patch-aware aggregate tables populated per-patch by the Trainer
+- `team_hero_agg` — Team+hero historical stats (games, wins, bans, avg GPM/XPM/KDA)
+- `player_hero_agg` — Per-account hero stats (lane role, avg KDA)
+- `hero_synergy_agg` — Pairwise synergy win rate on same team (keyed by `LEAST(hero_a, hero_b)`)
+- `hero_counter_agg` — Pairwise counter win rate vs enemy hero
+- `team_h2h_agg` — Head-to-head win rate between team pairs
+- `hero_baseline_agg` — Global hero pick/ban rates, avg stats per patch
+- Tables are re-populated on each `make train` run (not incrementally maintained)
+
 **Checkpoint:**
 - `ingestion_checkpoints` — Singleton row (id=1) tracking `fetch_status`, `checkpoint_timestamp`, `last_completed_match_id`, `fetch_progress`, `parse_progress`
 
@@ -269,6 +349,18 @@ dota2:proxies:ratelimit:{proxy} STRING — rate-limit tracking
 | `proxy` | proxy-manager (+ db) | `make up-proxy` |
 | `fetcher` | id-fetcher, detail-fetcher (+ db) | `make up-fetcher` |
 | `parser` | parser (+ db) | `make up-parser` |
+| `api` | ml-inference-api (+ db) | `make up-api` / `make up-api-d` |
+| `train` | ml-trainer (+ db) | `make train PATCH=N` |
+
+ML targets that need PostgreSQL use `--profile db --profile api` or `--profile db --profile train`.
+
+### Resource Limits
+| Service | Memory | CPUs | Notes |
+|---------|--------|------|-------|
+| postgres | 512M | 1.0 | |
+| trainer | **2G** | 2.0 | Patch 58 (372k draft slots) requires ~1.6G |
+| api | 512M | 0.5 | |
+| Most others | 128-256M | 0.5 | |
 
 ### Physical DB Backup / Recovery
 
@@ -343,3 +435,5 @@ make downv              # Stop services and remove project volumes
 11. **Analytics layering** — Separate `analytics` schema provides Bayesian-shrunk win rates, hero synergies/counters, and point-in-time feature snapshots to avoid look-ahead bias in ML training.
 
 12. **Monitoring-first** — Every service exposes Prometheus metrics. Three pre-configured alerts and a Grafana dashboard ship with the deployment.
+
+13. **ML offline training + online inference** — Training is a batch CLI (Trainer) that computes aggregates and trains models offline; inference is a stateless HTTP service (API) that loads pre-trained models. The contract between them is `feature_schema.json` — a frozen column-order manifest written at training time and loaded at API startup. Models are per-patch to capture meta shifts between Dota 2 balance patches.
