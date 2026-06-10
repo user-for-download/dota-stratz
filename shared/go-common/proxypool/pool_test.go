@@ -254,8 +254,9 @@ func TestTrim(t *testing.T) {
 		time.Sleep(1 * time.Millisecond)
 	}
 
-	// Trim to max 2 — should remove the 3 LOWEST-scored (stalest/oldest),
-	// keep the 2 highest-scored (freshest/newest).
+	// Trim to max 2 — should remove the 3 HIGHEST-scored (cooldown/freshest),
+	// keep the 2 lowest-scored (ready-to-use/stalest). In production the
+	// highest-scored proxies are those in cooldown (future timestamps).
 	if err := pool.Trim(ctx, 2); err != nil {
 		t.Fatalf("Trim: %v", err)
 	}
@@ -268,21 +269,23 @@ func TestTrim(t *testing.T) {
 		t.Fatalf("expected 2 available after trim, got %d", avail)
 	}
 
-	// The two remaining should be the highest-scored: proxy-3 and proxy-4 (freshest)
-	for _, expected := range []string{"http://proxy-3:8080", "http://proxy-4:8080"} {
+	// The two remaining should be the lowest-scored: proxy-0 and proxy-1 (stalest/oldest)
+	for _, expected := range []string{"http://proxy-0:8080", "http://proxy-1:8080"} {
 		exists, err := pool.Exists(ctx, expected)
 		if err != nil {
 			t.Fatalf("Exists %s: %v", expected, err)
 		}
 		if !exists {
-			t.Errorf("expected %s to remain after Trim (freshest proxy)", expected)
+			t.Errorf("expected %s to remain after Trim (lowest-scored proxy)", expected)
 		}
 	}
 
-	// proxy-0 (lowest-scored, oldest) should have been removed
-	exists, _ := pool.Exists(ctx, "http://proxy-0:8080")
-	if exists {
-		t.Errorf("expected proxy-0 to be removed by Trim (stalest proxy)")
+	// proxy-3 and proxy-4 (highest-scored) should have been removed
+	for _, removed := range []string{"http://proxy-3:8080", "http://proxy-4:8080"} {
+		exists, _ := pool.Exists(ctx, removed)
+		if exists {
+			t.Errorf("expected %s to be removed by Trim (highest-scored proxy)", removed)
+		}
 	}
 }
 

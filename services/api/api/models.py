@@ -12,6 +12,7 @@ class DraftSlot(BaseModel):
     is_pick: bool = Field(..., description="True if pick, False if ban")
     team: int = Field(..., ge=0, le=1, description="0 = radiant, 1 = dire")
     order: int = Field(..., ge=1, le=30, description="Draft order (1-indexed; max varies by patch)")
+    account_id: int | None = Field(None, description="Steam account ID of the player (for player-hero agg lookup)")
 
 
 class PredictRequest(BaseModel):
@@ -29,6 +30,12 @@ class PredictRequest(BaseModel):
         min_length=1,
         max_length=30,
         description="Current draft state (1-30 slots filled; max varies by patch)",
+    )
+    account_id: int | None = Field(
+        None,
+        description="Steam account ID of the player who will make the next pick. "
+                    "When provided, real player-hero aggregates are used instead of "
+                    "hardcoded defaults, reducing train-serving skew.",
     )
     num_recommendations: int = Field(
         5, ge=1, le=20,

@@ -27,11 +27,14 @@ make db-backup-physical   # Snapshot pg data directory
 
 ## ML
 ```bash
-make train PATCH=60       # Train model for patch 60 (uses --profile db --profile train)
-make up-api-d             # Start inference API on :8080 in background
-make test-api             # Smoke test health + /predict
-make reload-api PATCH=60  # Hot-reload model (no restart, requires STRATZ_ADMIN_TOKEN)
+make train PATCH=60                     # Train binary classification model for patch 60
+make up-api-d                           # Start inference API on :8080 in background
+make test-api                           # Smoke test health + /predict
+make reload-api PATCH=60                # Hot-reload model (no restart, requires STRATZ_ADMIN_TOKEN)
+make build-ml-images                    # Rebuild after code changes to trainer/api
 ```
+
+**Note**: Models use 198 features (was 196) after adding player-hero `account_id` integration. Training uses `binary` objective (not `lambdarank`) since all draft slots in a match share the same `radiant_win` target.
 
 ## RabbitMQ
 ```bash

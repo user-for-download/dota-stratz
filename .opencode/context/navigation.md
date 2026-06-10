@@ -22,7 +22,7 @@
 - `deployment/lookup/make-targets.md` — Makefile targets reference
 
 ## Development
-- `development/concepts/go-patterns.md` — Shared library, proxypool, patterns
+- `development/concepts/go-patterns.md` — Shared library, proxypool, patterns (now includes native SOCKS4 dialer)
 - `development/guides/branch-strategy.md` — Git workflow
 - `development/lookup/quick-commands.md` — Common dev commands
 

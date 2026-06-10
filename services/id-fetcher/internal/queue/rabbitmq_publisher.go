@@ -110,7 +110,7 @@ func (p *Publisher) handleConnectionLost() {
 		return
 	}
 
-	connErr := <-conn.NotifyClose(make(chan *amqp.Error))
+	connErr := <-conn.NotifyClose(make(chan *amqp.Error, 1))
 	if connErr == nil {
 		// Clean close (Close() was called) — nothing to do.
 		return

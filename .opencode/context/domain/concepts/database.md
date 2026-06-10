@@ -26,7 +26,8 @@
 ## ML Schema (`ml`)
 - 6 patch-aware aggregate tables for LightGBM training and inference
 - Tables are UNLOGGED for write speed (re-populated on each train run)
-- Trainer's `TRAINING_FEATURES_SQL` computes 196-dim feature vectors (36 aggregate + 160 one-hot hero ID) via a single query with `LEAST`/`GREATEST` index-friendly joins on synergy aggregates (~11s for 108k rows)
+- All aggregate queries filter `WHERE radiant_win IS NOT NULL` to exclude abandoned matches from win-rate calculations (prevents ~3-5% deflation)
+- Trainer's `TRAINING_FEATURES_SQL` computes 198-dim feature vectors (38 aggregate + 160 one-hot hero ID) via a single query with `LEAST`/`GREATEST` index-friendly joins on synergy aggregates. Player-hero features use real data when `account_id` is available at inference time, otherwise fall back to hardcoded defaults to avoid train-serving skew.
 
 ### ML Aggregate Tables
 | Table | Rows (patch 58) | Purpose |
@@ -37,3 +38,6 @@
 | `hero_counter_agg` | 15,216 | Pairwise hero counter win rates vs enemy |
 | `team_h2h_agg` | 4,846 | Team head-to-head win rates |
 | `hero_baseline_agg` | 126 | Global hero pick/ban rates and avg stats per patch |
+
+### Snapshot Function
+`analytics.update_feature_snapshots()` iterates over ALL distinct dates since the last run (not just `MAX(DATE(...))`) — previously, if multiple days' matches were ingested between cron runs, only the most recent day was captured and intermediate days were permanently lost.

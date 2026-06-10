@@ -20,14 +20,14 @@
 ## ML
 | Target | Action |
 |--------|--------|
-| `make train PATCH=N` | Train LightGBM model for patch N (uses profiles `db`+`train`) |
-| `make train-agg-only PATCH=N` | Populate aggregates only, skip training |
+| `make train PATCH=N` | Train LightGBM binary classification model for patch N — populates aggregates + trains (uses profiles `db`+`train`) |
+| `make train-agg-only PATCH=N` | Populate aggregates only (with `radiant_win IS NOT NULL` filter), skip training |
 | `make up-api-d` | Start inference API on :8080 (uses profiles `db`+`api`) |
 | `make down-api` | Stop inference API |
 | `make test-api` | Smoke-test health + /predict endpoints |
-| `make reload-api PATCH=N` | Hot-reload model (no restart) |
+| `make reload-api PATCH=N` | Hot-reload model (no restart, requires `STRATZ_ADMIN_TOKEN`) |
 | `make migrate-ml` | Apply ML migration only |
-| `make build-ml-images` | Build trainer + api Docker images |
+| `make build-ml-images` | Build trainer + api Docker images (run after code changes) |
 
 ## RabbitMQ
 | Target | Action |

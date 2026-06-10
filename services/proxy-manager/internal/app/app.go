@@ -337,9 +337,14 @@ func bootstrap(
 	}
 
 	// --- Source 2: remote GET ---
+	// Use limitedFetchWithRetry (not raw fetchWithRetry) so that
+	// lastSourceFetch is updated and the subsequent topUpIfBelowMin
+	// call respects the cooldown — otherwise the remote API receives
+	// two back-to-back requests milliseconds apart, guaranteeing an
+	// instant HTTP 429 ban (issue #27).
 	if cfg.RefreshSourceURL == "" {
 		logger.Log.Debug("Bootstrap: remote source URL not configured, skipping")
-	} else if urlProxies, err := fetchWithRetry(ctx, cfg); err != nil {
+	} else if urlProxies, err := limitedFetchWithRetry(ctx, cfg); err != nil {
 		logger.Log.Warn("Bootstrap: remote source fetch failed", zap.Error(err))
 	} else {
 		added := 0

@@ -93,6 +93,7 @@ def predict(req: PredictRequest):
             radiant_team_id=req.radiant_team_id,
             dire_team_id=req.dire_team_id,
             num_recommendations=req.num_recommendations,
+            account_id=req.account_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

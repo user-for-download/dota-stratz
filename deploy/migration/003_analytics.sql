@@ -215,19 +215,59 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Add match_id cursor column to track which matches have been snapshotted.
+-- The previous timestamp-based cursor (last_run_timestamp) compared
+-- matches.start_time (when the match started playing, 30-60 min in the past)
+-- against a wall-clock timestamp, causing zero new matches to ever be found
+-- after the first run (Bug #3). Match IDs are strictly monotonically
+-- increasing and never in the past, making them a reliable cursor.
+ALTER TABLE analytics.featurizer_runs ADD COLUMN IF NOT EXISTS last_processed_match_id BIGINT;
+
 CREATE OR REPLACE FUNCTION analytics.update_feature_snapshots()
 RETURNS TEXT AS $$
-DECLARE run_record RECORD; target_date DATE; start_ts TIMESTAMPTZ := clock_timestamp(); rows_affected INT;
+DECLARE run_record RECORD; target_date DATE; start_ts TIMESTAMPTZ := clock_timestamp(); rows_affected INT; total_rows INT := 0; snapshot_count INT := 0; max_mid BIGINT;
 BEGIN
     SELECT * INTO run_record FROM analytics.featurizer_runs WHERE id = 1;
-    SELECT MAX(DATE(TO_TIMESTAMP(start_time))) INTO target_date FROM matches WHERE start_time > EXTRACT(EPOCH FROM COALESCE(run_record.last_run_timestamp, '1970-01-01'::TIMESTAMPTZ));
-    IF target_date IS NULL THEN RETURN 'No new matches found. Snapshots up to date.'; END IF;
-    INSERT INTO analytics.feature_snapshots_player_hero (snapshot_date, account_id, hero_id, games_played, wins, shrunk_win_rate, avg_kills, avg_deaths, avg_assists, avg_kda, avg_gpm, avg_xpm, avg_hero_damage, avg_tower_damage, avg_hero_healing, avg_last_hits, primary_lane_role, role_flexibility, days_since_last_played, games_last_30d, games_last_90d)
-    SELECT target_date, p.account_id, p.hero_id, COUNT(*), SUM(CASE WHEN p.win = 1 THEN 1 ELSE 0 END), (SUM(CASE WHEN p.win = 1 THEN 1 ELSE 0 END) + 2.5) / (COUNT(*) + 5.0), AVG(p.kills), AVG(p.deaths), AVG(p.assists), AVG(p.kda), AVG(p.gold_per_min), AVG(p.xp_per_min), AVG(p.hero_damage), AVG(p.tower_damage), AVG(p.hero_healing), AVG(p.last_hits), MODE() WITHIN GROUP (ORDER BY p.lane_role), COUNT(DISTINCT p.lane_role), EXTRACT(DAY FROM target_date - DATE(TO_TIMESTAMP(MAX(m.start_time))))::INT, COUNT(CASE WHEN m.start_time > EXTRACT(EPOCH FROM (target_date - INTERVAL '30 days')) THEN 1 END), COUNT(CASE WHEN m.start_time > EXTRACT(EPOCH FROM (target_date - INTERVAL '90 days')) THEN 1 END)
-    FROM players p INNER JOIN matches m ON p.match_id = m.match_id WHERE m.leagueid > 0 AND m.lobby_type IN (1, 2) AND p.account_id IS NOT NULL AND DATE(TO_TIMESTAMP(m.start_time)) < target_date GROUP BY p.account_id, p.hero_id HAVING COUNT(*) >= 3
-    ON CONFLICT (snapshot_date, account_id, hero_id) DO UPDATE SET games_played = EXCLUDED.games_played, wins = EXCLUDED.wins, shrunk_win_rate = EXCLUDED.shrunk_win_rate, avg_kills = EXCLUDED.avg_kills, avg_deaths = EXCLUDED.avg_deaths, avg_assists = EXCLUDED.avg_assists, avg_kda = EXCLUDED.avg_kda, avg_gpm = EXCLUDED.avg_gpm, avg_xpm = EXCLUDED.avg_xpm, avg_hero_damage = EXCLUDED.avg_hero_damage, avg_tower_damage = EXCLUDED.avg_tower_damage, avg_hero_healing = EXCLUDED.avg_hero_healing, avg_last_hits = EXCLUDED.avg_last_hits, primary_lane_role = EXCLUDED.primary_lane_role, role_flexibility = EXCLUDED.role_flexibility, days_since_last_played = EXCLUDED.days_since_last_played, games_last_30d = EXCLUDED.games_last_30d, games_last_90d = EXCLUDED.games_last_90d;
-    GET DIAGNOSTICS rows_affected = ROW_COUNT;
-    UPDATE analytics.featurizer_runs SET last_snapshot_date = target_date, last_run_timestamp = start_ts, matches_processed = matches_processed + rows_affected WHERE id = 1;
-    RETURN format('Generated/Updated %s snapshots for %s in %s', rows_affected, target_date, clock_timestamp() - start_ts);
+
+    -- Determine the date cursor: find distinct dates of new matches added
+    -- since the last processed match_id. Match IDs are strictly increasing,
+    -- so match_id > last_processed_match_id reliably identifies new
+    -- matches regardless of ingestion delay (unlike start_time which is
+    -- 30-60 min in the past — see Bug #3).
+    FOR target_date IN
+        SELECT DISTINCT DATE(TO_TIMESTAMP(start_time)) AS d
+        FROM matches
+        WHERE match_id > COALESCE(run_record.last_processed_match_id, 0)
+          AND start_time > 0
+        ORDER BY d
+    LOOP
+        INSERT INTO analytics.feature_snapshots_player_hero (snapshot_date, account_id, hero_id, games_played, wins, shrunk_win_rate, avg_kills, avg_deaths, avg_assists, avg_kda, avg_gpm, avg_xpm, avg_hero_damage, avg_tower_damage, avg_hero_healing, avg_last_hits, primary_lane_role, role_flexibility, days_since_last_played, games_last_30d, games_last_90d)
+        SELECT target_date, p.account_id, p.hero_id, COUNT(*), SUM(CASE WHEN p.win = 1 THEN 1 ELSE 0 END), (SUM(CASE WHEN p.win = 1 THEN 1 ELSE 0 END) + 2.5) / (COUNT(*) + 5.0), AVG(p.kills), AVG(p.deaths), AVG(p.assists), AVG(p.kda), AVG(p.gold_per_min), AVG(p.xp_per_min), AVG(p.hero_damage), AVG(p.tower_damage), AVG(p.hero_healing), AVG(p.last_hits), MODE() WITHIN GROUP (ORDER BY p.lane_role), COUNT(DISTINCT p.lane_role), (target_date - DATE(TO_TIMESTAMP(MAX(m.start_time))))::INT, COUNT(CASE WHEN m.start_time > EXTRACT(EPOCH FROM (target_date - INTERVAL '30 days')) THEN 1 END), COUNT(CASE WHEN m.start_time > EXTRACT(EPOCH FROM (target_date - INTERVAL '90 days')) THEN 1 END)
+        FROM players p INNER JOIN matches m ON p.match_id = m.match_id WHERE m.leagueid > 0 AND m.lobby_type IN (1, 2) AND p.account_id IS NOT NULL AND DATE(TO_TIMESTAMP(m.start_time)) < target_date GROUP BY p.account_id, p.hero_id HAVING COUNT(*) >= 3
+        ON CONFLICT (snapshot_date, account_id, hero_id) DO UPDATE SET games_played = EXCLUDED.games_played, wins = EXCLUDED.wins, shrunk_win_rate = EXCLUDED.shrunk_win_rate, avg_kills = EXCLUDED.avg_kills, avg_deaths = EXCLUDED.avg_deaths, avg_assists = EXCLUDED.avg_assists, avg_kda = EXCLUDED.avg_kda, avg_gpm = EXCLUDED.avg_gpm, avg_xpm = EXCLUDED.avg_xpm, avg_hero_damage = EXCLUDED.avg_hero_damage, avg_tower_damage = EXCLUDED.avg_tower_damage, avg_hero_healing = EXCLUDED.avg_hero_healing, avg_last_hits = EXCLUDED.avg_last_hits, primary_lane_role = EXCLUDED.primary_lane_role, role_flexibility = EXCLUDED.role_flexibility, days_since_last_played = EXCLUDED.days_since_last_played, games_last_30d = EXCLUDED.games_last_30d, games_last_90d = EXCLUDED.games_last_90d;
+        GET DIAGNOSTICS rows_affected = ROW_COUNT;
+        total_rows := total_rows + rows_affected;
+        snapshot_count := snapshot_count + 1;
+
+        -- Track the max match_id processed in this run so the cursor
+        -- advances exactly to where we left off.
+        SELECT MAX(match_id) INTO max_mid FROM matches
+        WHERE DATE(TO_TIMESTAMP(start_time)) = target_date;
+
+        -- Update progress after each date so a partial failure doesn't lose the cursor.
+        UPDATE analytics.featurizer_runs
+        SET last_snapshot_date = target_date,
+            last_run_timestamp = start_ts,
+            last_processed_match_id = GREATEST(COALESCE(last_processed_match_id, 0), COALESCE(max_mid, 0))
+        WHERE id = 1;
+    END LOOP;
+
+    IF snapshot_count = 0 THEN
+        RETURN 'No new matches found. Snapshots up to date.';
+    END IF;
+
+    -- Final update with total row count.
+    UPDATE analytics.featurizer_runs SET matches_processed = matches_processed + total_rows WHERE id = 1;
+    RETURN format('Generated/Updated %s snapshots across %s date(s) in %s', total_rows, snapshot_count, clock_timestamp() - start_ts);
 END;
 $$ LANGUAGE plpgsql;

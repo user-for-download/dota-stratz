@@ -107,8 +107,9 @@ class BatchContext:
     """Pre-fetched aggregate data shared across all hero evaluations.
 
     Storing these in a single dataclass avoids N+1 query patterns: instead
-    of making per-hero round-trips for baseline, team-hero, and h2h data,
-    we fetch them all in 2-3 queries and distribute the results here.
+    of making per-hero round-trips for baseline, team-hero, synergy,
+    counter, and h2h data, we fetch them all in 5 queries and distribute
+    the results here.
     """
 
     baselines: dict[int, dict]
@@ -116,6 +117,17 @@ class BatchContext:
 
     team_hero_agg: dict[int, dict]
     """hero_id → team-hero agg dict (from fetch_team_hero_agg_batch), may be empty."""
+
+    player_hero_agg: dict[int, dict]
+    """hero_id → player-hero agg dict (from fetch_player_hero_agg_batch).
+    Falls back to empty dict when account_id is not available — the feature
+    builder uses hardcoded defaults in that case."""
+
+    synergy: dict[int, tuple[float, int]]
+    """hero_id → (avg_synergy_win_rate, count) — batch pre-fetched."""
+
+    counter: dict[int, tuple[float, int]]
+    """hero_id → (avg_counter_win_rate, count) — batch pre-fetched."""
 
     h2h_row: dict | None
     """Single head-to-head row for the team pair (same for all heroes)."""
@@ -126,12 +138,15 @@ def pre_fetch_batch(
     hero_ids: list[int],
     team_id: int | None,
     enemy_team_id: int | None,
+    ctx: DraftContext | None = None,
+    account_id: int | None = None,
 ) -> BatchContext:
-    """Pre-fetch all per-hero aggregate data in bulk (2-3 queries total).
+    """Pre-fetch all per-hero aggregate data in bulk (6 queries total).
 
     This replaces hundreds of individual ``fetch_baseline``,
-    ``fetch_team_hero_agg``, and ``fetch_h2h`` calls with 2-3 batched
-    queries.
+    ``fetch_team_hero_agg``, ``fetch_player_hero_agg``,
+    ``fetch_synergy_avg``, ``fetch_counter_avg``,
+    and ``fetch_h2h`` calls with 6 batched queries.
     """
     baselines = db_.fetch_baselines_batch(patch_id, hero_ids) if hero_ids else {}
     team_hero_agg = (
@@ -139,6 +154,13 @@ def pre_fetch_batch(
         if team_id and hero_ids
         else {}
     )
+    player_hero_agg = (
+        db_.fetch_player_hero_agg_batch(patch_id, account_id, hero_ids)
+        if account_id and hero_ids
+        else {}
+    )
+    synergy = db_.fetch_synergy_batch(patch_id, hero_ids, ctx.ally_picks) if ctx and hero_ids else {}
+    counter = db_.fetch_counter_batch(patch_id, hero_ids, ctx.enemy_picks) if ctx and hero_ids else {}
     h2h_row = (
         db_.fetch_h2h(patch_id, team_id, enemy_team_id)
         if team_id and enemy_team_id
@@ -147,6 +169,9 @@ def pre_fetch_batch(
     return BatchContext(
         baselines=baselines,
         team_hero_agg=team_hero_agg,
+        player_hero_agg=player_hero_agg,
+        synergy=synergy,
+        counter=counter,
         h2h_row=h2h_row,
     )
 
@@ -197,6 +222,10 @@ def build_feature_vector(
     # from the trainer. Build a dict keyed by column name.
     vec: dict[str, float] = {}
 
+    # -- Draft context (must match trainer's feature_column_names order) --
+    vec["is_pick"] = 1.0  # inference always recommends picks
+    vec["team"] = float(ctx.recommending_team)  # 0 = radiant, 1 = dire
+
     # -- Team-hero aggregates (from pre-fetched batch dict) --
     th = batch.team_hero_agg.get(hero_id)
     vec["th_games"] = _float(th.get("games") if th else None, "games")
@@ -209,30 +238,31 @@ def build_feature_vector(
     vec["th_avg_deaths"] = _float(th.get("avg_deaths") if th else None, "avg_deaths")
     vec["th_avg_assists"] = _float(th.get("avg_assists") if th else None, "avg_assists")
 
-    # -- Player-hero aggregates --
-    # At inference time we don't always know the account_id. We skip
-    # player-hero features if team_id is unknown (spectator mode).
-    # The model is trained to tolerate all-zeros for these features.
-    vec["ph_games"] = 0.0
-    vec["ph_wins"] = 0.0
-    vec["ph_win_rate"] = 0.5
-    vec["ph_avg_gpm"] = 0.0
-    vec["ph_avg_xpm"] = 0.0
-    vec["ph_avg_kills"] = 0.0
-    vec["ph_avg_deaths"] = 0.0
-    vec["ph_avg_assists"] = 0.0
-    vec["ph_avg_kda"] = 0.0
-    vec["ph_lane_role"] = 0.0
+    # -- Player-hero aggregates (from pre-fetched batch dict) --
+    # Falls back to hardcoded defaults when account_id is unavailable
+    # (spectator mode). Real data is used when the caller provides an
+    # account_id, reducing train-serving skew (issue #11).
+    ph = batch.player_hero_agg.get(hero_id)
+    vec["ph_games"] = _float(ph.get("games") if ph else None, "games")
+    vec["ph_wins"] = _float(ph.get("wins") if ph else None, "wins")
+    vec["ph_win_rate"] = _float(ph.get("win_rate") if ph else None, "win_rate")
+    vec["ph_avg_gpm"] = _float(ph.get("avg_gpm") if ph else None, "avg_gpm")
+    vec["ph_avg_xpm"] = _float(ph.get("avg_xpm") if ph else None, "avg_xpm")
+    vec["ph_avg_kills"] = _float(ph.get("avg_kills") if ph else None, "avg_kills")
+    vec["ph_avg_deaths"] = _float(ph.get("avg_deaths") if ph else None, "avg_deaths")
+    vec["ph_avg_assists"] = _float(ph.get("avg_assists") if ph else None, "avg_assists")
+    vec["ph_avg_kda"] = _float(ph.get("avg_kda") if ph else None, "avg_kda")
+    vec["ph_lane_role"] = _float(ph.get("lane_role") if ph else None, "lane_role")
 
-    # -- Synergy with allies (per-hero: depends on current allies) --
-    sy_wr, sy_cnt = db_.fetch_synergy_avg(patch_id, hero_id, ctx.ally_picks)
-    vec["sy_avg_win_rate"] = _float(sy_wr, "win_rate")
-    vec["sy_n_teammates"] = float(sy_cnt)
+    # -- Synergy with allies (from pre-fetched batch dict) --
+    sy = batch.synergy.get(hero_id)
+    vec["sy_avg_win_rate"] = _float(sy[0] if sy else None, "win_rate")
+    vec["sy_n_teammates"] = float(sy[1] if sy else 0)
 
-    # -- Counter vs enemies (per-hero: depends on current enemies) --
-    co_wr, co_cnt = db_.fetch_counter_avg(patch_id, hero_id, ctx.enemy_picks)
-    vec["co_avg_win_rate"] = _float(co_wr, "win_rate")
-    vec["co_n_enemies"] = float(co_cnt)
+    # -- Counter vs enemies (from pre-fetched batch dict) --
+    co = batch.counter.get(hero_id)
+    vec["co_avg_win_rate"] = _float(co[0] if co else None, "win_rate")
+    vec["co_n_enemies"] = float(co[1] if co else 0)
 
     # -- Head-to-head (from pre-fetched batch — same for all heroes) --
     h2h = batch.h2h_row

@@ -74,6 +74,7 @@ def populate_team_hero(cfg: TrainerConfig, conn) -> int:
             FROM matches m
             INNER JOIN players p ON p.match_id = m.match_id
             WHERE m.patch = %s
+              AND m.radiant_win IS NOT NULL
               AND CASE WHEN p.is_radiant THEN m.radiant_team_id ELSE m.dire_team_id END IS NOT NULL
             GROUP BY team_id, p.hero_id
             ORDER BY team_id, p.hero_id
@@ -141,6 +142,7 @@ def populate_player_hero(cfg: TrainerConfig, conn) -> int:
             FROM matches m
             INNER JOIN players p ON p.match_id = m.match_id
             WHERE m.patch = %s
+              AND m.radiant_win IS NOT NULL
               AND p.account_id IS NOT NULL
             GROUP BY p.account_id, p.hero_id
             ORDER BY p.account_id, p.hero_id
@@ -194,6 +196,7 @@ def populate_synergy(cfg: TrainerConfig, conn) -> int:
                 AND p2.is_radiant = p1.is_radiant
                 AND p2.hero_id > p1.hero_id
             WHERE m.patch = %s
+              AND m.radiant_win IS NOT NULL
             GROUP BY p1.hero_id, p2.hero_id
             HAVING COUNT(*) >= 3
             ORDER BY p1.hero_id, p2.hero_id
@@ -245,6 +248,7 @@ def populate_counter(cfg: TrainerConfig, conn) -> int:
             INNER JOIN players p2 ON p2.match_id = m.match_id
                 AND p2.is_radiant != p1.is_radiant
             WHERE m.patch = %s
+              AND m.radiant_win IS NOT NULL
             GROUP BY p1.hero_id, p2.hero_id
             HAVING COUNT(*) >= 3
             ORDER BY p1.hero_id, p2.hero_id
@@ -288,6 +292,7 @@ def populate_h2h(cfg: TrainerConfig, conn) -> int:
                 SELECT match_id, radiant_team_id, dire_team_id, radiant_win
                 FROM matches
                 WHERE patch = %s
+                  AND radiant_win IS NOT NULL
                   AND radiant_team_id IS NOT NULL
                   AND dire_team_id IS NOT NULL
                   AND leagueid > 0
@@ -367,6 +372,7 @@ def populate_baseline(cfg: TrainerConfig, conn) -> int:
                 FROM matches m
                 INNER JOIN players p ON p.match_id = m.match_id
                 WHERE m.patch = %s
+                  AND m.radiant_win IS NOT NULL
                 GROUP BY p.hero_id
             ),
             hero_bans AS (
@@ -374,10 +380,11 @@ def populate_baseline(cfg: TrainerConfig, conn) -> int:
                 FROM matches m
                 INNER JOIN picks_bans pb ON pb.match_id = m.match_id AND pb.is_pick = FALSE
                 WHERE m.patch = %s
+                  AND m.radiant_win IS NOT NULL
                 GROUP BY pb.hero_id
             ),
             total_matches AS (
-                SELECT COUNT(DISTINCT match_id) AS total FROM matches WHERE patch = %s
+                SELECT COUNT(DISTINCT match_id) AS total FROM matches WHERE patch = %s AND radiant_win IS NOT NULL
             )
             SELECT
                 COALESCE(p.hero_id, b.hero_id) AS hero_id,

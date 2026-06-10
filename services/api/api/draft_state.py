@@ -127,9 +127,13 @@ def _validate_draft(draft: list[DraftSlot], order: tuple[tuple[int, bool], ...],
             what = "pick" if expected_is_pick else "ban"
             raise ValueError(f"Slot {i + 1}: expected {what}, got {'pick' if slot.is_pick else 'ban'}")
 
-        if slot.hero_id in seen_heroes:
-            raise ValueError(f"Duplicate hero_id {slot.hero_id} in draft")
-        seen_heroes.add(slot.hero_id)
+        # hero_id == 0 means the slot was skipped (e.g. a ban was forfeited).
+        # Multiple skipped bans are valid in some tournament drafts, so they
+        # should not trigger a duplicate error (issue #14).
+        if slot.hero_id != 0:
+            if slot.hero_id in seen_heroes:
+                raise ValueError(f"Duplicate hero_id {slot.hero_id} in draft")
+            seen_heroes.add(slot.hero_id)
 
 
 @dataclass

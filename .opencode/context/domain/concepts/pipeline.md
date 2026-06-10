@@ -32,4 +32,4 @@
 | 5 | **API** | PostgreSQL (ml.aggregates) + model files | Predictions via HTTP :8080 |
 | — | Proxy Manager | — | Redis (proxy pool) |
 
-**ML downstream**: After data lands in PostgreSQL, the Trainer computes patch-aware aggregate tables and trains LightGBM lambdarank models. The inference API loads these models and serves draft predictions.
+**ML downstream**: After data lands in PostgreSQL, the Trainer computes patch-aware aggregate tables (filtering out matches where `radiant_win IS NULL` to avoid abandoned-match pollution) and trains LightGBM **binary classification** models. The inference API loads these models and serves draft predictions. Training uses `binary` objective (not `lambdarank`) because every draft slot in a match shares the same `radiant_win` target — lambdarank requires varied relevance within each group and would produce zero-gradient trees.

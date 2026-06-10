@@ -1,6 +1,6 @@
-"""LightGBM lambdarank model training.
+"""LightGBM binary classification model training.
 
-Returns the trained Booster and the best NDCG score.
+Returns the trained Booster and the best validation loss.
 """
 
 from __future__ import annotations
@@ -23,21 +23,24 @@ def train_model(
     cfg: TrainerConfig,
     engine,
 ) -> tuple[lgb.Booster, float]:
-    """Train a LightGBM lambdarank model for *cfg.patch_id*.
+    """Train a LightGBM binary classifier for *cfg.patch_id*.
+
+    Uses binary (not lambdarank) because every draft slot in a match shares
+    the same radiant_win target — lambdarank requires varied relevance within
+    each group and would produce zero-gradient trees (issue #7).
 
     Returns
     -------
     model : lgb.Booster
         Trained LightGBM model.
-    best_ndcg : float
-        Best NDCG@5 on the validation set (or training set if no val split).
+    best_loss : float
+        Best binary_logloss on the validation set (or training set).
     """
     train_data, val_data, metadata = load_dataset(cfg, engine)
 
     logger.info(
-        "Training set: %d rows, %d groups | Validation set: %d rows",
+        "Training set: %d rows | Validation set: %d rows",
         metadata["n_train"],
-        metadata["n_groups_train"],
         metadata.get("n_val", 0),
     )
 
@@ -55,14 +58,14 @@ def train_model(
         callbacks=callbacks,
     )
 
-    # Extract best NDCG score
-    evals_result = {}
+    # Extract best binary_logloss
+    metric_name = "binary_logloss"
     if val_data:
-        best_ndcg = float(model.best_score["val"]["ndcg@5"])
+        best_loss = float(model.best_score["val"][metric_name])
     else:
-        best_ndcg = float(model.best_score["train"]["ndcg@5"])
+        best_loss = float(model.best_score["train"][metric_name])
 
-    logger.info("Training complete. Best NDCG@5: %.4f", best_ndcg)
+    logger.info("Training complete. Best %s: %.4f", metric_name, best_loss)
 
     # Save model
     model_dir = Path(cfg.model_dir)
@@ -75,11 +78,10 @@ def train_model(
     # Save metadata (cast numpy types to native Python for JSON)
     meta = {
         "patch_id": int(cfg.patch_id),
-        "best_ndcg_5": float(best_ndcg),
+        "best_binary_logloss": float(best_loss),
         "n_train": int(metadata["n_train"]),
         "n_val": int(metadata.get("n_val", 0)),
         "n_features": int(metadata["n_features"]),
-        "n_groups_train": int(metadata["n_groups_train"]),
         "params": {
             k: int(v) if isinstance(v, (np.integer,)) else
                float(v) if isinstance(v, (np.floating,)) else
@@ -94,4 +96,4 @@ def train_model(
     # Write the authoritative column-order schema
     write_schema(model_dir, max_hero_id=cfg.max_hero_id)
 
-    return model, best_ndcg
+    return model, best_loss

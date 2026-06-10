@@ -145,7 +145,7 @@ type OpenDotaMatch struct {
 	SeriesType            int   `json:"series_type"`
 	Cluster               int   `json:"cluster"`
 	ReplaySalt            int64 `json:"replay_salt"`
-	RadiantWin            bool  `json:"radiant_win"`
+	RadiantWin            *bool `json:"radiant_win"`
 	PreGameDuration       int   `json:"pre_game_duration"`
 	MatchSeqNum           int64 `json:"match_seq_num"`
 	TowerStatusRadiant    int   `json:"tower_status_radiant"`

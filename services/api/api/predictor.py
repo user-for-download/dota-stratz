@@ -98,6 +98,7 @@ class Predictor:
         radiant_team_id: int | None,
         dire_team_id: int | None,
         num_recommendations: int = 5,
+        account_id: int | None = None,
     ) -> tuple[list[dict[str, Any]], str | None]:
         """Score all eligible heroes and return the top recommendations.
 
@@ -118,13 +119,33 @@ class Predictor:
                     "Run the trainer first (`make train PATCH=<id>`)."
                 )
 
-        model = self._models[patch_id]
-        schema = self._schemas[patch_id]
+        # Use .get() instead of direct dict access so a concurrent /reload
+        # endpoint cannot trigger a KeyError by deleting the entry between
+        # the existence check and the read (issue #13).
+        model = self._models.get(patch_id)
+        schema = self._schemas.get(patch_id)
+        if model is None or schema is None:
+            # Re-attempt loading — the model may have been unloaded by a
+            # concurrent /reload call between our initial check and here.
+            loaded = self.load_model(patch_id)
+            if not loaded:
+                raise ValueError(
+                    f"No model available for patch {patch_id}. "
+                    "Run the trainer first (`make train PATCH=<id>`)."
+                )
+            model = self._models[patch_id]
+            schema = self._schemas[patch_id]
+
         taken_heroes = ctx.all_taken
 
-        # Score all heroes (1..max_hero_id) that aren't already taken
+        # Score all heroes (1..max_hero_id from the schema) that aren't
+        # already taken.  Uses schema["max_hero_id"] instead of the API's
+        # own config so the one-hot encoding dimension always matches the
+        # trained model — prevents a dimension-mismatch crash when a new
+        # hero ships mid-deployment (issue #8).
+        max_id = schema["max_hero_id"]
         eligible_hero_ids = [
-            hid for hid in range(1, self._max_hero_id + 1)
+            hid for hid in range(1, max_id + 1)
             if hid not in taken_heroes
         ]
         if not eligible_hero_ids:
@@ -135,12 +156,23 @@ class Predictor:
 
         # Pre-fetch all per-hero aggregate data in 2-3 batch queries,
         # replacing the previous N+1 pattern (~500 queries per request).
-        batch = pre_fetch_batch(
-            patch_id=patch_id,
-            hero_ids=eligible_hero_ids,
-            team_id=team_id,
-            enemy_team_id=enemy_team_id,
-        )
+        # Gracefully handle an uninitialised DB pool (e.g. during startup)
+        # by converting RuntimeError → ValueError so the HTTP layer returns
+        # a clean error response instead of a 500.
+        try:
+            batch = pre_fetch_batch(
+                patch_id=patch_id,
+                hero_ids=eligible_hero_ids,
+                team_id=team_id,
+                enemy_team_id=enemy_team_id,
+                ctx=ctx,
+                account_id=account_id,
+            )
+        except RuntimeError as e:
+            raise ValueError(
+                f"Database pool is not available: {e}. "
+                "The service may still be starting up."
+            )
 
         feature_vectors: list[np.ndarray] = []
         for hid in eligible_hero_ids:
@@ -150,7 +182,7 @@ class Predictor:
                 patch_id=patch_id,
                 batch=batch,
                 schema=schema,
-                max_hero_id=self._max_hero_id,
+                max_hero_id=schema["max_hero_id"],
             )
             feature_vectors.append(fv)
 
@@ -185,6 +217,7 @@ class Predictor:
         if top_hero_id is not None:
             reasoning = self._build_reasoning(
                 top_hero_id, top_score, ctx, patch_id,
+                radiant_team_id, dire_team_id,
             )
 
         return recommendations, reasoning
@@ -195,23 +228,20 @@ class Predictor:
         score: float,
         ctx: DraftContext,
         patch_id: int,
+        radiant_team_id: int | None = None,
+        dire_team_id: int | None = None,
     ) -> str | None:
         """Gather explanation data for the top hero."""
-        team_id = None
-        enemy_team_id = None
-        if ctx.recommending_team == 0:
-            # Would need radiant_team_id from request — caller passes it
-            pass
+        team_id = radiant_team_id if ctx.recommending_team == 0 else dire_team_id
+        enemy_team_id = dire_team_id if ctx.recommending_team == 0 else radiant_team_id
 
         # Fetch supporting data for explanation
         bl = db_.fetch_baseline(patch_id, hero_id)
         bl_wr = bl["win_rate"] if bl else None
 
-        # Team-hero
-        # We don't have team_id here in the current flow; we'd need the
-        # PredictRequest values threaded through. For now skip team-level
-        # reasoning unless we thread them.
-        th_wr = None
+        # Team-hero: now threaded through from the caller
+        th = db_.fetch_team_hero_agg(patch_id, team_id, hero_id) if team_id else None
+        th_wr = th["win_rate"] if th else None
 
         sy_wr, _ = db_.fetch_synergy_avg(patch_id, hero_id, ctx.ally_picks)
         co_wr, _ = db_.fetch_counter_avg(patch_id, hero_id, ctx.enemy_picks)

@@ -132,7 +132,7 @@ func (p *Publisher) handleConnectionLost() {
 		return
 	}
 
-	connErr := <-conn.NotifyClose(make(chan *amqp.Error))
+	connErr := <-conn.NotifyClose(make(chan *amqp.Error, 1))
 	if connErr == nil {
 		// Clean close (Close() was called) — nothing to do.
 		return
@@ -261,11 +261,17 @@ func (p *Publisher) reconnect() {
 
 // exchange atomically replaces the connection and channel under closeMu.
 // Must only be called from reconnect() which holds no locks.
+//
+// CRITICAL: closeMu is released BEFORE calling oldConn.Close() to prevent
+// a deadlock when the old connection is in a blackholed/stalled TCP state.
+// If closeMu were held during Close(), every goroutine calling Publish()
+// (which acquires closeMu to snapshot ch/confirms) would block
+// indefinitely, freezing the entire service (Bug #4).
 func (p *Publisher) exchange(conn *amqp.Connection, ch *amqp.Channel) error {
 	p.closeMu.Lock()
-	defer p.closeMu.Unlock()
 
 	if p.closed {
+		p.closeMu.Unlock()
 		conn.Close()
 		ch.Close()
 		return fmt.Errorf("publisher is closed")
@@ -277,6 +283,10 @@ func (p *Publisher) exchange(conn *amqp.Connection, ch *amqp.Channel) error {
 	p.conn = conn
 	p.ch = ch
 	p.confirms = ch.NotifyPublish(make(chan amqp.Confirmation, 100))
+
+	// Release closeMu BEFORE closing the old connection so Publish() and
+	// Close() are not blocked by a stalled TCP Close().
+	p.closeMu.Unlock()
 
 	if oldCh != nil {
 		oldCh.Close()

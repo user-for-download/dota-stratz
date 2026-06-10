@@ -153,14 +153,22 @@ var reapReleaseScript = redis.NewScript(`
 // is always 60 seconds from the first request in the window, regardless of
 // request volume. This avoids the "minute boundary crossing" race (where
 // time.Now().Unix()/60 changes between consecutive calls) — see Issue #34.
+// Previously the script extended TTL unconditionally, which created an
+// infinite sliding window for proxies receiving continuous traffic —
+// they would reach the rate limit and never get a fresh window (issue #12).
 //
 // KEYS[1] = ratelimit:{proxy_hash}
 // ARGV[1] = max per minute (integer string)
 var rateLimitScript = redis.NewScript(`
 	local count = redis.call('INCR', KEYS[1])
-	-- Always set EXPIRE, not just when count == 1, so a key created by
-	-- another code path without a TTL cannot become permanent (finding #6).
-	redis.call('EXPIRE', KEYS[1], 60)
+	-- Only set EXPIRE on the first INCR (count == 1) so the 60-second
+	-- window always starts from the first request. Previously the script
+	-- extended TTL unconditionally, which created an infinite sliding
+	-- window for proxies receiving continuous traffic — they would reach
+	-- the rate limit and never get a fresh window (issue #12).
+	if count == 1 then
+		redis.call('EXPIRE', KEYS[1], 60)
+	end
 	if count > tonumber(ARGV[1]) then
 		redis.call('DECR', KEYS[1])
 		return 0
@@ -547,7 +555,11 @@ func (p *Pool) Trim(ctx context.Context, max int64) error {
 		return nil
 	}
 	excess := size - max
-	_, err = p.rdb.ZRemRangeByRank(ctx, RedisKey, 0, excess-1).Result()
+	// Remove the highest-scored (cooldown/future-timestamp) proxies instead
+	// of the lowest-scored (ready-to-use) ones. Cooldown proxies have scores
+	// of time.Now().Add(cooldownDuration).UnixMicro() which makes them the
+	// highest-ranked members — removing by negative rank targets those.
+	_, err = p.rdb.ZRemRangeByRank(ctx, RedisKey, -excess, -1).Result()
 	if err != nil {
 		return err
 	}

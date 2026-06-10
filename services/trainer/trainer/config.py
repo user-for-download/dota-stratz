@@ -26,10 +26,15 @@ class TrainerConfig:
     """Directory where model files (TXT + JSON) are written."""
 
     # LightGBM hyper-parameters
+    # Uses binary classification (not lambdarank) because the training data
+    # groups rows by match_id with uniform target values (radiant_win is the
+    # same for every draft slot in a match). Lambdarank requires varied
+    # relevance within each group — with uniform targets the NDCG gradient
+    # is zero and the model outputs constant 0.0 (issue #7).
     lgbm_params: dict = field(default_factory=lambda: {
-        "objective": "lambdarank",
-        "metric": "ndcg",
-        "ndcg_eval_at": [1, 3, 5, 10],
+        "objective": "binary",
+        "metric": "binary_logloss",
+        "first_metric_only": True,
         "boosting_type": "gbdt",
         "num_leaves": 63,
         "learning_rate": 0.05,

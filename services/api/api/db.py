@@ -1,11 +1,13 @@
 """Database connection pool for the inference API.
 
-Uses psycopg2 ``ThreadedConnectionPool`` for thread-safe concurrent access.
+Uses psycopg2 ``ThreadedConnectionPool`` guarded by a ``threading.Lock``
+for safe concurrent access across FastAPI worker threads.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 import psycopg2
@@ -16,16 +18,18 @@ from .config import APIConfig
 logger = logging.getLogger(__name__)
 
 _pool: pg_pool.ThreadedConnectionPool | None = None
+_pool_lock = threading.Lock()
 
 
 def init_pool(cfg: APIConfig):
     """Create the global connection pool."""
     global _pool
-    _pool = pg_pool.ThreadedConnectionPool(
-        minconn=cfg.pool_min,
-        maxconn=cfg.pool_max,
-        dsn=cfg.pg_dsn,
-    )
+    with _pool_lock:
+        _pool = pg_pool.ThreadedConnectionPool(
+            minconn=cfg.pool_min,
+            maxconn=cfg.pool_max,
+            dsn=cfg.pg_dsn,
+        )
     logger.info(
         "DB pool initialised (min=%d, max=%d)", cfg.pool_min, cfg.pool_max,
     )
@@ -34,23 +38,46 @@ def init_pool(cfg: APIConfig):
 def close_pool():
     """Close all connections in the pool."""
     global _pool
-    if _pool is not None:
-        _pool.closeall()
-        _pool = None
-        logger.info("DB pool closed")
+    with _pool_lock:
+        if _pool is not None:
+            _pool.closeall()
+            _pool = None
+    logger.info("DB pool closed")
 
 
 def get_conn() -> Any:
     """Get a connection from the pool."""
     if _pool is None:
         raise RuntimeError("DB pool not initialised")
-    return _pool.getconn()
+    with _pool_lock:
+        return _pool.getconn()
 
 
 def put_conn(conn):
-    """Return a connection to the pool."""
+    """Return a connection to the pool.
+
+    Rolls back any pending transaction first so the connection is returned
+    in a clean state. Without this, psycopg2's implicit transactions accumulate
+    on the connection, poisoning the pool with stale MVCC snapshots — every
+    subsequent query using that connection sees frozen feature data and blocks
+    autovacuum (issue #10).
+
+    If the rollback fails (broken socket, DB restart), the connection is
+    discarded via ``close=True`` instead of being returned to the pool.
+    Without this, dead connections accumulate in the pool and every future
+    ``/predict`` request that draws one gets an HTTP 500 until the API is
+    restarted (issue #34).
+    """
     if _pool is not None:
-        _pool.putconn(conn)
+        try:
+            conn.rollback()
+        except Exception:
+            # Connection is broken — discard it instead of poisoning the pool.
+            with _pool_lock:
+                _pool.putconn(conn, close=True)
+            return
+        with _pool_lock:
+            _pool.putconn(conn)
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +133,40 @@ def fetch_team_hero_agg(patch_id: int, team_id: int, hero_id: int) -> dict | Non
                 "bans": row[3], "avg_gpm": row[4], "avg_xpm": row[5],
                 "avg_kills": row[6], "avg_deaths": row[7], "avg_assists": row[8],
             }
+    finally:
+        put_conn(conn)
+
+
+def fetch_player_hero_agg_batch(
+    patch_id: int,
+    account_id: int,
+    hero_ids: list[int],
+) -> dict[int, dict]:
+    """Batch fetch ml.player_hero_agg for a single player across multiple heroes.
+
+    Returns ``{hero_id: row_dict}`` (or empty dict for missing/unknown account).
+    """
+    if not hero_ids or not account_id:
+        return {}
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT hero_id, games, wins, win_rate, avg_gpm, avg_xpm,
+                          avg_kills, avg_deaths, avg_assists, avg_kda, lane_role
+                   FROM ml.player_hero_agg
+                   WHERE patch_id = %s AND account_id = %s AND hero_id = ANY(%s)""",
+                (patch_id, account_id, hero_ids),
+            )
+            result: dict[int, dict] = {}
+            for row in cur.fetchall():
+                result[row[0]] = {
+                    "games": row[1], "wins": row[2], "win_rate": row[3],
+                    "avg_gpm": row[4], "avg_xpm": row[5],
+                    "avg_kills": row[6], "avg_deaths": row[7], "avg_assists": row[8],
+                    "avg_kda": row[9], "lane_role": row[10],
+                }
+            return result
     finally:
         put_conn(conn)
 
@@ -253,6 +314,87 @@ def fetch_baseline(patch_id: int, hero_id: int) -> dict | None:
                 "win_rate": row[3], "pick_rate": row[4], "ban_rate": row[5],
                 "avg_gpm": row[6], "avg_xpm": row[7],
                 "avg_kills": row[8], "avg_deaths": row[9], "avg_assists": row[10],
+            }
+    finally:
+        put_conn(conn)
+
+
+def fetch_synergy_batch(
+    patch_id: int,
+    hero_ids: list[int],
+    ally_picks: list[int],
+) -> dict[int, tuple[float, int]]:
+    """Batch fetch synergy win_rate for *hero_ids* vs *ally_picks* in one query.
+
+    Returns ``{hero_id: (avg_win_rate, count)}`` — missing heroes get a
+    default of ``(0.5, 0)`` from the caller.
+    """
+    if not hero_ids or not ally_picks:
+        return {}
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT
+                       CASE
+                           WHEN s.hero_a = ANY(%s) THEN s.hero_a
+                           ELSE s.hero_b
+                       END AS hero_id,
+                       s.win_rate
+                   FROM ml.hero_synergy_agg s
+                   WHERE s.patch_id = %s
+                     AND (
+                         (s.hero_a = ANY(%s) AND s.hero_b = ANY(%s))
+                         OR (s.hero_b = ANY(%s) AND s.hero_a = ANY(%s))
+                     )""",
+                (hero_ids, patch_id, hero_ids, ally_picks, hero_ids, ally_picks),
+            )
+            agg: dict[int, list[float]] = {}
+            for row in cur.fetchall():
+                hid = row[0]
+                wr = row[1]
+                agg.setdefault(hid, []).append(wr)
+            return {
+                hid: (float(sum(wrs)) / len(wrs), len(wrs))
+                for hid, wrs in agg.items()
+            }
+    finally:
+        put_conn(conn)
+
+
+def fetch_counter_batch(
+    patch_id: int,
+    hero_ids: list[int],
+    enemy_picks: list[int],
+) -> dict[int, tuple[float, int]]:
+    """Batch fetch counter win_rate for *hero_ids* vs *enemy_picks* in one query.
+
+    Returns ``{hero_id: (avg_win_rate, count)}`` — missing heroes get a
+    default of ``(0.5, 0)`` from the caller.
+    """
+    if not hero_ids or not enemy_picks:
+        return {}
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT
+                       c.hero_id,
+                       c.win_rate
+                   FROM ml.hero_counter_agg c
+                   WHERE c.patch_id = %s
+                     AND c.hero_id = ANY(%s)
+                     AND c.enemy_hero_id = ANY(%s)""",
+                (patch_id, hero_ids, enemy_picks),
+            )
+            agg: dict[int, list[float]] = {}
+            for row in cur.fetchall():
+                hid = row[0]
+                wr = row[1]
+                agg.setdefault(hid, []).append(wr)
+            return {
+                hid: (float(sum(wrs)) / len(wrs), len(wrs))
+                for hid, wrs in agg.items()
             }
     finally:
         put_conn(conn)

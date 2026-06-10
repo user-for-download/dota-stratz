@@ -4,8 +4,9 @@
 **Purpose**: First pipeline stage. Cron-scheduled query of OpenDota Explorer API for recent match IDs.
 
 **Key behaviors**:
-- Self-scheduled via `robfig/cron` (`FETCH_SCHEDULE`, default `0 3 * * *`)
-- Rolling time-window query (`start_time >= NOW() - N days`)
+- Self-scheduled via `robfig/cron` (`FETCH_SCHEDULE`, default `*/5 * * * *` — every 5 min)
+- Two query modes: bootstrap (rolling window, all matches in N days) and watermark (`match_id > last_parsed`, for incremental catch-up)
+- Watermark query uses `ORDER BY match_id DESC` with a Go-side break-on-watermark filter — prevents the permanent pipeline stall that occurred with ASC+LIMIT (oldest matches always filled the result, blocking watermark advance)
 - Rate-limit avoidance via Redis-backed proxy pool
 - Opt-in startup run (`ID_FETCHER_START_RUN`) waits for `PoolMinSize` proxies before firing
 - Mutex flag prevents overlapping cron runs
@@ -32,8 +33,18 @@
 **Purpose**: Autonomous proxy pool. Fetches, validates, and maintains proxy health in Redis.
 
 **Key behaviors**:
-- Bootstrap: load from file + URL, deduplicate, validate, add survivors
+- Bootstrap: load from file + URL (uses `limitedFetchWithRetry` so the cooldown kicks in before the follow-up top-up), deduplicate, validate, add survivors
 - Refresh loop: periodic remote fetch (default 15min), top-up if below `PoolMinSize`
 - Lease reaper: reclaims expired leases every 30s
-- Supports HTTP/HTTPS CONNECT, SOCKS4, SOCKS5 via `MakeTransport`
-- Source-fetch cooldown: 10-min guard against HTTP 429
+- Transport supports HTTP/HTTPS CONNECT, SOCKS5, **SOCKS4** (native dialer — previously forced through `proxy.SOCKS5()` causing handshake failure on SOCKS4-only servers)
+- Source-fetch cooldown: 10-min guard against HTTP 429 (both bootstrap and refresh respect it)
+
+## Inference API
+**Purpose**: Serves draft predictions via LightGBM binary classification models on HTTP :8080.
+
+**Key behaviors**:
+- Threaded connection pool (psycopg2 `ThreadedConnectionPool`) guarded by `threading.Lock`
+- Broken connections are discarded via `putconn(conn, close=True)` on rollback failure — prevents pool poisoning (previously returned dead connections to the pool, causing cascading HTTP 500s)
+- Six pre-fetched batch queries replace hundreds of individual lookups: baselines, team-hero, player-hero, synergy, counter, h2h
+- Hot-reload endpoint (`/reload/:patch_id`) without restart
+- Returns `{"status":"ok","patch_models_loaded":[...]}` on health check

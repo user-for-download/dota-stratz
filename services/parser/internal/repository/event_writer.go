@@ -57,6 +57,7 @@ func writeRunesLog(batch *pgx.Batch, matchID int64, playerSlot int, raw json.Raw
 	for idx, r := range entries {
 		batch.Queue(`
 			INSERT INTO player_runes_log (match_id, player_slot, time, key, seq)
+			OVERRIDING SYSTEM VALUE
 			VALUES ($1,$2,$3,$4,$5)
 			ON CONFLICT (match_id, player_slot, time, key, seq) DO NOTHING`,
 			matchID, playerSlot, r.Time, string(r.Key), idx,
@@ -76,6 +77,7 @@ func writePurchaseLog(batch *pgx.Batch, matchID int64, playerSlot int, raw json.
 	for idx, pur := range entries {
 		batch.Queue(`
 			INSERT INTO player_purchase_log (match_id, player_slot, time, key, charges, seq)
+			OVERRIDING SYSTEM VALUE
 			VALUES ($1,$2,$3,$4,$5,$6)
 			ON CONFLICT (match_id, player_slot, time, key, seq) DO NOTHING`,
 			matchID, playerSlot, pur.Time, string(pur.Key), pur.Charges, idx,

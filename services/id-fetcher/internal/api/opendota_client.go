@@ -116,15 +116,16 @@ func (c *OpenDotaClient) parseResponse(body []byte) ([]MatchNode, error) {
 }
 
 // FetchMatchesSince fetches matches with match_id > watermark, returning
-// at most maxResults rows (newest first by match_id).
+// at most maxResults rows (oldest first by match_id).
 //
-// OpenDota's public Explorer API does not support `match_id > X` as a
-// server-side filter, so this method issues the watermark-based query
-// (matches_watermark.sql) against a wider lookback window
-// (lookbackDays days, ≥ FetchLastCountDay) and filters + truncates
-// the result in Go. The query is sorted by match_id DESC so the Go
-// filter can stop as soon as the cursor drops below the watermark
-// (avoiding scanning the full result set).
+// The watermark filter is pushed into the SQL query itself (match_id > %d)
+// to guarantee that no match above the watermark is ever skipped,
+// regardless of backlog depth. With ASC + match_id filter, every batch
+// picks up the oldest unparsed matches first, so a backlog of 100K
+// matches is drained 2.5K at a time across successive cron ticks. This
+// avoids the permanent data-loss bug that occurred with DESC + no
+// match_id filter, where the watermark jumped past older unprocessed
+// matches that fell outside the LIMIT window.
 //
 // Parameters:
 //   - ctx:              cancelled on graceful shutdown or per-request
@@ -137,8 +138,8 @@ func (c *OpenDotaClient) parseResponse(body []byte) ([]MatchNode, error) {
 //   - maxResults:       hard cap on returned rows (caller passes e.g.
 //     5 × batch_size to allow for filtering slack)
 //
-// Returns the filtered, truncated slice (already sorted by match_id
-// DESC). Retries on transient errors exactly like FetchMatches — the
+// Returns the truncated slice (already sorted by match_id ASC).
+// Retries on transient errors exactly like FetchMatches — the
 // proxy rotation, capped backoff, and pool-exhaustion handling are
 // identical.
 func (c *OpenDotaClient) FetchMatchesSince(
@@ -164,7 +165,12 @@ func (c *OpenDotaClient) FetchMatchesSince(
 	}
 	lobbyList := strings.Join(parts, ",")
 
-	query := fmt.Sprintf(fetchMatchesWatermarkQuery, lookbackDays, lobbyList, maxResults)
+	// SQL: WHERE ... AND match_id > %d ORDER BY match_id ASC LIMIT %d
+	// The match_id filter is pushed into the SQL itself so that matches
+	// above the watermark are always found regardless of backlog depth,
+	// and ASC ordering guarantees the oldest are processed first —
+	// preventing both the pipeline stall and permanent data-loss bugs.
+	query := fmt.Sprintf(fetchMatchesWatermarkQuery, lookbackDays, watermark, lobbyList, maxResults)
 	reqURL := c.url + "?sql=" + url.QueryEscape(query)
 
 	logger.Log.Info("OpenDota: executing watermark fetch query",
@@ -183,30 +189,20 @@ func (c *OpenDotaClient) FetchMatchesSince(
 		return nil, err
 	}
 
-	// Filter + truncate. The query is ordered by match_id DESC (see
-	// matches_watermark.sql), so we could stop as soon as we see a row
-	// at or below the watermark. However, if the ordering guarantee is
-	// ever compromised (e.g. schema change in matches_watermark.sql),
-	// a break would silently drop valid newer matches that appear after
-	// an older one. Use continue for defensive correctness — the O(n)
-	// cost is negligible over a LIMIT 50000 result set.
-	filtered := make([]MatchNode, 0, min(len(all), maxResults))
-	for _, m := range all {
-		if m.MatchID <= watermark {
-			continue
-		}
-		filtered = append(filtered, m)
-		if len(filtered) >= maxResults {
-			break
-		}
+	// Truncate to maxResults. No match_id filter is needed in Go because
+	// the SQL already guarantees match_id > watermark. With ASC ordering,
+	// the oldest matches come first, so cutting at maxResults simply
+	// bounds the batch size — remaining matches will be picked up on the
+	// next cron tick.
+	if len(all) > maxResults {
+		all = all[:maxResults]
 	}
 
-	logger.Log.Info("OpenDota: watermark filter applied",
-		zap.Int("rows_before_filter", len(all)),
-		zap.Int("rows_after_filter", len(filtered)),
+	logger.Log.Info("OpenDota: watermark fetch succeeded",
+		zap.Int("rows", len(all)),
 		zap.Int64("watermark", watermark))
 
-	return filtered, nil
+	return all, nil
 }
 
 // executeWithRetry wraps the proxy-rotation retry loop so both

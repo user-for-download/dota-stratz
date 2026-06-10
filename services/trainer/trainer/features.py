@@ -183,6 +183,8 @@ def feature_column_names(include_onehot: bool = True, max_hero_id: int = 160) ->
     This is the source of truth for the training/API column contract.
     """
     cols = [
+        # Draft context (side + pick-vs-ban) — critical context for the model
+        "is_pick", "team",
         # Team-hero aggregates
         "th_games", "th_wins", "th_win_rate", "th_bans",
         "th_avg_gpm", "th_avg_xpm", "th_avg_kills", "th_avg_deaths", "th_avg_assists",
@@ -213,10 +215,20 @@ def feature_column_names(include_onehot: bool = True, max_hero_id: int = 160) ->
 def make_target(df: pd.DataFrame) -> np.ndarray:
     """Return the target vector: 1 if the picker's team won, 0 otherwise.
 
+    The target is relative to the picking team, NOT absolute radiant_win:
+      team=0 (Radiant): target = radiant_win
+      team=1 (Dire):    target = 1 - radiant_win  (i.e., Dire won)
+
+    Previously this function returned bare ``radiant_win``, which meant
+    the model was trained to associate strong Dire picks with failure
+    (since a Dire win sets radiant_win=0 → target=0). This inversion
+    caused the model to learn the inverse for all Dire training rows
+    (Bug #2).
+
     For bans we still assign a target (the team that banned won/lost) so
     that the model learns to associate bans with outcomes too.
     """
-    return df["radiant_win"].astype(int).values
+    return (df["radiant_win"] == (df["team"] == 0)).astype(int).values
 
 
 def make_group(df: pd.DataFrame) -> np.ndarray:
