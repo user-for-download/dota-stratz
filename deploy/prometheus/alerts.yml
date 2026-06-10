@@ -12,18 +12,18 @@ groups:
           description: "Only {{ $value }} proxies available (min: 20)"
 
       - alert: IngestionStalled
-        # Cron-driven batch pipeline: id-fetcher runs at 0 3 * * * (daily 03:00 UTC).
-        # Uses increase() over 26h (24h cron + 2h buffer) — if the counter has
-        # not advanced at all in the past 26 hours, the pipeline is stalled.
+        # Cron-driven batch pipeline: id-fetcher runs every 5 minutes.
+        # Uses increase() over 15m (3× cron interval) — if the counter has
+        # not advanced at all in the past 15 minutes, the pipeline is stalled.
         # Cannot use time() - timestamp(counter > 0) because Prometheus's
         # timestamp() returns the scrape time, not the last-change time.
-        expr: increase(id_fetcher_match_ids_published_total[26h]) == 0
+        expr: increase(id_fetcher_match_ids_published_total[15m]) == 0
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "ID Fetcher has not published match IDs in 26+ hours"
-          description: "Last successful publish was {{ $value | humanizeDuration }} ago. Cron schedule is 0 3 * * * (daily 03:00 UTC)."
+          summary: "ID Fetcher has not published match IDs in 15+ minutes"
+          description: "Last successful publish was {{ $value | humanizeDuration }} ago. Cron schedule is */5 * * * * (every 5 minutes)."
 
       - alert: DLQDepthGrowing
         # Two queues carry a DLQ: queue.match_ids.dlq and queue.raw_matches.dlq.

@@ -272,7 +272,7 @@ db-restore-physical: ## Restore physical Postgres backup. Usage: make db-restore
 .PHONY: db-backups
 db-backups: ## List physical DB backups
 	@mkdir -p "$(DB_PHYSICAL_BACKUP_DIR)"
-	@ls -lh "$(DB_PHYSICAL_BACKUP_DIR)"/*.tar.gz 2>/dev/null || echo "No backups found in $(DB_PHYSICAL_BACKUP_DIR)"
+	@ls -lh "$(DB_PHYSICAL_BACKUP_DIR)"/*.tar 2>/dev/null || echo "No backups found in $(DB_PHYSICAL_BACKUP_DIR)"
 
 # ==============================================================================
 # Redis

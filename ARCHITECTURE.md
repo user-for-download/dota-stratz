@@ -74,8 +74,8 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 - `internal/api/fetcher.go` — Single-shot fetch: calls `client.FetchMatches`, batches results, publishes to `queue.match_ids`
 - `internal/api/opendota_client.go` — Executes embedded SQL via OpenDota Explorer API with `pool.WithProxy()`. Retries until the pool is exhausted or the context is cancelled. Uses `proxypool.MakeTransport` for HTTP proxy transport (supports HTTP/HTTPS and SOCKS5). Exits only on `context.Canceled` (not `DeadlineExceeded`) so per-request timeouts rotate to a fresh proxy instead of stopping retries.
 - `internal/api/matches.sql` — Embedded query: `WHERE start_time >= (EXTRACT(EPOCH FROM NOW() - INTERVAL '%d days'))::BIGINT AND lobby_type IN (%s)`, where `%d` and `%s` are filled at runtime from `FETCH_LAST_COUNT_DAY` and `FETCH_LOBBY_TYPES`
-- `internal/api/matches_watermark.sql` — Watermark-based query used after the parser has committed at least one batch. Uses `%%d` placeholder for the lookback window (configurable via `ID_FETCHER_WATERMARK_LOOKBACK_DAYS`, defaults to `FETCH_LAST_COUNT_DAY`).
-- `internal/queue/` — RabbitMQ publisher with confirmed delivery. **Fresh channel per batch** (closed after publish) to prevent `NotifyPublish` listener memory leak. Uses `shutdown` channel for deadlock-safe reconnection (see Bug #1/#4).
+- `internal/api/matches_watermark.sql` — Watermark-based query used after the parser has committed at least one batch. Uses `%d` placeholders filled at runtime with `fmt.Sprintf` for the lookback window, match_id filter, lobby_types, and LIMIT (configurable via `ID_FETCHER_WATERMARK_LOOKBACK_DAYS`, defaults to `FETCH_LAST_COUNT_DAY`).
+- `internal/queue/` — RabbitMQ publisher with confirmed delivery. **Fresh channel per batch** (closed after publish) to prevent `NotifyPublish` listener memory leak. Uses `shutdown` channel for deadlock-safe reconnection (releases `closeMu` before `Close()` to prevent publisher deadlock on stalled TCP connections).
 - `internal/config/` — YAML + env expansion. Parses `FETCH_LOBBY_TYPES` (comma-separated) into `[]int`. `watermark_lookback_days` defaults to `fetch_last_count_day` at runtime (not a static 30) so it never fails validation. New fields: `start_run`, `start_run_min_pool_size`, `start_run_max_wait`.
 - `internal/metrics/` — `id_fetcher_pagination_runs_total`, `id_fetcher_match_ids_published_total`, `id_fetcher_api_calls_total`
 
@@ -102,7 +102,7 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 - `internal/api/client.go` — HTTP client for `https://api.opendota.com/api/matches/{id}` with proxy pool integration: `AcquireWithRateLimit`, JSON validation, error classification. Uses `proxypool.MakeTransport` for the HTTP transport (HTTP/HTTPS proxy support only; SOCKS5 not needed for outbound API calls).
 - `internal/consumer/` — RabbitMQ consumer for `queue.match_ids` with DLQ binding and QoS. Auto-reconnection loop (1s → 30s exponential backoff).
 - `internal/worker/` — Match processing: exponential backoff retries (max 3), handles `ErrMatchNotFound` (ack + drop), publishes to `queue.raw_matches` on success
-- `internal/publisher/` — RabbitMQ publisher for `queue.raw_matches` with publisher confirms, mutex-serialized to prevent concurrency trap. Uses `reconnectMu` to serialize reconnection attempts (prevents exchange race — Bug #3), and `shutdown` channel to prevent goroutine leaks on close (Bug #2).
+- `internal/publisher/` — RabbitMQ publisher for `queue.raw_matches` with publisher confirms, mutex-serialized to prevent concurrency trap. Uses `reconnectMu` to serialize reconnection attempts (prevents exchange re-declaration race during concurrent reconnect), and `shutdown` channel to prevent goroutine leaks on close (releases `closeMu` before `Close()` to avoid deadlock).
 - `internal/metrics/` — `detail_fetcher_messages_received_total`, `detail_fetcher_fetches_total{result}`, `detail_fetcher_publishes_total{result}`, `detail_fetcher_dlq_routed_total`
 
 **Key behaviors:**
@@ -273,9 +273,9 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 ```
 dota2:proxies                  ZSET   — available proxies (score = timestamp)
 dota2:proxies:leases           HASH  — proxy → lease-expiry mapping
-dota2:proxies:failures:{proxy} STRING — failure count
-dota2:proxies:cooldown:{proxy} STRING — cooldown expiry
-dota2:proxies:ratelimit:{proxy} STRING — rate-limit tracking
+dota2:proxies:failures:{hash} STRING — failure count
+dota2:proxies:cooldown:{hash} STRING — cooldown expiry
+dota2:proxies:ratelimit:{hash} STRING — rate-limit tracking
 ```
 
 **Key features:**
@@ -293,13 +293,14 @@ dota2:proxies:ratelimit:{proxy} STRING — rate-limit tracking
 ### Migration Files
 
 | File | Description |
-|---|---|---|
+|---|---|
 | `001_core.sql` | Core schema: `matches`, `players` (RANGE-partitioned), all child event tables, indexes, `ingestion_checkpoints`, partition management functions + initialization. FKs are `DEFERRABLE INITIALLY DEFERRED` for batch-insert throughput. |
 | `002_constants.sql` | Static reference data: `const_game_mode`, `const_lobby_type`, `const_region`, `const_patch`, `const_hero`, `const_item`, `const_ability` — table definitions + seed data combined. Internal FK constraints within constants schema. |
 | `003_analytics.sql` | Analytics schema: Bayesian shrinkage config, materialized views (`mv_team_hero_profile`, `mv_hero_synergy`, `mv_hero_counter`, `mv_player_team_history`), `feature_snapshots_player_hero`, `featurizer_runs`, `refresh_all_mv()`, `update_feature_snapshots()`, roles. |
 | `004_partition_verify.sql` | Idempotent assertion that the 6 expected `players` partitions exist. Performs no schema changes on a healthy database — safety check for CI/testing. |
 | `005_ml_tables.sql` | 6 patch-aware ML aggregate tables in `ml` schema: `team_hero_agg`, `player_hero_agg`, `hero_synergy_agg`, `hero_counter_agg`, `team_h2h_agg`, `hero_baseline_agg`. All UNLOGGED for write speed. |
 | `006_postgres_best_practices_fixes.sql` | Runtime fixes: grants on `ml` schema, `grant_ml_access()` function for new users. |
+| `007_enhanced_features.sql` | Adds 3 behavioral feature columns (`firstblood_rate`, `avg_camps_stacked`, `avg_vision_placed`) to `ml.team_hero_agg` and `ml.player_hero_agg`. |
 
 ### Table Structure
 
@@ -367,9 +368,9 @@ ML targets that need PostgreSQL use `--profile db --profile api` or `--profile d
 For fast backup and restore of the PostgreSQL data directory (much faster than `pg_dump` for large databases):
 
 ```bash
-make db-backup-physical                      # Snapshot to ./backups/pgdata_*.tar.gz
+make db-backup-physical                      # Snapshot to ./backups/pgdata_*.tar
 make db-backups                              # List existing snapshots
-make db-restore-physical DUMP=pgdata_xxx.tar.gz  # Restore from snapshot
+make db-restore-physical DUMP=pgdata_xxx.tar  # Restore from snapshot
 ```
 
 Postgres is briefly stopped during the operation to ensure filesystem-level consistency. Requires the `alpine` Docker image.
