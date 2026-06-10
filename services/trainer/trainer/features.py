@@ -80,6 +80,9 @@ TRAINING_FEATURES_SQL = """
         COALESCE(th.avg_kills, 0)   AS th_avg_kills,
         COALESCE(th.avg_deaths, 0)  AS th_avg_deaths,
         COALESCE(th.avg_assists, 0) AS th_avg_assists,
+        COALESCE(th.firstblood_rate, 0) AS th_firstblood_rate,
+        COALESCE(th.avg_camps_stacked, 0) AS th_avg_camps_stacked,
+        COALESCE(th.avg_vision_placed, 0) AS th_avg_vision_placed,
 
         -- Player-hero aggregate (only for picks — NULL for bans)
         COALESCE(ph.games, 0)       AS ph_games,
@@ -92,6 +95,9 @@ TRAINING_FEATURES_SQL = """
         COALESCE(ph.avg_assists, 0) AS ph_avg_assists,
         COALESCE(ph.avg_kda, 0)     AS ph_avg_kda,
         COALESCE(ph.lane_role, 0)   AS ph_lane_role,
+        COALESCE(ph.firstblood_rate, 0) AS ph_firstblood_rate,
+        COALESCE(ph.avg_camps_stacked, 0) AS ph_avg_camps_stacked,
+        COALESCE(ph.avg_vision_placed, 0) AS ph_avg_vision_placed,
 
         -- Synergy with already-picked allies (uses LEAST/GREATEST for index)
         COALESCE(sy_avg.wr, 0.5)    AS sy_avg_win_rate,
@@ -188,10 +194,12 @@ def feature_column_names(include_onehot: bool = True, max_hero_id: int = 160) ->
         # Team-hero aggregates
         "th_games", "th_wins", "th_win_rate", "th_bans",
         "th_avg_gpm", "th_avg_xpm", "th_avg_kills", "th_avg_deaths", "th_avg_assists",
+        "th_firstblood_rate", "th_avg_camps_stacked", "th_avg_vision_placed",
         # Player-hero aggregates
         "ph_games", "ph_wins", "ph_win_rate",
         "ph_avg_gpm", "ph_avg_xpm", "ph_avg_kills", "ph_avg_deaths", "ph_avg_assists",
         "ph_avg_kda", "ph_lane_role",
+        "ph_firstblood_rate", "ph_avg_camps_stacked", "ph_avg_vision_placed",
         # Synergy
         "sy_avg_win_rate", "sy_n_teammates",
         # Counter

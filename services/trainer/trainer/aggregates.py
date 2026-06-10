@@ -36,7 +36,7 @@ def _batched(rows: list[tuple], batch_size: int):
 # ---------------------------------------------------------------------------
 
 POPULATE_TEAM_HERO = """
-    INSERT INTO ml.team_hero_agg (patch_id, team_id, hero_id, games, wins, bans, win_rate, avg_gpm, avg_xpm, avg_kills, avg_deaths, avg_assists, last_played)
+    INSERT INTO ml.team_hero_agg (patch_id, team_id, hero_id, games, wins, bans, win_rate, avg_gpm, avg_xpm, avg_kills, avg_deaths, avg_assists, firstblood_rate, avg_camps_stacked, avg_vision_placed, last_played)
     VALUES %s
     ON CONFLICT (patch_id, team_id, hero_id) DO UPDATE SET
         games      = EXCLUDED.games,
@@ -48,6 +48,9 @@ POPULATE_TEAM_HERO = """
         avg_kills  = EXCLUDED.avg_kills,
         avg_deaths = EXCLUDED.avg_deaths,
         avg_assists= EXCLUDED.avg_assists,
+        firstblood_rate   = EXCLUDED.firstblood_rate,
+        avg_camps_stacked = EXCLUDED.avg_camps_stacked,
+        avg_vision_placed = EXCLUDED.avg_vision_placed,
         last_played= EXCLUDED.last_played;
 """
 
@@ -63,14 +66,17 @@ def populate_team_hero(cfg: TrainerConfig, conn) -> int:
                 CASE WHEN p.is_radiant THEN m.radiant_team_id ELSE m.dire_team_id END AS team_id,
                 p.hero_id,
                 COUNT(*)                                           AS games,
-                SUM(CASE WHEN p.win = 1 THEN 1 ELSE 0 END)        AS wins,
-                0::INT                                             AS bans,
-                AVG(p.gold_per_min)::FLOAT                         AS avg_gpm,
-                AVG(p.xp_per_min)::FLOAT                           AS avg_xpm,
-                AVG(p.kills)::FLOAT                                AS avg_kills,
-                AVG(p.deaths)::FLOAT                               AS avg_deaths,
-                AVG(p.assists)::FLOAT                              AS avg_assists,
-                MAX(m.start_time)                                  AS last_played
+                SUM(CASE WHEN p.win = 1 THEN 1 ELSE 0 END)         AS wins,
+                0::INT                                              AS bans,
+                AVG(p.gold_per_min)::FLOAT                          AS avg_gpm,
+                AVG(p.xp_per_min)::FLOAT                            AS avg_xpm,
+                AVG(p.kills)::FLOAT                                 AS avg_kills,
+                AVG(p.deaths)::FLOAT                                AS avg_deaths,
+                AVG(p.assists)::FLOAT                               AS avg_assists,
+                AVG(p.firstblood_claimed)::FLOAT                    AS firstblood_rate,
+                AVG(p.camps_stacked)::FLOAT                         AS avg_camps_stacked,
+                AVG(p.obs_placed + p.sen_placed)::FLOAT             AS avg_vision_placed,
+                MAX(m.start_time)                                   AS last_played
             FROM matches m
             INNER JOIN players p ON p.match_id = m.match_id
             WHERE m.patch = %s
@@ -81,10 +87,11 @@ def populate_team_hero(cfg: TrainerConfig, conn) -> int:
         """, (patch_id,))
         rows: list[tuple[Any, ...]] = []
         for r in cur.fetchall():
-            team_id, hero_id, games, wins, bans_, ag, ax, ak, ad, aa, lp = r
+            team_id, hero_id, games, wins, bans_, ag, ax, ak, ad, aa, fbr, acs, avp, lp = r
             rows.append((
                 patch_id, team_id, hero_id, games, wins, 0,
-                _shrunk_wr(wins, games, pg, pw), ag, ax, ak, ad, aa, lp,
+                _shrunk_wr(wins, games, pg, pw), ag, ax, ak, ad, aa,
+                fbr, acs, avp, lp,
             ))
 
     # Write in batches
@@ -103,7 +110,7 @@ def populate_team_hero(cfg: TrainerConfig, conn) -> int:
 # ---------------------------------------------------------------------------
 
 POPULATE_PLAYER_HERO = """
-    INSERT INTO ml.player_hero_agg (patch_id, account_id, hero_id, games, wins, win_rate, avg_gpm, avg_xpm, avg_kills, avg_deaths, avg_assists, avg_kda, lane_role, last_played)
+    INSERT INTO ml.player_hero_agg (patch_id, account_id, hero_id, games, wins, win_rate, avg_gpm, avg_xpm, avg_kills, avg_deaths, avg_assists, avg_kda, lane_role, firstblood_rate, avg_camps_stacked, avg_vision_placed, last_played)
     VALUES %s
     ON CONFLICT (patch_id, account_id, hero_id) DO UPDATE SET
         games       = EXCLUDED.games,
@@ -116,6 +123,9 @@ POPULATE_PLAYER_HERO = """
         avg_assists = EXCLUDED.avg_assists,
         avg_kda     = EXCLUDED.avg_kda,
         lane_role   = EXCLUDED.lane_role,
+        firstblood_rate   = EXCLUDED.firstblood_rate,
+        avg_camps_stacked = EXCLUDED.avg_camps_stacked,
+        avg_vision_placed = EXCLUDED.avg_vision_placed,
         last_played = EXCLUDED.last_played;
 """
 
@@ -138,6 +148,9 @@ def populate_player_hero(cfg: TrainerConfig, conn) -> int:
                 AVG(p.assists)::FLOAT                       AS avg_assists,
                 AVG(p.kda)::FLOAT                           AS avg_kda,
                 MODE() WITHIN GROUP (ORDER BY p.lane_role)  AS lane_role,
+                AVG(p.firstblood_claimed)::FLOAT            AS firstblood_rate,
+                AVG(p.camps_stacked)::FLOAT                 AS avg_camps_stacked,
+                AVG(p.obs_placed + p.sen_placed)::FLOAT     AS avg_vision_placed,
                 MAX(m.start_time)                           AS last_played
             FROM matches m
             INNER JOIN players p ON p.match_id = m.match_id
@@ -149,10 +162,10 @@ def populate_player_hero(cfg: TrainerConfig, conn) -> int:
         """, (patch_id,))
         rows = []
         for r in cur.fetchall():
-            aid, hid, games, wins, ag, ax, ak, ad, aa, akda, lr, lp = r
+            aid, hid, games, wins, ag, ax, ak, ad, aa, akda, lr, fbr, acs, avp, lp = r
             rows.append((
                 patch_id, aid, hid, games, wins, _shrunk_wr(wins, games, pg, pw),
-                ag, ax, ak, ad, aa, akda, lr, lp,
+                ag, ax, ak, ad, aa, akda, lr, fbr, acs, avp, lp,
             ))
 
     total = 0

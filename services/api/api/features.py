@@ -44,6 +44,9 @@ _FLOAT_DEFAULTS: dict[str, float] = {
     "avg_assists": 0.0,
     "avg_kda": 0.0,
     "avg_kd_diff": 0.0,
+    "firstblood_rate": 0.0,
+    "avg_camps_stacked": 0.0,
+    "avg_vision_placed": 0.0,
 }
 
 _INT_DEFAULTS: dict[str, int] = {
@@ -237,6 +240,9 @@ def build_feature_vector(
     vec["th_avg_kills"] = _float(th.get("avg_kills") if th else None, "avg_kills")
     vec["th_avg_deaths"] = _float(th.get("avg_deaths") if th else None, "avg_deaths")
     vec["th_avg_assists"] = _float(th.get("avg_assists") if th else None, "avg_assists")
+    vec["th_firstblood_rate"] = _float(th.get("firstblood_rate") if th else None, "firstblood_rate")
+    vec["th_avg_camps_stacked"] = _float(th.get("avg_camps_stacked") if th else None, "avg_camps_stacked")
+    vec["th_avg_vision_placed"] = _float(th.get("avg_vision_placed") if th else None, "avg_vision_placed")
 
     # -- Player-hero aggregates (from pre-fetched batch dict) --
     # Falls back to hardcoded defaults when account_id is unavailable
@@ -253,6 +259,9 @@ def build_feature_vector(
     vec["ph_avg_assists"] = _float(ph.get("avg_assists") if ph else None, "avg_assists")
     vec["ph_avg_kda"] = _float(ph.get("avg_kda") if ph else None, "avg_kda")
     vec["ph_lane_role"] = _float(ph.get("lane_role") if ph else None, "lane_role")
+    vec["ph_firstblood_rate"] = _float(ph.get("firstblood_rate") if ph else None, "firstblood_rate")
+    vec["ph_avg_camps_stacked"] = _float(ph.get("avg_camps_stacked") if ph else None, "avg_camps_stacked")
+    vec["ph_avg_vision_placed"] = _float(ph.get("avg_vision_placed") if ph else None, "avg_vision_placed")
 
     # -- Synergy with allies (from pre-fetched batch dict) --
     sy = batch.synergy.get(hero_id)
