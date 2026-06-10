@@ -27,10 +27,10 @@ make db-backup-physical   # Snapshot pg data directory
 
 ## ML
 ```bash
-make train PATCH=134      # Train model for patch 134
-make up-api-d             # Start inference API in background
-make test-api             # Smoke test the API
-make reload-api PATCH=134 # Hot-reload model (no restart)
+make train PATCH=60       # Train model for patch 60 (uses --profile db --profile train)
+make up-api-d             # Start inference API on :8080 in background
+make test-api             # Smoke test health + /predict
+make reload-api PATCH=60  # Hot-reload model (no restart, requires STRATZ_ADMIN_TOKEN)
 ```
 
 ## RabbitMQ

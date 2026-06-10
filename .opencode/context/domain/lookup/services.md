@@ -1,13 +1,13 @@
 # Service Quick Reference
 
-| Service | Package | Lang | Port | Deps | Config |
-|---------|---------|------|------|------|--------|
-| ID Fetcher | `services/id-fetcher/` | Go | 9094 | Redis, RabbitMQ | `config/config.yaml` |
-| Detail Fetcher | `services/detail-fetcher/` | Go | 9091 | Redis, RabbitMQ | `config/config.yaml` |
-| Parser | `services/parser/` | Go | 9093 | PostgreSQL, RabbitMQ | `config/config.yaml` |
-| Proxy Manager | `services/proxy-manager/` | Go | 9090 | Redis | Env vars only |
-| Trainer | `services/trainer/` | Python | — | PostgreSQL | Env vars |
-| API | `services/api/` | Python | 8080 | PostgreSQL | Env vars |
+| Service | Package | Lang | Port | Deps | Config | Notes |
+|---------|---------|------|------|------|--------|-------|
+| ID Fetcher | `services/id-fetcher/` | Go | 9094 | Redis, RabbitMQ | `config/config.yaml` | |
+| Detail Fetcher | `services/detail-fetcher/` | Go | 9091 | Redis, RabbitMQ | `config/config.yaml` | |
+| Parser | `services/parser/` | Go | 9093 | PostgreSQL, RabbitMQ | `config/config.yaml` | |
+| Proxy Manager | `services/proxy-manager/` | Go | 9090 | Redis | Env vars only | |
+| Trainer | `services/trainer/` | Python | — | PostgreSQL | Env vars | Batch CLI; needs ~2G memory; writes models to `/models` |
+| API | `services/api/` | Python | 8080 | PostgreSQL | Env vars | Loads models from `/models`; health endpoint at `/health` |
 
 ## Shared Library
 **Module**: `github.com/dota-stratz/shared/go-common` at `shared/go-common/`

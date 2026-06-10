@@ -20,11 +20,14 @@
 ## ML
 | Target | Action |
 |--------|--------|
-| `make train PATCH=N` | Train LightGBM model for patch N |
-| `make up-api-d` | Start inference API (background) |
-| `make test-api` | Smoke test the API |
-| `make reload-api PATCH=N` | Hot-reload model for patch N |
+| `make train PATCH=N` | Train LightGBM model for patch N (uses profiles `db`+`train`) |
+| `make train-agg-only PATCH=N` | Populate aggregates only, skip training |
+| `make up-api-d` | Start inference API on :8080 (uses profiles `db`+`api`) |
+| `make down-api` | Stop inference API |
+| `make test-api` | Smoke-test health + /predict endpoints |
+| `make reload-api PATCH=N` | Hot-reload model (no restart) |
 | `make migrate-ml` | Apply ML migration only |
+| `make build-ml-images` | Build trainer + api Docker images |
 
 ## RabbitMQ
 | Target | Action |
@@ -40,3 +43,4 @@
 | `make up-fetcher` | + id-fetcher, detail-fetcher |
 | `make up-parser` | + parser |
 | `make up-api-d` | + ml-inference-api |
+| `make train` | runs existing db+train containers |

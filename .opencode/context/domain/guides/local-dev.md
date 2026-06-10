@@ -28,11 +28,13 @@ docker ps --format "table {{.Names}}\t{{.Status}}"
 ## ML Pipeline (after data ingested)
 ```bash
 make migrate-ml              # Create ML aggregate tables
-make build-ml                # Build ML Docker images
-make train                   # Auto-detect patch, train model
-make up-api-d                # Start inference API
-make test-api                # Smoke test
+make train PATCH=60          # Train model for patch 60 (uses --profile db --profile train)
+make up-api-d                # Start inference API on :8080
+make test-api                # Smoke test health + /predict
 ```
+
+Models are trained per-patch. Available patches with data: 58 (15.5k matches), 59 (6.8k), 60 (4.5k).
+The trainer container needs ~2G memory for patch 58 (372k draft slots).
 
 ## Monitoring
 ```bash

@@ -28,4 +28,8 @@
 | 1 | ID Fetcher | OpenDota Explorer API | `queue.match_ids` |
 | 2 | Detail Fetcher | `queue.match_ids`, OpenDota API | `queue.raw_matches` |
 | 3 | Parser | `queue.raw_matches` | PostgreSQL (20+ tables) |
+| 4 | **Trainer** | PostgreSQL (ml.aggregates) | ML model files, feature schema |
+| 5 | **API** | PostgreSQL (ml.aggregates) + model files | Predictions via HTTP :8080 |
 | — | Proxy Manager | — | Redis (proxy pool) |
+
+**ML downstream**: After data lands in PostgreSQL, the Trainer computes patch-aware aggregate tables and trains LightGBM lambdarank models. The inference API loads these models and serves draft predictions.

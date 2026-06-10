@@ -26,3 +26,14 @@
 ## ML Schema (`ml`)
 - 6 patch-aware aggregate tables for LightGBM training and inference
 - Tables are UNLOGGED for write speed (re-populated on each train run)
+- Trainer's `TRAINING_FEATURES_SQL` computes 196-dim feature vectors (36 aggregate + 160 one-hot hero ID) via a single query with `LEAST`/`GREATEST` index-friendly joins on synergy aggregates (~11s for 108k rows)
+
+### ML Aggregate Tables
+| Table | Rows (patch 58) | Purpose |
+|-------|-----------------|---------|
+| `team_hero_agg` | 35,240 | Team+hero historical stats (games, wins, bans, avg stats) |
+| `player_hero_agg` | 39,845 | Player+hero historical stats per account |
+| `hero_synergy_agg` | 7,332 | Pairwise hero synergy win rates on same team |
+| `hero_counter_agg` | 15,216 | Pairwise hero counter win rates vs enemy |
+| `team_h2h_agg` | 4,846 | Team head-to-head win rates |
+| `hero_baseline_agg` | 126 | Global hero pick/ban rates and avg stats per patch |
