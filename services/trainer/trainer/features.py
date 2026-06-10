@@ -45,39 +45,27 @@ TRAINING_FEATURES_SQL = """
             pb.hero_id,
             pb.is_pick,
             pb.team,
-            pb.order,
-            pb.radiant_team_id,
-            pb.dire_team_id,
+            pb."order",
+            m.radiant_team_id,
+            m.dire_team_id,
             m.radiant_win,
-            m.patch_id
+            m.patch AS patch_id,
+            p.account_id
         FROM picks_bans pb
         INNER JOIN matches m ON pb.match_id = m.match_id
-        WHERE m.patch_id = %(patch_id)s
-          AND pb.order IS NOT NULL
-    ),
-    match_players AS (
-        SELECT
-            p.match_id,
-            p.hero_id,
-            p.account_id,
-            p.is_radiant,
-            p.win,
-            p.gold_per_min,
-            p.xp_per_min,
-            p.kills,
-            p.deaths,
-            p.assists,
-            p.kda,
-            p.lane_role
-        FROM players p
-        WHERE p.match_id IN (SELECT match_id FROM draft_slots)
+        LEFT JOIN players p
+               ON p.match_id = pb.match_id
+              AND p.hero_id = pb.hero_id
+              AND p.is_radiant = (pb.team = 0)
+        WHERE m.patch = %(patch_id)s
+          AND pb."order" IS NOT NULL
     )
     SELECT
         ds.match_id,
         ds.hero_id,
-        ds.is_pick::INT,
+        ds.is_pick::INT AS is_pick,
         ds.team,
-        ds.order,
+        ds."order" AS "order",
         ds.radiant_team_id,
         ds.dire_team_id,
         ds.radiant_win,
@@ -105,11 +93,11 @@ TRAINING_FEATURES_SQL = """
         COALESCE(ph.avg_kda, 0)     AS ph_avg_kda,
         COALESCE(ph.lane_role, 0)   AS ph_lane_role,
 
-        -- Synergy with already-picked allies (average of pairwise synergy)
+        -- Synergy with already-picked allies (uses LEAST/GREATEST for index)
         COALESCE(sy_avg.wr, 0.5)    AS sy_avg_win_rate,
         COALESCE(sy_avg.cnt, 0)     AS sy_n_teammates,
 
-        -- Counter vs already-picked enemies (average of pairwise counter)
+        -- Counter vs already-picked enemies
         COALESCE(co_avg.wr, 0.5)    AS co_avg_win_rate,
         COALESCE(co_avg.cnt, 0)     AS co_n_enemies,
 
@@ -140,16 +128,9 @@ TRAINING_FEATURES_SQL = """
     LEFT JOIN ml.player_hero_agg ph
         ON ph.patch_id    = ds.patch_id
        AND ph.hero_id     = ds.hero_id
-       AND ph.account_id  = (
-            SELECT mp.account_id
-            FROM match_players mp
-            WHERE mp.match_id  = ds.match_id
-              AND mp.hero_id   = ds.hero_id
-              AND mp.is_radiant = (ds.team = 0)
-            LIMIT 1
-        )
+       AND ph.account_id  = ds.account_id
 
-    -- Synergy with already-picked teammates
+    -- Synergy with already-picked teammates (LEAST/GREATEST uses PK index)
     LEFT JOIN LATERAL (
         SELECT
             AVG(s.win_rate)::FLOAT AS wr,
@@ -157,10 +138,10 @@ TRAINING_FEATURES_SQL = """
         FROM picks_bans pb2
         INNER JOIN ml.hero_synergy_agg s
             ON s.patch_id = ds.patch_id
-           AND ((s.hero_a = ds.hero_id AND s.hero_b = pb2.hero_id)
-             OR (s.hero_b = ds.hero_id AND s.hero_a = pb2.hero_id))
+           AND s.hero_a = LEAST(ds.hero_id, pb2.hero_id)
+           AND s.hero_b = GREATEST(ds.hero_id, pb2.hero_id)
         WHERE pb2.match_id  = ds.match_id
-          AND pb2.order     < ds.order
+          AND pb2."order"   < ds."order"
           AND pb2.is_pick   = TRUE
           AND pb2.team      = ds.team
     ) sy_avg ON TRUE
@@ -176,7 +157,7 @@ TRAINING_FEATURES_SQL = """
            AND c.hero_id  = ds.hero_id
            AND c.enemy_hero_id = pb2.hero_id
         WHERE pb2.match_id  = ds.match_id
-          AND pb2.order     < ds.order
+          AND pb2."order"   < ds."order"
           AND pb2.is_pick   = TRUE
           AND pb2.team     != ds.team
     ) co_avg ON TRUE
@@ -192,7 +173,7 @@ TRAINING_FEATURES_SQL = """
         ON bl.patch_id = ds.patch_id
        AND bl.hero_id  = ds.hero_id
 
-    ORDER BY ds.match_id, ds.order
+    ORDER BY ds.match_id, ds."order"
 """
 
 

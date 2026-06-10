@@ -72,15 +72,20 @@ def train_model(
     model.save_model(str(model_path))
     logger.info("Model saved to %s", model_path)
 
-    # Save metadata
+    # Save metadata (cast numpy types to native Python for JSON)
     meta = {
-        "patch_id": cfg.patch_id,
-        "best_ndcg_5": best_ndcg,
-        "n_train": metadata["n_train"],
-        "n_val": metadata.get("n_val", 0),
-        "n_features": metadata["n_features"],
-        "n_groups_train": metadata["n_groups_train"],
-        "params": cfg.lgbm_params,
+        "patch_id": int(cfg.patch_id),
+        "best_ndcg_5": float(best_ndcg),
+        "n_train": int(metadata["n_train"]),
+        "n_val": int(metadata.get("n_val", 0)),
+        "n_features": int(metadata["n_features"]),
+        "n_groups_train": int(metadata["n_groups_train"]),
+        "params": {
+            k: int(v) if isinstance(v, (np.integer,)) else
+               float(v) if isinstance(v, (np.floating,)) else
+               v
+            for k, v in cfg.lgbm_params.items()
+        },
     }
     meta_path = model_dir / f"model_patch_{cfg.patch_id}_meta.json"
     meta_path.write_text(json.dumps(meta, indent=2))

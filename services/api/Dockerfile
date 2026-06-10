@@ -21,6 +21,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Stage 2: Runtime — minimal production image
 FROM python:3.12-slim
 
+# Runtime libs: libgomp1 (lightgbm OpenMP), libpq5 (psycopg2)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Create non-root user with pinned UID/GID
 RUN addgroup --system --gid 1001 appgroup && \
     adduser --system --uid 1001 --gid 1001 appuser

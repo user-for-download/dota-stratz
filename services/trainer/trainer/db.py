@@ -32,10 +32,10 @@ def fetch_patch_id(cfg: TrainerConfig, conn) -> int:
         return cfg.patch_id
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT patch_id
-            FROM patches
-            WHERE patch_id IN (SELECT DISTINCT patch_id FROM matches WHERE patch_id IS NOT NULL)
-            ORDER BY patch_id DESC
+            SELECT id
+            FROM const_patch
+            WHERE id IN (SELECT DISTINCT patch FROM matches WHERE patch IS NOT NULL)
+            ORDER BY id DESC
             LIMIT 1
         """)
         row = cur.fetchone()

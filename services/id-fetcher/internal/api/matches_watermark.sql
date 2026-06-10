@@ -20,9 +20,13 @@
 -- ORDER BY match_id DESC ensures the Go filter sees the highest-id
 -- matches first and bails out as soon as the cursor drops below the
 -- watermark, avoiding scanning the whole result set.
+--
+-- The %%d limit prevents unbounded result sets that would OOM the
+-- id-fetcher or get the proxy banned from OpenDota (see analysis).
 
 SELECT match_id, start_time
 FROM matches
 WHERE start_time >= (EXTRACT(EPOCH FROM NOW() - INTERVAL '%d days'))::BIGINT
 AND lobby_type IN (%s)
 ORDER BY match_id DESC
+LIMIT %d

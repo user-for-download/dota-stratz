@@ -164,7 +164,7 @@ func (c *OpenDotaClient) FetchMatchesSince(
 	}
 	lobbyList := strings.Join(parts, ",")
 
-	query := fmt.Sprintf(fetchMatchesWatermarkQuery, lookbackDays, lobbyList)
+	query := fmt.Sprintf(fetchMatchesWatermarkQuery, lookbackDays, lobbyList, maxResults)
 	reqURL := c.url + "?sql=" + url.QueryEscape(query)
 
 	logger.Log.Info("OpenDota: executing watermark fetch query",

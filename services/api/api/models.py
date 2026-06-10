@@ -11,7 +11,7 @@ class DraftSlot(BaseModel):
     hero_id: int = Field(..., ge=0, description="Hero ID (0 = not yet decided)")
     is_pick: bool = Field(..., description="True if pick, False if ban")
     team: int = Field(..., ge=0, le=1, description="0 = radiant, 1 = dire")
-    order: int = Field(..., ge=1, le=24, description="Draft order (1-indexed)")
+    order: int = Field(..., ge=1, le=30, description="Draft order (1-indexed; max varies by patch)")
 
 
 class PredictRequest(BaseModel):
@@ -27,8 +27,8 @@ class PredictRequest(BaseModel):
     draft: list[DraftSlot] = Field(
         ...,
         min_length=1,
-        max_length=20,
-        description="Current draft state (1-20 slots filled)",
+        max_length=30,
+        description="Current draft state (1-30 slots filled; max varies by patch)",
     )
     num_recommendations: int = Field(
         5, ge=1, le=20,

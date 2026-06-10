@@ -320,11 +320,13 @@ services:
         deploy:
             resources:
                 limits:
-                    memory: 512M
-                    cpus: "1.0"
-        # trainer is a batch/CLI service — override entrypoint per run.
-        # Default: do nothing (user exec into it or uses `make train`).
-        entrypoint: ["sleep", "infinity"]
+                    memory: 2G
+                    cpus: "2.0"
+        # trainer is a batch/CLI service — use `docker compose run --rm trainer ...`
+        # to execute training commands. Default: sleep (keep container alive for
+        # `docker compose up --profile train` or exec debugging).
+        entrypoint: ["/bin/sh", "-c"]
+        command: ["trap 'exit 0' TERM; sleep infinity & wait"]
     api:
         profiles:
             - all
@@ -353,7 +355,7 @@ services:
         healthcheck:
             test:
                 - CMD-SHELL
-                - "wget -qO- http://localhost:8080/health | grep -q '\"status\":\"ok\"' || exit 1"
+                - "python3 -c \"import urllib.request,json; r=urllib.request.urlopen('http://localhost:8080/health'); assert json.loads(r.read())['status'] == 'ok'\""
             interval: 30s
             timeout: 10s
             retries: 3

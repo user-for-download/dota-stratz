@@ -273,7 +273,7 @@ def fetch_pick_ban_hero_ids(
                 """SELECT DISTINCT pb.hero_id
                    FROM picks_bans pb
                    INNER JOIN matches m ON pb.match_id = m.match_id
-                   WHERE m.patch_id = %s
+                   WHERE m.patch = %s
                      AND pb.match_id = ANY(%s)
                      AND pb.order < %s
                    ORDER BY pb.hero_id""",

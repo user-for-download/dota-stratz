@@ -363,14 +363,13 @@ func bootstrap(
 
 	logger.Log.Info("Bootstrap: starting combined validation",
 		zap.Int("total_candidates", len(combined)))
-	validated := runValidation(ctx, val, proxyPool, combined, cfg.PoolMaxSize)
+	_ = runValidation(ctx, val, proxyPool, combined, cfg.PoolMaxSize)
 
 	proxypool.ProxyTopUpRunsTotal.WithLabelValues("bootstrap").Inc()
 
-	// Top-up using only proxies that passed validation. Passing the full
-	// combined list would cause failed proxies to be re-validated on every
-	// tick, wasting CPU and network resources.
-	topUpIfBelowMin(ctx, cfg, val, proxyPool, validated)
+	// Top-up: runValidation already added validated proxies to the pool,
+	// so just check if we still need more from the remote source.
+	topUpIfBelowMin(ctx, cfg, val, proxyPool)
 }
 
 // runRefresh fetches, filters, validates and tops-up the pool. The
@@ -396,18 +395,15 @@ func runRefresh(ctx context.Context, cfg *config.Config, val *validator.Validato
 	logger.Log.Debug("Refresh: filtering complete",
 		zap.Int("candidates", len(proxies)),
 		zap.Int("fresh", len(fresh)))
-	var validated []string
 	if len(fresh) > 0 {
-		validated = runValidation(ctx, val, proxyPool, fresh, cfg.PoolMaxSize)
+		_ = runValidation(ctx, val, proxyPool, fresh, cfg.PoolMaxSize)
 	} else {
 		logger.Log.Debug("Refresh: no new proxies to validate")
 	}
 
-	// Top-up: if pool is still below minimum after this cycle, try the
-	// validated proxies from this run before re-fetching. Only pass the
-	// validated (passed) proxies — passing the raw or fresh lists would
-	// cause failed proxies to be validated again on every tick.
-	topUpIfBelowMin(ctx, cfg, val, proxyPool, validated)
+	// Top-up: runValidation already added validated proxies to the pool,
+	// so just check if we still need more from the remote source.
+	topUpIfBelowMin(ctx, cfg, val, proxyPool)
 
 	proxypool.ProxyRefreshRunsTotal.WithLabelValues("success").Inc()
 }
@@ -507,7 +503,6 @@ func topUpIfBelowMin(
 	cfg *config.Config,
 	val *validator.Validator,
 	proxyPool *proxypool.Pool,
-	recentProxies ...[]string,
 ) {
 	if ctx.Err() != nil {
 		return
@@ -530,19 +525,6 @@ func topUpIfBelowMin(
 	logger.Log.Info("Top-up: pool below minimum, adding more proxies",
 		zap.Int64("available", available),
 		zap.Int64("min", cfg.PoolMinSize))
-
-	// Try pre-fetched proxies (passed from runRefresh) before making a new
-	// network request.
-	for _, batch := range recentProxies {
-		fresh := filterNew(ctx, proxyPool, batch)
-		if len(fresh) > 0 {
-			proxypool.ProxyTopUpRunsTotal.WithLabelValues("triggered").Inc()
-			logger.Log.Info("Top-up: validating cached proxies",
-				zap.Int("candidates", len(fresh)))
-			runValidation(ctx, val, proxyPool, fresh, cfg.PoolMaxSize)
-			return
-		}
-	}
 
 	if cfg.RefreshSourceURL == "" {
 		logger.Log.Debug("Top-up: no source URL configured, skipping fetch")

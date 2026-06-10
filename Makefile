@@ -406,23 +406,23 @@ build-ml: ## Build ML service images (trainer + api)
 
 .PHONY: train
 train: ## Train LightGBM model: make train PATCH=<id> (default: auto-detect)
-	$(COMPOSE) run --rm trainer python -m trainer.main $(if $(PATCH),--patch $(PATCH),)
+	$(COMPOSE) --profile db --profile train run --rm trainer python -m trainer.main $(if $(PATCH),--patch $(PATCH),)
 
 .PHONY: train-agg-only
 train-agg-only: ## Populate aggregate tables only: make train-agg-only PATCH=<id>
-	$(COMPOSE) run --rm trainer python -m trainer.main $(if $(PATCH),--patch $(PATCH),) --agg-only
+	$(COMPOSE) --profile db --profile train run --rm trainer python -m trainer.main $(if $(PATCH),--patch $(PATCH),) --agg-only
 
 .PHONY: up-api
 up-api: ## Start ML inference API (foreground)
-	$(COMPOSE) --profile api up
+	$(COMPOSE) --profile db --profile api up
 
 .PHONY: up-api-d
 up-api-d: ## Start ML inference API (background)
-	$(COMPOSE) --profile api up -d
+	$(COMPOSE) --profile db --profile api up -d
 
 .PHONY: down-api
 down-api: ## Stop ML inference API
-	$(COMPOSE) --profile api down
+	$(COMPOSE) --profile db --profile api down
 
 .PHONY: reload-api
 reload-api: ## Hot-reload model for a patch: make reload-api PATCH=<id> TOKEN=<admin_token>
@@ -431,21 +431,17 @@ reload-api: ## Hot-reload model for a patch: make reload-api PATCH=<id> TOKEN=<a
 		exit 1; \
 	fi
 	@token=$${TOKEN:-$$(grep -oP '^STRATZ_ADMIN_TOKEN=\K.*' $(ENV_FILE) 2>/dev/null || echo "")}; \
-	curl -X POST -H "Authorization: Bearer $$token" http://localhost:${API_PORT:-8080}/reload/$(PATCH)
+	curl -X POST -H "Authorization: Bearer $$token" http://localhost:$(or $(API_PORT),8080)/reload/$(PATCH)
 
 .PHONY: test-api
 test-api: ## Quick smoke-test the inference API
 	@echo "Testing API health..."; \
-	curl -s http://localhost:${API_PORT:-8080}/health | python3 -m json.tool; \
+	curl -s http://localhost:$(or $(API_PORT),8080)/health | python3 -m json.tool; \
 	echo ""; \
 	echo "Testing /predict with 4-step draft (phase 1 bans)..."; \
-	curl -s -X POST http://localhost:${API_PORT:-8080}/predict \
+	curl -s -X POST http://localhost:$(or $(API_PORT),8080)/predict \
 		-H "Content-Type: application/json" \
-		-d '{"patch_id":1,"first_pick_team":0,"draft":[\
-{"hero_id":1,"is_pick":false,"team":0,"order":1},\
-{"hero_id":2,"is_pick":false,"team":1,"order":2},\
-{"hero_id":3,"is_pick":false,"team":0,"order":3},\
-{"hero_id":4,"is_pick":false,"team":1,"order":4}]}' | python3 -m json.tool
+		-d '{"patch_id":60,"first_pick_team":0,"draft":[{"hero_id":1,"is_pick":false,"team":0,"order":1},{"hero_id":2,"is_pick":false,"team":0,"order":2},{"hero_id":3,"is_pick":false,"team":1,"order":3},{"hero_id":4,"is_pick":false,"team":1,"order":4}]}' | python3 -m json.tool
 
 .PHONY: migrate-ml
 migrate-ml: ## Apply only the ML migration (005_ml_tables.sql)

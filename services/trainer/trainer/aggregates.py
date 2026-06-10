@@ -73,7 +73,7 @@ def populate_team_hero(cfg: TrainerConfig, conn) -> int:
                 MAX(m.start_time)                                  AS last_played
             FROM matches m
             INNER JOIN players p ON p.match_id = m.match_id
-            WHERE m.patch_id = %s
+            WHERE m.patch = %s
               AND CASE WHEN p.is_radiant THEN m.radiant_team_id ELSE m.dire_team_id END IS NOT NULL
             GROUP BY team_id, p.hero_id
             ORDER BY team_id, p.hero_id
@@ -140,7 +140,7 @@ def populate_player_hero(cfg: TrainerConfig, conn) -> int:
                 MAX(m.start_time)                           AS last_played
             FROM matches m
             INNER JOIN players p ON p.match_id = m.match_id
-            WHERE m.patch_id = %s
+            WHERE m.patch = %s
               AND p.account_id IS NOT NULL
             GROUP BY p.account_id, p.hero_id
             ORDER BY p.account_id, p.hero_id
@@ -193,7 +193,7 @@ def populate_synergy(cfg: TrainerConfig, conn) -> int:
             INNER JOIN players p2 ON p2.match_id = m.match_id
                 AND p2.is_radiant = p1.is_radiant
                 AND p2.hero_id > p1.hero_id
-            WHERE m.patch_id = %s
+            WHERE m.patch = %s
             GROUP BY p1.hero_id, p2.hero_id
             HAVING COUNT(*) >= 3
             ORDER BY p1.hero_id, p2.hero_id
@@ -244,7 +244,7 @@ def populate_counter(cfg: TrainerConfig, conn) -> int:
             INNER JOIN players p1 ON p1.match_id = m.match_id
             INNER JOIN players p2 ON p2.match_id = m.match_id
                 AND p2.is_radiant != p1.is_radiant
-            WHERE m.patch_id = %s
+            WHERE m.patch = %s
             GROUP BY p1.hero_id, p2.hero_id
             HAVING COUNT(*) >= 3
             ORDER BY p1.hero_id, p2.hero_id
@@ -284,25 +284,33 @@ def populate_h2h(cfg: TrainerConfig, conn) -> int:
     pw = cfg.prior_win_rate
     with conn.cursor() as cur:
         cur.execute("""
+            WITH valid_matches AS (
+                SELECT match_id, radiant_team_id, dire_team_id, radiant_win
+                FROM matches
+                WHERE patch = %s
+                  AND radiant_team_id IS NOT NULL
+                  AND dire_team_id IS NOT NULL
+                  AND leagueid > 0
+            ),
+            h2h AS (
+                -- Radiant perspective
+                SELECT radiant_team_id AS team_id, dire_team_id AS enemy_team_id, radiant_win AS won
+                FROM valid_matches
+                UNION ALL
+                -- Dire perspective
+                SELECT dire_team_id AS team_id, radiant_team_id AS enemy_team_id, NOT radiant_win AS won
+                FROM valid_matches
+            )
             SELECT
-                tg.team_id,
-                te.enemy_team_id,
-                COUNT(*)                                               AS games,
-                SUM(CASE WHEN tg.won THEN 1 ELSE 0 END)               AS wins
-            FROM (
-                SELECT DISTINCT match_id, team_id, won
-                FROM team_games
-                WHERE match_id IN (SELECT match_id FROM matches WHERE patch_id = %s)
-            ) tg
-            INNER JOIN (
-                SELECT DISTINCT match_id, team_id AS enemy_team_id
-                FROM team_games
-                WHERE match_id IN (SELECT match_id FROM matches WHERE patch_id = %s)
-            ) te ON te.match_id = tg.match_id AND te.enemy_team_id != tg.team_id
-            GROUP BY tg.team_id, te.enemy_team_id
+                team_id,
+                enemy_team_id,
+                COUNT(*) AS games,
+                SUM(CASE WHEN won THEN 1 ELSE 0 END) AS wins
+            FROM h2h
+            GROUP BY team_id, enemy_team_id
             HAVING COUNT(*) >= 2
-            ORDER BY tg.team_id, te.enemy_team_id
-        """, (patch_id, patch_id))
+            ORDER BY team_id, enemy_team_id
+        """, (patch_id,))
         rows = []
         for r in cur.fetchall():
             tid, etid, games, wins = r
@@ -358,18 +366,18 @@ def populate_baseline(cfg: TrainerConfig, conn) -> int:
                     AVG(p.assists)::FLOAT                       AS avg_assists
                 FROM matches m
                 INNER JOIN players p ON p.match_id = m.match_id
-                WHERE m.patch_id = %s
+                WHERE m.patch = %s
                 GROUP BY p.hero_id
             ),
             hero_bans AS (
                 SELECT pb.hero_id, COUNT(*) AS total_bans
                 FROM matches m
                 INNER JOIN picks_bans pb ON pb.match_id = m.match_id AND pb.is_pick = FALSE
-                WHERE m.patch_id = %s
+                WHERE m.patch = %s
                 GROUP BY pb.hero_id
             ),
             total_matches AS (
-                SELECT COUNT(DISTINCT match_id) AS total FROM matches WHERE patch_id = %s
+                SELECT COUNT(DISTINCT match_id) AS total FROM matches WHERE patch = %s
             )
             SELECT
                 COALESCE(p.hero_id, b.hero_id) AS hero_id,
@@ -382,7 +390,7 @@ def populate_baseline(cfg: TrainerConfig, conn) -> int:
             FULL OUTER JOIN hero_bans b ON b.hero_id = p.hero_id
             CROSS JOIN total_matches tm
             ORDER BY hero_id
-        """, (patch_id, patch_id, patch_id, patch_id))
+        """, (patch_id, patch_id, patch_id))
         rows = []
         for r in cur.fetchall():
             hid, picks, wins, bans, ag, ax, ak, ad, aa, tot = r
