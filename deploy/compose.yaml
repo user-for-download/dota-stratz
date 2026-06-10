@@ -1,0 +1,266 @@
+services:
+    postgres:
+        profiles:
+            - all
+            - db
+        image: "postgres:16-alpine"
+        container_name: dota2-postgres
+        restart: unless-stopped
+        environment:
+            POSTGRES_USER: "${POSTGRES_USER:-dota2}"
+            POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-dota2}"
+            POSTGRES_DB: "${POSTGRES_DB:-dota2}"
+        ports:
+            - "${POSTGRES_PORT:-5432}:5432"
+        # Load pg_stat_statements at startup (Issue 6 follow-up). Cannot
+        # be done at runtime; needs a postgres restart. After restart,
+        # run `CREATE EXTENSION pg_stat_statements;` from a one-shot
+        # psql, or add it to deploy/migration/001_init.sql.
+        command:
+            - "postgres"
+            - "-c"
+            - "shared_preload_libraries=pg_stat_statements"
+        volumes:
+            - "pg-data:/var/lib/postgresql/data"
+            - "./migration:/docker-entrypoint-initdb.d"
+        networks:
+            - dota2-net
+        healthcheck:
+            test:
+                - CMD-SHELL
+                - "pg_isready -U ${POSTGRES_USER:-dota2} -d ${POSTGRES_DB:-dota2}"
+            interval: 5s
+            timeout: 5s
+            retries: 5
+    rabbitmq:
+        profiles:
+            - all
+            - db
+        image: "rabbitmq:management-alpine"
+        container_name: dota2-rabbitmq
+        restart: unless-stopped
+        environment:
+            RABBITMQ_DEFAULT_USER: "${RABBITMQ_DEFAULT_USER:-guest}"
+            RABBITMQ_DEFAULT_PASS: "${RABBITMQ_DEFAULT_PASS:-guest}"
+        ports:
+            - "5672:5672"
+            - "15672:15672"
+            - "15692:15692" # Prometheus metrics endpoint (rabbitmq_prometheus plugin)
+        volumes:
+            - "rmq-data:/var/lib/rabbitmq"
+        networks:
+            - dota2-net
+        healthcheck:
+            test:
+                - CMD
+                - rabbitmq-diagnostics
+                - check_running
+            interval: 15s
+            timeout: 10s
+            retries: 5
+    redis:
+        profiles:
+            - all
+            - db
+        image: "redis:7-alpine"
+        container_name: dota2-redis
+        restart: unless-stopped
+        ports:
+            - "${REDIS_PORT:-6379}:6379"
+        volumes:
+            - "redis-data:/data"
+        networks:
+            - dota2-net
+        healthcheck:
+            test:
+                - CMD
+                - redis-cli
+                - ping
+            interval: 5s
+            timeout: 3s
+            retries: 5
+    prometheus:
+        profiles:
+            - all
+            - mon
+        image: "prom/prometheus:v2.55.0"
+        container_name: dota2-prometheus
+        restart: unless-stopped
+        network_mode: host
+        command:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            - "--storage.tsdb.retention.time=15d"
+            - "--web.enable-lifecycle"
+            - "--web.listen-address=:9092"
+        volumes:
+            - "./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
+            - "./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro"
+            - "prometheus-data:/prometheus"
+
+    grafana:
+        profiles:
+            - all
+            - mon
+        image: "grafana/grafana:11.3.0"
+        container_name: dota2-grafana
+        restart: unless-stopped
+        network_mode: host
+        environment:
+            GF_SECURITY_ADMIN_USER: "${GRAFANA_USER:-admin}"
+            GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-admin}"
+            GF_USERS_ALLOW_SIGN_UP: "false"
+        volumes:
+            - "grafana-data:/var/lib/grafana"
+            - "./grafana/provisioning:/etc/grafana/provisioning:ro"
+    proxy-manager:
+        profiles:
+            - all
+            - fetcher
+            - proxy
+        build:
+            context: ..
+            dockerfile: services/proxy-manager/Dockerfile
+        container_name: dota2-proxy-manager
+        restart: unless-stopped
+        env_file:
+            - .env
+        environment:
+            - PROXY_FILE_PATH=/app/proxy.txt
+            - REDIS_HOST=redis
+        ports:
+            - "${PROXY_METRICS_PORT:-9090}:${PROXY_METRICS_PORT:-9090}"
+        volumes:
+            # Read-only at startup; validated proxies live in Redis.
+            # To update the source list, replace this file and restart the service.
+            - "../deploy/proxy.txt:/app/proxy.txt:ro"
+        depends_on:
+            redis:
+                condition: service_healthy
+        healthcheck:
+            # Busybox wget --spider returns 0 for ANY HTTP response (even 5xx).
+            # Use wget -qO- (capture body) + grep to verify actual "ok" content.
+            test:
+                - CMD-SHELL
+                - "wget -qO- http://localhost:${PROXY_METRICS_PORT:-9090}/healthz | grep -q '^ok$' || exit 1"
+            interval: 15s
+            timeout: 5s
+            retries: 3
+            start_period: 10s
+        ulimits:
+            nofile:
+                soft: 8192
+                hard: 8192
+        networks:
+            - dota2-net
+    detail-fetcher:
+        profiles:
+            - all
+            - fetcher
+        build:
+            context: ..
+            dockerfile: services/detail-fetcher/Dockerfile
+        container_name: dota2-detail-fetcher
+        restart: unless-stopped
+        env_file:
+            - .env
+        environment:
+            - RABBITMQ_HOST=rabbitmq
+            - REDIS_HOST=redis
+            - REDIS_PORT=6379
+        ports:
+            - "${DETAIL_FETCHER_METRICS_PORT:-9091}:${DETAIL_FETCHER_METRICS_PORT:-9091}"
+        depends_on:
+            rabbitmq:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+            proxy-manager:
+                condition: service_healthy
+        networks:
+            - dota2-net
+    id-fetcher:
+        profiles:
+            - all
+            - fetcher
+        build:
+            context: ..
+            dockerfile: services/id-fetcher/Dockerfile
+        container_name: dota2-id-fetcher
+        restart: unless-stopped
+        env_file:
+            - .env
+        environment:
+            - RABBITMQ_HOST=rabbitmq
+            - REDIS_HOST=redis
+            - REDIS_PORT=6379
+            # Opt-in startup fetch. Set ID_FETCHER_START_RUN=true in .env
+            # to fire a one-shot fetch on boot once the proxy pool is
+            # healthy. Default: false (cron-only).
+            - ID_FETCHER_START_RUN=${ID_FETCHER_START_RUN:-false}
+            - ID_FETCHER_START_RUN_MIN_POOL_SIZE=${ID_FETCHER_START_RUN_MIN_POOL_SIZE:-20}
+            - ID_FETCHER_START_RUN_MAX_WAIT=${ID_FETCHER_START_RUN_MAX_WAIT:-5m}
+        ports:
+            - "${ID_FETCHER_METRICS_PORT:-9094}:${ID_FETCHER_METRICS_PORT:-9094}" # Prometheus metrics + health
+        depends_on:
+            rabbitmq:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+            proxy-manager:
+                condition: service_healthy
+        healthcheck:
+            test:
+                - CMD-SHELL
+                - "wget -qO- http://localhost:${ID_FETCHER_METRICS_PORT:-9094}/healthz | grep -q '^ok$' || exit 1"
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 40s
+        networks:
+            - dota2-net
+    parser:
+        profiles:
+            - all
+            - parser
+        build:
+            context: ..
+            dockerfile: services/parser/Dockerfile
+        container_name: dota2-parser
+        restart: unless-stopped
+        env_file:
+            - .env
+        environment:
+            - RABBITMQ_HOST=rabbitmq
+            - POSTGRES_HOST=postgres
+        ports:
+            - "${PARSER_METRICS_PORT:-9093}:${PARSER_METRICS_PORT:-9093}"
+        depends_on:
+            rabbitmq:
+                condition: service_healthy
+            postgres:
+                condition: service_healthy
+        networks:
+            - dota2-net
+        healthcheck:
+            # Busybox wget --spider returns 0 for ANY HTTP response (even 5xx).
+            # Use wget -qO- (capture body) + grep to verify actual "ok" content.
+            test:
+                [
+                    "CMD-SHELL",
+                    "wget -qO- http://localhost:${PARSER_METRICS_PORT:-9093}/healthz | grep -q '^ok$' || exit 1",
+                ]
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 40s
+networks:
+    dota2-net:
+        driver: bridge
+volumes:
+    pg-data: null
+    rmq-data: null
+    redis-data: null
+    prometheus-data: null
+    grafana-data: null
+

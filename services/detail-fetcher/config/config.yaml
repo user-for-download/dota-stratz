@@ -1,0 +1,36 @@
+app:
+  environment: "production"
+  log_level: "info"
+
+opendota:
+  api_url: "https://api.opendota.com/api/matches"
+  # Timeouts, rate limits, and worker tuning are env-overridable so the
+  # image does not need to be rebuilt to retune. Default values match
+  # the historically-baked-in values; override via env (e.g.
+  # DETAIL_FETCHER_OPENDOTA_TIMEOUT_SEC=45) and re-deploy.
+  timeout_sec: ${DETAIL_FETCHER_OPENDOTA_TIMEOUT_SEC:-30}
+  max_req_per_min: ${DETAIL_FETCHER_OPENDOTA_MAX_REQ_PER_MIN:-50}
+  user_agent: "${DETAIL_FETCHER_USER_AGENT:-Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36}"
+
+redis:
+  addr: "${REDIS_HOST}:${REDIS_PORT}"
+  password: "${REDIS_PASSWORD}"
+  db: ${REDIS_DB:-0}
+
+rabbitmq:
+  url: "amqp://${RABBITMQ_DEFAULT_USER}:${RABBITMQ_DEFAULT_PASS}@${RABBITMQ_HOST}:5672/"
+  queues:
+    match_ids: "queue.match_ids"
+    raw_matches: "queue.raw_matches"
+    match_ids_dlq: "queue.match_ids.dlq"
+    raw_matches_dlq: "queue.raw_matches.dlq"
+
+worker:
+  # Worker tuning is env-overridable; default values are the historical
+  # baked-in values. Override via env (e.g.
+  # DETAIL_FETCHER_WORKER_CONCURRENCY=10) and re-deploy.
+  concurrency: ${DETAIL_FETCHER_WORKER_CONCURRENCY:-5}
+  prefetch: ${DETAIL_FETCHER_WORKER_PREFETCH:-10}
+  max_retries: ${DETAIL_FETCHER_WORKER_MAX_RETRIES:-3}
+  retry_delay_sec: ${DETAIL_FETCHER_WORKER_RETRY_DELAY_SEC:-2}
+  metrics_port: ${DETAIL_FETCHER_METRICS_PORT:-9091}

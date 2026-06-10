@@ -1,0 +1,471 @@
+-- 001_init.sql
+-- Schema for Dota 2 Match Data Analysis and AI Learning
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- ============================================================================
+-- 1. CORE MATCH DATA
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS matches (
+    match_id BIGINT PRIMARY KEY,
+    version INT,
+    start_time BIGINT,
+    duration INT,
+    series_id BIGINT,
+    series_type INT,
+    cluster INT,
+    replay_salt BIGINT,
+    radiant_win BOOLEAN,
+    pre_game_duration INT,
+    match_seq_num BIGINT,
+    tower_status_radiant INT,
+    tower_status_dire INT,
+    barracks_status_radiant INT,
+    barracks_status_dire INT,
+    first_blood_time INT,
+    lobby_type INT,
+    human_players INT,
+    game_mode INT,
+    flags INT,
+    engine INT,
+    radiant_score INT,
+    dire_score INT,
+    radiant_team_id BIGINT,
+    radiant_name VARCHAR,
+    radiant_logo BIGINT,
+    radiant_team_complete INT,
+    dire_team_id BIGINT,
+    dire_name VARCHAR,
+    dire_logo BIGINT,
+    dire_team_complete INT,
+    radiant_captain BIGINT,
+    dire_captain BIGINT,
+    leagueid INT,
+    patch INT,
+    region INT,
+    replay_url VARCHAR,
+    throw INT,
+    loss INT,
+    metadata JSONB,
+    CONSTRAINT chk_duration_positive CHECK (duration > 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_matches_start_time ON matches(start_time);
+CREATE INDEX IF NOT EXISTS idx_matches_radiant_win ON matches(radiant_win);
+CREATE INDEX IF NOT EXISTS idx_matches_leagueid ON matches(leagueid) WHERE leagueid > 0;
+CREATE INDEX IF NOT EXISTS idx_matches_pro_filter ON matches(leagueid, lobby_type, start_time) WHERE leagueid > 0 AND lobby_type IN (1, 2);
+CREATE INDEX IF NOT EXISTS idx_matches_start_time_date ON matches(((TIMESTAMP 'epoch' + start_time * INTERVAL '1 second')::date));
+
+-- ============================================================================
+-- 2. PLAYER CORE STATS (Partitioned for Scalability)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS players (
+    match_id BIGINT NOT NULL,
+    player_slot INT NOT NULL,
+    account_id BIGINT,
+    hero_id INT,
+    hero_variant INT,
+    party_id BIGINT,
+    party_size INT,
+    team_number INT,
+    team_slot INT,
+    is_radiant BOOLEAN,
+    radiant_win BOOLEAN,
+    win INT,
+    lose INT,
+    kills INT,
+    deaths INT,
+    assists INT,
+    leaver_status INT,
+    last_hits INT,
+    denies INT,
+    gold_per_min INT,
+    xp_per_min INT,
+    level INT,
+    net_worth INT,
+    gold INT,
+    gold_spent INT,
+    total_gold INT,
+    total_xp INT,
+    aghanims_scepter INT,
+    aghanims_shard INT,
+    moonshard INT,
+    hero_damage INT,
+    tower_damage INT,
+    hero_healing INT,
+    kills_per_min FLOAT,
+    kda FLOAT,
+    abandons INT,
+    neutral_kills INT,
+    tower_kills INT,
+    courier_kills INT,
+    lane_kills INT,
+    hero_kills INT,
+    observer_kills INT,
+    sentry_kills INT,
+    roshan_kills INT,
+    necronomicon_kills INT,
+    ancient_kills INT,
+    buyback_count INT,
+    observer_uses INT,
+    sentry_uses INT,
+    lane_efficiency FLOAT,
+    lane_efficiency_pct INT,
+    lane INT,
+    lane_role INT,
+    is_roaming BOOLEAN,
+    actions_per_min INT,
+    life_state_dead INT,
+    obs_placed INT,
+    sen_placed INT,
+    creeps_stacked INT,
+    camps_stacked INT,
+    rune_pickups INT,
+    firstblood_claimed INT,
+    teamfight_participation FLOAT,
+    towers_killed INT,
+    roshans_killed INT,
+    observers_placed INT,
+    stuns FLOAT,
+    item_0 INT, item_1 INT, item_2 INT, item_3 INT, item_4 INT, item_5 INT,
+    backpack_0 INT, backpack_1 INT, backpack_2 INT,
+    item_neutral INT,
+    item_neutral2 INT,
+    personaname VARCHAR,
+    name VARCHAR,
+    last_login VARCHAR,
+    rank_tier INT,
+    computed_mmr FLOAT,
+    is_subscriber BOOLEAN,
+    ability_targets JSONB,
+    damage_targets JSONB,
+    gold_reasons JSONB,
+    xp_reasons JSONB,
+    killed JSONB,
+    item_uses JSONB,
+    hero_hits JSONB,
+    damage JSONB,
+    damage_taken JSONB,
+    damage_inflictor JSONB,
+    runes JSONB,
+    killed_by JSONB,
+    kill_streaks JSONB,
+    multi_kills JSONB,
+    life_state JSONB,
+    healing JSONB,
+    damage_inflictor_received JSONB,
+    lane_pos JSONB,
+    obs JSONB,
+    sen JSONB,
+    actions JSONB,
+    cosmetics JSONB,
+    purchase_time JSONB,
+    first_purchase_time JSONB,
+    item_win JSONB,
+    item_usage JSONB,
+
+    PRIMARY KEY (match_id, player_slot),
+    FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE,
+    CONSTRAINT chk_player_slot_range CHECK (player_slot BETWEEN 0 AND 255),
+    CONSTRAINT chk_kda_non_negative CHECK (kda >= 0)
+) PARTITION BY RANGE (match_id);
+
+CREATE INDEX IF NOT EXISTS idx_players_account_id ON players(account_id);
+CREATE INDEX IF NOT EXISTS idx_players_hero_id ON players(hero_id);
+CREATE INDEX IF NOT EXISTS idx_players_kda ON players(kda);
+CREATE INDEX IF NOT EXISTS idx_players_account_hero_match ON players(account_id, hero_id, match_id);
+
+-- ============================================================================
+-- 3. PLAYER TIME-SERIES & EVENTS (Dropped FKs to players per Migration 007)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS player_minute_stats (
+    match_id BIGINT,
+    player_slot INT,
+    minute INT,
+    gold INT,
+    last_hits INT,
+    denies INT,
+    xp INT,
+    PRIMARY KEY (match_id, player_slot, minute)
+);
+
+CREATE TABLE IF NOT EXISTS player_abilities (
+    match_id BIGINT,
+    player_slot INT,
+    ability_name VARCHAR,
+    ability_uses INT,
+    PRIMARY KEY (match_id, player_slot, ability_name)
+);
+
+CREATE TABLE IF NOT EXISTS player_ability_upgrades_log (
+    match_id BIGINT,
+    player_slot INT,
+    upgrade_order INT,
+    ability_id INT,
+    PRIMARY KEY (match_id, player_slot, upgrade_order)
+);
+
+CREATE TABLE IF NOT EXISTS player_benchmarks (
+    match_id BIGINT,
+    player_slot INT,
+    metric_name VARCHAR,
+    raw_value FLOAT,
+    pct FLOAT,
+    PRIMARY KEY (match_id, player_slot, metric_name)
+);
+
+CREATE TABLE IF NOT EXISTS teamfights (
+    match_id BIGINT,
+    start_time INT,
+    end_time INT,
+    last_death INT,
+    deaths INT,
+    PRIMARY KEY (match_id, start_time),
+    FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS teamfight_players (
+    match_id BIGINT,
+    start_time INT,
+    player_slot INT,
+    deaths INT,
+    buybacks INT,
+    damage INT,
+    healing INT,
+    gold_delta INT,
+    xp_delta INT,
+    xp_start INT,
+    xp_end INT,
+    ability_uses JSONB,
+    item_uses JSONB,
+    killed JSONB,
+    deaths_pos JSONB,
+    PRIMARY KEY (match_id, start_time, player_slot),
+    FOREIGN KEY (match_id, start_time) REFERENCES teamfights(match_id, start_time) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS player_kills_log (
+    match_id BIGINT,
+    player_slot INT,
+    time INT,
+    key VARCHAR,
+    PRIMARY KEY (match_id, player_slot, time, key)
+);
+
+CREATE TABLE IF NOT EXISTS player_buyback_log (
+    match_id BIGINT,
+    player_slot INT,
+    time INT,
+    PRIMARY KEY (match_id, player_slot, time)
+);
+
+CREATE TABLE IF NOT EXISTS player_runes_log (
+    match_id BIGINT,
+    player_slot INT,
+    time INT,
+    key VARCHAR,
+    seq SERIAL,
+    PRIMARY KEY (match_id, player_slot, time, key, seq)
+);
+
+CREATE TABLE IF NOT EXISTS player_purchase_log (
+    match_id BIGINT,
+    player_slot INT,
+    time INT,
+    key VARCHAR,
+    charges INT,
+    seq SERIAL,
+    PRIMARY KEY (match_id, player_slot, time, key, seq)
+);
+
+CREATE TABLE IF NOT EXISTS player_obs_log (
+    match_id BIGINT,
+    player_slot INT,
+    time INT,
+    key VARCHAR,
+    x FLOAT, y FLOAT, z FLOAT,
+    entityleft BOOLEAN,
+    ehandle BIGINT,
+    PRIMARY KEY (match_id, player_slot, time, key)
+);
+
+CREATE TABLE IF NOT EXISTS player_sen_log (
+    match_id BIGINT,
+    player_slot INT,
+    time INT,
+    key VARCHAR,
+    x FLOAT, y FLOAT, z FLOAT,
+    entityleft BOOLEAN,
+    ehandle BIGINT,
+    PRIMARY KEY (match_id, player_slot, time, key)
+);
+
+CREATE TABLE IF NOT EXISTS player_obs_left_log (
+    match_id BIGINT,
+    player_slot INT,
+    time INT,
+    key VARCHAR,
+    attackername VARCHAR,
+    x FLOAT, y FLOAT, z FLOAT,
+    entityleft BOOLEAN,
+    ehandle BIGINT,
+    PRIMARY KEY (match_id, player_slot, time, key)
+);
+
+CREATE TABLE IF NOT EXISTS player_sen_left_log (
+    match_id BIGINT,
+    player_slot INT,
+    time INT,
+    key VARCHAR,
+    attackername VARCHAR,
+    x FLOAT, y FLOAT, z FLOAT,
+    entityleft BOOLEAN,
+    ehandle BIGINT,
+    PRIMARY KEY (match_id, player_slot, time, key)
+);
+
+CREATE TABLE IF NOT EXISTS player_neutral_item_history (
+    match_id BIGINT,
+    player_slot INT,
+    item_neutral VARCHAR,
+    time INT,
+    item_neutral_enhancement VARCHAR,
+    PRIMARY KEY (match_id, player_slot, time, item_neutral)
+);
+
+CREATE TABLE IF NOT EXISTS player_permanent_buffs (
+    match_id BIGINT,
+    player_slot INT,
+    permanent_buff INT,
+    stack_count INT,
+    grant_time INT,
+    PRIMARY KEY (match_id, player_slot, permanent_buff, grant_time)
+);
+
+-- ============================================================================
+-- 4. MATCH EVENTS (Objectives, Chat, Picks/Bans)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS objectives (
+    match_id BIGINT,
+    time INT,
+    type VARCHAR,
+    team INT,
+    key VARCHAR,
+    slot INT,
+    player_slot INT,
+    value INT,
+    killer INT,
+    PRIMARY KEY (match_id, time, type, team),
+    FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS chat (
+    match_id BIGINT,
+    time INT,
+    type VARCHAR,
+    key VARCHAR,
+    slot INT,
+    player_slot INT,
+    PRIMARY KEY (match_id, time, slot),
+    FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS picks_bans (
+    match_id BIGINT,
+    is_pick BOOLEAN,
+    hero_id INT,
+    team INT,
+    "order" INT,
+    PRIMARY KEY (match_id, "order"),
+    FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS match_gold_adv (
+    match_id BIGINT,
+    minute INT,
+    radiant_gold_adv INT,
+    PRIMARY KEY (match_id, minute),
+    FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS match_xp_adv (
+    match_id BIGINT,
+    minute INT,
+    radiant_xp_adv INT,
+    PRIMARY KEY (match_id, minute),
+    FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
+);
+
+-- ============================================================================
+-- 5. GENERAL INDEXES FOR AI/ANALYTICS PERFORMANCE
+-- ============================================================================
+CREATE INDEX IF NOT EXISTS idx_players_hero_kills ON players(hero_id, kills);
+CREATE INDEX IF NOT EXISTS idx_players_account_hero ON players(account_id, hero_id);
+CREATE INDEX IF NOT EXISTS idx_minute_stats_match_player ON player_minute_stats(match_id, player_slot, minute);
+CREATE INDEX IF NOT EXISTS idx_players_item_uses_gin ON players USING GIN (item_uses);
+CREATE INDEX IF NOT EXISTS idx_players_damage_gin ON players USING GIN (damage);
+CREATE INDEX IF NOT EXISTS idx_players_purchase_time_gin ON players USING GIN (purchase_time);
+-- Note: idx_matches_metadata_gin and the 4 teamfight_players GIN indexes
+-- were removed in 007_cleanup.sql — they were never queried.
+
+-- ============================================================================
+-- 6. INGESTION CHECKPOINTS
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.ingestion_checkpoints (
+    id INT PRIMARY KEY DEFAULT 1,
+    last_fetched_datetime TIMESTAMP,
+    last_parsed_match_id BIGINT DEFAULT 0,
+    fetch_status VARCHAR(50) DEFAULT 'idle',
+    parse_status VARCHAR(50) DEFAULT 'idle',
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT single_row CHECK (id = 1)
+);
+
+INSERT INTO public.ingestion_checkpoints (id, last_fetched_datetime)
+VALUES (1, NOW() - INTERVAL '7 days') ON CONFLICT (id) DO NOTHING;
+
+-- Note: raw_matches table, its indexes, and cleanup_raw_matches() were
+-- removed in 007_cleanup.sql — the staging table was replaced by the
+-- checkpoint watermark approach (P1-1).
+
+-- ============================================================================
+-- 7. PARTITION MANAGEMENT
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.create_player_partition(
+    partition_name TEXT, from_val BIGINT, to_val BIGINT
+) RETURNS TEXT AS $$
+BEGIN
+    EXECUTE format('CREATE TABLE IF NOT EXISTS %I PARTITION OF players FOR VALUES FROM (%L) TO (%L)', partition_name, from_val, to_val);
+    RETURN format('Partition %s created ( %s → %s )', partition_name, from_val, to_val);
+EXCEPTION
+    WHEN duplicate_table THEN RETURN format('Partition %s already exists', partition_name);
+    WHEN SQLSTATE '42P17' THEN RETURN format('Partition %s range overlaps an existing partition: %s', partition_name, SQLERRM);
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION public.ensure_player_partitions(
+    max_match_id BIGINT DEFAULT 25000000000, partition_range BIGINT DEFAULT 5000000000
+) RETURNS TABLE(partition_name TEXT, status TEXT) AS $$
+DECLARE lower_bound BIGINT := 0; upper_bound BIGINT; name_suffix TEXT;
+BEGIN
+    WHILE lower_bound < max_match_id LOOP
+        upper_bound := lower_bound + partition_range;
+        name_suffix := format('p%s_to_%s', lower_bound, upper_bound);
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_class c JOIN pg_inherits i ON c.oid = i.inhrelid JOIN pg_class p ON i.inhparent = p.oid
+            WHERE p.relname = 'players' AND c.relispartition AND c.relname = format('players_%s', name_suffix)
+        ) THEN
+            partition_name := format('players_%s', name_suffix);
+            status := public.create_player_partition(partition_name, lower_bound, upper_bound);
+            RETURN NEXT;
+        END IF;
+        lower_bound := upper_bound;
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Initialize bounded partitions capturing current ranges and future up to 30B
+SELECT public.ensure_player_partitions(30000000000, 5000000000);
+
+-- Catch-all for extreme legacy/edge matches until rotated
+CREATE TABLE IF NOT EXISTS players_p_catchall PARTITION OF players FOR VALUES FROM (30000000000) TO (MAXVALUE);

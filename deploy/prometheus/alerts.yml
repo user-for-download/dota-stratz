@@ -1,0 +1,41 @@
+groups:
+  - name: dota2_ingestion
+    interval: 30s
+    rules:
+      - alert: ProxyPoolDepleted
+        expr: dota2_proxy_pool_available < 20
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Proxy pool below minimum threshold"
+          description: "Only {{ $value }} proxies available (min: 20)"
+
+      - alert: IngestionStalled
+        # Cron-driven batch pipeline: id-fetcher runs at 0 3 * * * (daily 03:00 UTC).
+        # "rate == 0 for 15m" would fire 23h45m of every 24h period — misconfigured for batch.
+        # Fixed (2026-06-07): time-since-last-successful-publish > 26h (24h cron + 2h buffer).
+        expr: time() - max(timestamp(id_fetcher_match_ids_published_total > 0)) > 93600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ID Fetcher has not published match IDs in 26+ hours"
+          description: "Last successful publish was {{ $value | humanizeDuration }} ago. Cron schedule is 0 3 * * * (daily 03:00 UTC)."
+
+      - alert: DLQDepthGrowing
+        # Two queues carry a DLQ: queue.match_ids.dlq and queue.raw_matches.dlq.
+        # If the sum exceeds 50 messages for 5m, something is producing
+        # persistent failures. Use `make replay-dlq` to drain, or
+        # `make replay-dlq-dry` to preview. The 24h message TTL means
+        # truly-stuck messages will eventually be reaped.
+        # Note: rabbitmq_queue_messages_ready (not _messages) — the new
+        # format separates ready / unacked / total. We alert on ready
+        # because that is the "sitting in DLQ" count.
+        expr: sum(rabbitmq_queue_messages_ready{queue=~".*\\.dlq"}) > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DLQ depth > 50 for 5m"
+          description: "Total {{ $value }} messages across match_ids.dlq + raw_matches.dlq. Investigate: rabbitmqadmin list_queues."

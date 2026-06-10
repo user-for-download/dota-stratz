@@ -1,0 +1,41 @@
+app:
+    environment: "production"
+    log_level: "info"
+
+opendota:
+    api_url: "https://api.opendota.com/api/explorer"
+    batch_size: 500
+    fetch_last_count_day: ${FETCH_LAST_COUNT_DAY}   # e.g. 7
+    fetch_lobby_types: "${FETCH_LOBBY_TYPES}"        # e.g. "1,2,6"
+    # Rolling-window lookback for the watermark-based query (used when
+    # the parser has already committed at least one batch). Must be >=
+    # fetch_last_count_day. See services/id-fetcher/internal/api/
+    # matches_watermark.sql for the rationale.
+    watermark_lookback_days: ${ID_FETCHER_WATERMARK_LOOKBACK_DAYS:-0}
+    fetch_schedule: "${FETCH_SCHEDULE:-@every 24h}"  # cron expression or @every duration
+    # Opt-in: run a one-shot fetch on startup, after the proxy pool reaches
+    # start_run_min_pool_size. Skipped if the pool does not fill within
+    # start_run_max_wait. Shares the cron trylock so it cannot overlap the
+    # first scheduled tick.
+    start_run: ${ID_FETCHER_START_RUN:-false}
+    start_run_min_pool_size: ${ID_FETCHER_START_RUN_MIN_POOL_SIZE:-20}
+    start_run_max_wait: ${ID_FETCHER_START_RUN_MAX_WAIT:-5m}
+
+redis:
+    addr: "${REDIS_HOST}:${REDIS_PORT}"
+    password: "${REDIS_PASSWORD}"
+    db: ${REDIS_DB:-0}
+
+rabbitmq:
+    url: "amqp://${RABBITMQ_DEFAULT_USER}:${RABBITMQ_DEFAULT_PASS}@${RABBITMQ_HOST}:5672/"
+    queues:
+        match_ids: "queue.match_ids"
+
+# Postgres is consulted on boot to read ingestion_checkpoints.last_parsed_match_id.
+# The connection is OPTIONAL: if DSN is empty or the DB is unreachable, the
+# id-fetcher logs a warning and uses the rolling-window path (watermark=0).
+postgres:
+    dsn: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?sslmode=disable"
+
+worker:
+    metrics_port: ${ID_FETCHER_METRICS_PORT}

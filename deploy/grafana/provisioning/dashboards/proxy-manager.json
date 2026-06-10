@@ -1,0 +1,143 @@
+{
+  "title": "Proxy Manager Overview",
+  "uid": "proxy-manager-overview",
+  "tags": ["dota2", "proxy-manager"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Proxies Available",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 10 },
+              { "color": "green", "value": 50 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "dota2_proxy_pool_available",
+          "legendFormat": "available"
+        }
+      ],
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Proxies Leased",
+      "targets": [
+        {
+          "expr": "dota2_proxy_pool_leased",
+          "legendFormat": "leased"
+        }
+      ],
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Proxies Reaped (total)",
+      "targets": [
+        {
+          "expr": "dota2_proxy_pool_reaped_total",
+          "legendFormat": "reaped"
+        }
+      ],
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Proxies Removed (total)",
+      "targets": [
+        {
+          "expr": "dota2_proxy_pool_removed_total",
+          "legendFormat": "removed"
+        }
+      ],
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Validation Result Rate",
+      "targets": [
+        {
+          "expr": "rate(dota2_proxy_validation_result_total[1m])",
+          "legendFormat": "{{result}}"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Validation Latency (p50/p95/p99)",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, rate(dota2_proxy_validation_latency_ms_bucket[5m]))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(dota2_proxy_validation_latency_ms_bucket[5m]))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(dota2_proxy_validation_latency_ms_bucket[5m]))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Validation Duration",
+      "targets": [
+        {
+          "expr": "rate(dota2_proxy_validation_duration_seconds_sum[5m]) / rate(dota2_proxy_validation_duration_seconds_count[5m])",
+          "legendFormat": "avg duration"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 12 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Cooldown Rate",
+      "targets": [
+        {
+          "expr": "rate(dota2_proxy_pool_cooldown_total[5m])",
+          "legendFormat": "cooldowns"
+        }
+      ],
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 12 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Rate-Limited (Proactive)",
+      "description": "Proxies skipped due to per-minute rate limit before a single request was sent. Spikes indicate the pool is near capacity.",
+      "targets": [
+        {
+          "expr": "rate(dota2_proxy_rate_limited_total[5m])",
+          "legendFormat": "rate limited"
+        }
+      ],
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 12 }
+    }
+  ]
+}
