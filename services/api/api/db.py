@@ -57,6 +57,35 @@ def put_conn(conn):
 # Query helpers
 # ---------------------------------------------------------------------------
 
+def fetch_team_hero_agg_batch(patch_id: int, team_id: int, hero_ids: list[int]) -> dict[int, dict]:
+    """Batch fetch ml.team_hero_agg for multiple heroes in one query.
+
+    Returns a dict mapping hero_id → row dict (or empty dict for missing).
+    """
+    if not hero_ids:
+        return {}
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT hero_id, games, wins, win_rate, bans, avg_gpm, avg_xpm,
+                          avg_kills, avg_deaths, avg_assists
+                   FROM ml.team_hero_agg
+                   WHERE patch_id = %s AND team_id = %s AND hero_id = ANY(%s)""",
+                (patch_id, team_id, hero_ids),
+            )
+            result: dict[int, dict] = {}
+            for row in cur.fetchall():
+                result[row[0]] = {
+                    "games": row[1], "wins": row[2], "win_rate": row[3],
+                    "bans": row[4], "avg_gpm": row[5], "avg_xpm": row[6],
+                    "avg_kills": row[7], "avg_deaths": row[8], "avg_assists": row[9],
+                }
+            return result
+    finally:
+        put_conn(conn)
+
+
 def fetch_team_hero_agg(patch_id: int, team_id: int, hero_id: int) -> dict | None:
     """Look up a single row in ml.team_hero_agg."""
     conn = get_conn()
@@ -168,6 +197,37 @@ def fetch_h2h(patch_id: int, team_id: int, enemy_team_id: int) -> dict | None:
             if row is None:
                 return None
             return {"games": row[0], "wins": row[1], "win_rate": row[2]}
+    finally:
+        put_conn(conn)
+
+
+def fetch_baselines_batch(patch_id: int, hero_ids: list[int]) -> dict[int, dict]:
+    """Batch fetch ml.hero_baseline_agg for multiple heroes in one query.
+
+    Returns a dict mapping hero_id → row dict (or empty dict for missing).
+    """
+    if not hero_ids:
+        return {}
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT hero_id, total_picks, total_wins, total_bans, win_rate,
+                          pick_rate, ban_rate, avg_gpm, avg_xpm,
+                          avg_kills, avg_deaths, avg_assists
+                   FROM ml.hero_baseline_agg
+                   WHERE patch_id = %s AND hero_id = ANY(%s)""",
+                (patch_id, hero_ids),
+            )
+            result: dict[int, dict] = {}
+            for row in cur.fetchall():
+                result[row[0]] = {
+                    "total_picks": row[1], "total_wins": row[2], "total_bans": row[3],
+                    "win_rate": row[4], "pick_rate": row[5], "ban_rate": row[6],
+                    "avg_gpm": row[7], "avg_xpm": row[8],
+                    "avg_kills": row[9], "avg_deaths": row[10], "avg_assists": row[11],
+                }
+            return result
     finally:
         put_conn(conn)
 

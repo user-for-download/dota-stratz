@@ -60,7 +60,10 @@ CREATE TABLE IF NOT EXISTS matches (
     metadata JSONB
 );
 
+-- B-tree for singleton lookups (e.g. /matches/:id).
+-- BRIN for range scans (append-only, monotonically increasing, ~100x smaller).
 CREATE INDEX IF NOT EXISTS idx_matches_start_time ON matches(start_time);
+CREATE INDEX IF NOT EXISTS idx_matches_start_time_brin ON matches USING BRIN (start_time) WITH (pages_per_range = 32);
 CREATE INDEX IF NOT EXISTS idx_matches_leagueid ON matches(leagueid) WHERE leagueid > 0;
 CREATE INDEX IF NOT EXISTS idx_matches_pro_filter ON matches(leagueid, lobby_type, start_time) WHERE leagueid > 0 AND lobby_type IN (1, 2);
 CREATE INDEX IF NOT EXISTS idx_matches_start_time_date ON matches(((TIMESTAMP 'epoch' + start_time * INTERVAL '1 second')::date));
@@ -290,7 +293,7 @@ CREATE TABLE IF NOT EXISTS player_runes_log (
     player_slot INT,
     time INT,
     key VARCHAR,
-    seq SERIAL,
+    seq BIGINT GENERATED ALWAYS AS IDENTITY,
     PRIMARY KEY (match_id, player_slot, time, key, seq)
 );
 
@@ -300,7 +303,7 @@ CREATE TABLE IF NOT EXISTS player_purchase_log (
     time INT,
     key VARCHAR,
     charges INT,
-    seq SERIAL,
+    seq BIGINT GENERATED ALWAYS AS IDENTITY,
     PRIMARY KEY (match_id, player_slot, time, key, seq)
 );
 
@@ -478,7 +481,7 @@ CREATE OR REPLACE FUNCTION public.create_player_partition(
     partition_name TEXT, from_val BIGINT, to_val BIGINT
 ) RETURNS TEXT AS $$
 BEGIN
-    EXECUTE format('CREATE TABLE IF NOT EXISTS %I PARTITION OF players FOR VALUES FROM (%L) TO (%L)', partition_name, from_val, to_val);
+    EXECUTE format('CREATE TABLE %I PARTITION OF players FOR VALUES FROM (%L) TO (%L)', partition_name, from_val, to_val);
     RETURN format('Partition %s created ( %s → %s )', partition_name, from_val, to_val);
 EXCEPTION
     WHEN duplicate_table THEN RETURN format('Partition %s already exists', partition_name);

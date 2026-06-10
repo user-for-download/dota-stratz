@@ -20,6 +20,10 @@
 -- ============================================================================
 CREATE SCHEMA IF NOT EXISTS ml;
 
+-- Grant read access to analytics_reader for the ml schema
+GRANT USAGE ON SCHEMA ml TO analytics_reader;
+GRANT SELECT ON ALL TABLES IN SCHEMA ml TO analytics_reader;
+
 CREATE UNLOGGED TABLE IF NOT EXISTS ml.team_hero_agg (
     patch_id   INT  NOT NULL,
     team_id    INT  NOT NULL,

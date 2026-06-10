@@ -187,15 +187,15 @@ INSERT INTO analytics.featurizer_runs (id, last_snapshot_date, last_run_timestam
 -- 6. ROLES
 -- ============================================================================
 DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'analytics_reader') THEN CREATE ROLE analytics_reader; END IF; END $$;
-GRANT USAGE ON SCHEMA public, analytics TO analytics_reader;
-GRANT SELECT ON ALL TABLES IN SCHEMA public, analytics TO analytics_reader;
+GRANT USAGE ON SCHEMA analytics TO analytics_reader;
+GRANT SELECT ON ALL TABLES IN SCHEMA analytics TO analytics_reader;
 GRANT SELECT ON ALL SEQUENCES IN SCHEMA analytics TO analytics_reader;
 
 DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'analytics_writer') THEN CREATE ROLE analytics_writer; END IF; END $$;
 GRANT USAGE ON SCHEMA public, analytics TO analytics_writer;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO analytics_writer;
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA analytics TO analytics_writer;
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA analytics TO analytics_writer;
+GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA analytics TO analytics_writer;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA analytics TO analytics_writer;
 
 -- ============================================================================
 -- 7. FUNCTIONS

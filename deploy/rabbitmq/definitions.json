@@ -1,0 +1,49 @@
+{
+  "rabbit_version": "3.13",
+  "users": [
+    {
+      "name": "id-fetcher",
+      "password_hash": "",
+      "tags": ""
+    },
+    {
+      "name": "detail-fetcher",
+      "password_hash": "",
+      "tags": ""
+    },
+    {
+      "name": "parser",
+      "password_hash": "",
+      "tags": ""
+    }
+  ],
+  "vhosts": [
+    {"name": "/"}
+  ],
+  "permissions": [
+    {
+      "user": "id-fetcher",
+      "vhost": "/",
+      "configure": "",
+      "write": "queue\\.match_ids",
+      "read": ""
+    },
+    {
+      "user": "detail-fetcher",
+      "vhost": "/",
+      "configure": "",
+      "write": "queue\\.raw_matches",
+      "read": "queue\\.match_ids"
+    },
+    {
+      "user": "parser",
+      "vhost": "/",
+      "configure": "",
+      "write": "",
+      "read": "queue\\.raw_matches"
+    }
+  ],
+  "queues": [],
+  "exchanges": [],
+  "bindings": []
+}

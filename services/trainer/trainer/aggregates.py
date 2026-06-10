@@ -418,8 +418,25 @@ ALL_POPULATORS = [
 ]
 
 
+def _analyze_ml_tables(conn) -> None:
+    """Refresh statistics on all six ML aggregate tables after population."""
+    tables = [
+        "ml.team_hero_agg",
+        "ml.player_hero_agg",
+        "ml.hero_synergy_agg",
+        "ml.hero_counter_agg",
+        "ml.team_h2h_agg",
+        "ml.hero_baseline_agg",
+    ]
+    with conn.cursor() as cur:
+        for tbl in tables:
+            cur.execute(f"ANALYZE {tbl}")
+    conn.commit()
+    logger.info("Analyzed %d ML tables", len(tables))
+
+
 def populate_all(cfg: TrainerConfig, conn) -> dict[str, int]:
-    """Run all six populator functions.
+    """Run all six populator functions, then ANALYZE for fresh stats.
 
     Returns a dict of ``{table_name: row_count}``.
     """
@@ -428,4 +445,5 @@ def populate_all(cfg: TrainerConfig, conn) -> dict[str, int]:
         logger.info("Populating %s ...", name)
         cnt = fn(cfg, conn)
         counts[name] = cnt
+    _analyze_ml_tables(conn)
     return counts

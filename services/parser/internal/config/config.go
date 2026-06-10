@@ -36,7 +36,8 @@ type Config struct {
 	} `yaml:"app"`
 
 	Postgres struct {
-		DSN string `yaml:"dsn"`
+		DSN          string `yaml:"dsn"`
+		PoolMaxConns int    `yaml:"pool_max_conns"`
 	} `yaml:"postgres"`
 
 	RabbitMQ struct {
@@ -70,6 +71,9 @@ func Load(path string) (*Config, error) {
 	}
 
 	// Apply defaults
+	if cfg.Postgres.PoolMaxConns <= 0 {
+		cfg.Postgres.PoolMaxConns = 25 // sufficient for batch parser workload
+	}
 	if cfg.Worker.BatchSize == 0 {
 		cfg.Worker.BatchSize = 100
 	}

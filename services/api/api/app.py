@@ -69,7 +69,7 @@ app = FastAPI(
 
 
 @app.get("/health", response_model=HealthResponse)
-async def health():
+def health():
     return HealthResponse(
         status="ok",
         patch_models_loaded=predictor.loaded_patches(),
@@ -77,7 +77,7 @@ async def health():
 
 
 @app.post("/predict", response_model=PredictResponse)
-async def predict(req: PredictRequest):
+def predict(req: PredictRequest):
     try:
         ctx = build_draft_context(req.draft, first_pick_team=req.first_pick_team)
     except ValueError as e:
@@ -107,7 +107,7 @@ async def predict(req: PredictRequest):
 
 
 @app.post("/reload/{patch_id}", response_model=ReloadResponse)
-async def reload_model(
+def reload_model(
     patch_id: int,
     authorization: str = Header(None),
 ):

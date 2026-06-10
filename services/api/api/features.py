@@ -8,12 +8,17 @@ at API startup.
 NULL safety: all lookups use ``_float()`` / ``_int()`` guards to prevent
 ``float(None)`` crashes when aggregate tables have NULL values (e.g. a hero
 was picked but has no synergy data yet for this patch).
+
+Performance: Team-hero, baseline, and h2h queries are pre-fetched in bulk
+per request (see ``BatchContext``) so only synergy and counter queries are
+made per-hero.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -76,6 +81,7 @@ def _int(val: Any, key: str = "") -> int:
 # Schema management
 # ---------------------------------------------------------------------------
 
+
 def load_schema(model_dir: str | Path) -> dict[str, Any]:
     """Load the feature schema written by the trainer.
 
@@ -92,38 +98,107 @@ def load_schema(model_dir: str | Path) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Batch pre-fetch context
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class BatchContext:
+    """Pre-fetched aggregate data shared across all hero evaluations.
+
+    Storing these in a single dataclass avoids N+1 query patterns: instead
+    of making per-hero round-trips for baseline, team-hero, and h2h data,
+    we fetch them all in 2-3 queries and distribute the results here.
+    """
+
+    baselines: dict[int, dict]
+    """hero_id → baseline row dict (from fetch_baselines_batch)."""
+
+    team_hero_agg: dict[int, dict]
+    """hero_id → team-hero agg dict (from fetch_team_hero_agg_batch), may be empty."""
+
+    h2h_row: dict | None
+    """Single head-to-head row for the team pair (same for all heroes)."""
+
+
+def pre_fetch_batch(
+    patch_id: int,
+    hero_ids: list[int],
+    team_id: int | None,
+    enemy_team_id: int | None,
+) -> BatchContext:
+    """Pre-fetch all per-hero aggregate data in bulk (2-3 queries total).
+
+    This replaces hundreds of individual ``fetch_baseline``,
+    ``fetch_team_hero_agg``, and ``fetch_h2h`` calls with 2-3 batched
+    queries.
+    """
+    baselines = db_.fetch_baselines_batch(patch_id, hero_ids) if hero_ids else {}
+    team_hero_agg = (
+        db_.fetch_team_hero_agg_batch(patch_id, team_id, hero_ids)
+        if team_id and hero_ids
+        else {}
+    )
+    h2h_row = (
+        db_.fetch_h2h(patch_id, team_id, enemy_team_id)
+        if team_id and enemy_team_id
+        else None
+    )
+    return BatchContext(
+        baselines=baselines,
+        team_hero_agg=team_hero_agg,
+        h2h_row=h2h_row,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Feature vector construction
 # ---------------------------------------------------------------------------
+
 
 def build_feature_vector(
     hero_id: int,
     ctx: DraftContext,
     patch_id: int,
-    radiant_team_id: int | None,
-    dire_team_id: int | None,
+    batch: BatchContext,
     schema: dict[str, Any],
     max_hero_id: int = 160,
 ) -> np.ndarray:
     """Build the full feature vector (numeric columns + one-hot) for a
-    candidate hero at the current draft state.
+    candidate hero.
 
     This function MUST produce the same feature vector, in the same column
     order, as the trainer's ``extract_features`` for the model to produce
     valid predictions.
+
+    Most aggregate lookups use the pre-fetched ``BatchContext``. Only
+    synergy and counter queries are made per-hero because they depend on
+    the current draft state (which allies/enemies are locked in).
+
+    Parameters
+    ----------
+    hero_id : int
+        The candidate hero (1-160).
+    ctx : DraftContext
+        Current draft state (taken heroes, turn, etc.).
+    patch_id : int
+        Current Dota 2 patch.
+    batch : BatchContext
+        Pre-fetched aggregate data (see ``pre_fetch_batch``).
+    schema : dict
+        Feature schema dict from ``feature_schema.json``.
+    max_hero_id : int
+        Maximum hero ID for one-hot encoding (default 160).
     """
     cols = schema["columns"]  # authoritative column order
     n_features_total = schema["n_features"]
-    # Total features includes onehot, so onehot count = n_features_total - len(aggregate_columns)
-
-    team_id = radiant_team_id if ctx.recommending_team == 0 else dire_team_id
-    enemy_team_id = dire_team_id if ctx.recommending_team == 0 else radiant_team_id
 
     # We need the same order as feature_column_names(include_onehot=False)
     # from the trainer. Build a dict keyed by column name.
     vec: dict[str, float] = {}
 
-    # -- Team-hero aggregates --
-    th = db_.fetch_team_hero_agg(patch_id, team_id, hero_id) if team_id else None
+    # -- Team-hero aggregates (from pre-fetched batch dict) --
+    th = batch.team_hero_agg.get(hero_id)
     vec["th_games"] = _float(th.get("games") if th else None, "games")
     vec["th_wins"] = _float(th.get("wins") if th else None, "wins")
     vec["th_win_rate"] = _float(th.get("win_rate") if th else None, "win_rate")
@@ -149,23 +224,23 @@ def build_feature_vector(
     vec["ph_avg_kda"] = 0.0
     vec["ph_lane_role"] = 0.0
 
-    # -- Synergy with allies --
+    # -- Synergy with allies (per-hero: depends on current allies) --
     sy_wr, sy_cnt = db_.fetch_synergy_avg(patch_id, hero_id, ctx.ally_picks)
     vec["sy_avg_win_rate"] = _float(sy_wr, "win_rate")
     vec["sy_n_teammates"] = float(sy_cnt)
 
-    # -- Counter vs enemies --
+    # -- Counter vs enemies (per-hero: depends on current enemies) --
     co_wr, co_cnt = db_.fetch_counter_avg(patch_id, hero_id, ctx.enemy_picks)
     vec["co_avg_win_rate"] = _float(co_wr, "win_rate")
     vec["co_n_enemies"] = float(co_cnt)
 
-    # -- Head-to-head --
-    h2h = db_.fetch_h2h(patch_id, team_id, enemy_team_id) if team_id and enemy_team_id else None
+    # -- Head-to-head (from pre-fetched batch — same for all heroes) --
+    h2h = batch.h2h_row
     vec["h2h_win_rate"] = _float(h2h.get("win_rate") if h2h else None, "win_rate")
     vec["h2h_games"] = _float(h2h.get("games") if h2h else None, "games")
 
-    # -- Hero baseline --
-    bl = db_.fetch_baseline(patch_id, hero_id)
+    # -- Hero baseline (from pre-fetched batch dict) --
+    bl = batch.baselines.get(hero_id)
     vec["bl_total_picks"] = _float(bl.get("total_picks") if bl else None, "total_picks")
     vec["bl_total_wins"] = _float(bl.get("total_wins") if bl else None, "total_wins")
     vec["bl_total_bans"] = _float(bl.get("total_bans") if bl else None, "total_bans")

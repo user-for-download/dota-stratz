@@ -27,7 +27,7 @@ redis:
     db: ${REDIS_DB:-0}
 
 rabbitmq:
-    url: "amqp://${RABBITMQ_DEFAULT_USER}:${RABBITMQ_DEFAULT_PASS}@${RABBITMQ_HOST}:5672/"
+    url: "amqp://${RABBITMQ_USER_ID_FETCHER}:${RABBITMQ_USER_ID_FETCHER_PASS}@${RABBITMQ_HOST}:5672/"
     queues:
         match_ids: "queue.match_ids"
 

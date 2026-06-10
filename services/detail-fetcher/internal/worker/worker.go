@@ -20,16 +20,33 @@ type MatchIDMessage struct {
 	MatchID int64 `json:"match_id"`
 }
 
+// matchFetcher is the subset of *api.Client used by Worker. Defined as an
+// interface so tests can inject deterministic fakes without an HTTP server
+// or proxy pool.
+type matchFetcher interface {
+	FetchRaw(ctx context.Context, matchID int64) ([]byte, error)
+}
+
+// matchPublisher is the subset of *publisher.Publisher used by Worker.
+// Same rationale as matchFetcher: an interface seam for testing.
+type matchPublisher interface {
+	Publish(ctx context.Context, queueName string, msg publisher.RawMatchMessage) error
+}
+
+// Compile-time interface satisfaction checks.
+var _ matchFetcher = (*api.Client)(nil)
+var _ matchPublisher = (*publisher.Publisher)(nil)
+
 // Worker orchestrates the fetch→publish loop with retries and DLQ escalation.
 type Worker struct {
-	client     *api.Client
-	publisher  *publisher.Publisher
+	client     matchFetcher
+	publisher  matchPublisher
 	queueName  string
 	maxRetries int
 	retryDelay time.Duration
 }
 
-func NewWorker(client *api.Client, pub *publisher.Publisher, queueName string, maxRetries, retryDelaySec int) *Worker {
+func NewWorker(client matchFetcher, pub matchPublisher, queueName string, maxRetries, retryDelaySec int) *Worker {
 	return &Worker{
 		client:     client,
 		publisher:  pub,

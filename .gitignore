@@ -31,6 +31,7 @@ opencode.json
 .opencode/node_modules/
 .opencode/package.json
 .opencode/package-lock.json
+.agents/
 # OS
 .DS_Store
 Thumbs.db

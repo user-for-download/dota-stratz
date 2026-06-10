@@ -32,6 +32,11 @@ services:
             interval: 5s
             timeout: 5s
             retries: 5
+        deploy:
+            resources:
+                limits:
+                    memory: 512M
+                    cpus: "1.0"
     rabbitmq:
         profiles:
             - all
@@ -42,12 +47,17 @@ services:
         environment:
             RABBITMQ_DEFAULT_USER: "${RABBITMQ_DEFAULT_USER:-guest}"
             RABBITMQ_DEFAULT_PASS: "${RABBITMQ_DEFAULT_PASS:-guest}"
+            # Per-service users are created by deploy/rabbitmq/init.sh.
+            # Run after first start:
+            #   docker exec dota2-rabbitmq /workspace/init.sh
+            # In production, mount init.sh and run it as a post-start hook.
         ports:
             - "5672:5672"
             - "15672:15672"
             - "15692:15692" # Prometheus metrics endpoint (rabbitmq_prometheus plugin)
         volumes:
             - "rmq-data:/var/lib/rabbitmq"
+            - "./rabbitmq/init.sh:/workspace/init.sh:ro"
         networks:
             - dota2-net
         healthcheck:
@@ -58,6 +68,11 @@ services:
             interval: 15s
             timeout: 10s
             retries: 5
+        deploy:
+            resources:
+                limits:
+                    memory: 256M
+                    cpus: "0.5"
     redis:
         profiles:
             - all
@@ -97,6 +112,13 @@ services:
             - "./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
             - "./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro"
             - "prometheus-data:/prometheus"
+        healthcheck:
+            test:
+                - CMD-SHELL
+                - "wget -qO- http://localhost:9092/-/ready | grep -q 'Prometheus is Ready' || exit 1"
+            interval: 15s
+            timeout: 5s
+            retries: 3
 
     grafana:
         profiles:
@@ -113,6 +135,13 @@ services:
         volumes:
             - "grafana-data:/var/lib/grafana"
             - "./grafana/provisioning:/etc/grafana/provisioning:ro"
+        healthcheck:
+            test:
+                - CMD-SHELL
+                - "wget -qO- http://localhost:3000/api/health | grep -q '\"database\":\"ok\"' || exit 1"
+            interval: 15s
+            timeout: 5s
+            retries: 3
     proxy-manager:
         profiles:
             - all
@@ -153,6 +182,11 @@ services:
                 hard: 8192
         networks:
             - dota2-net
+        deploy:
+            resources:
+                limits:
+                    memory: 128M
+                    cpus: "0.5"
     detail-fetcher:
         profiles:
             - all
@@ -219,6 +253,11 @@ services:
             start_period: 40s
         networks:
             - dota2-net
+        deploy:
+            resources:
+                limits:
+                    memory: 128M
+                    cpus: "0.5"
     parser:
         profiles:
             - all
@@ -254,6 +293,11 @@ services:
             timeout: 10s
             retries: 3
             start_period: 40s
+        deploy:
+            resources:
+                limits:
+                    memory: 256M
+                    cpus: "0.5"
     trainer:
         profiles:
             - train
@@ -273,6 +317,11 @@ services:
                 condition: service_healthy
         networks:
             - dota2-net
+        deploy:
+            resources:
+                limits:
+                    memory: 512M
+                    cpus: "1.0"
         # trainer is a batch/CLI service — override entrypoint per run.
         # Default: do nothing (user exec into it or uses `make train`).
         entrypoint: ["sleep", "infinity"]
@@ -309,6 +358,11 @@ services:
             timeout: 10s
             retries: 3
             start_period: 15s
+        deploy:
+            resources:
+                limits:
+                    memory: 512M
+                    cpus: "0.5"
 networks:
     dota2-net:
         driver: bridge

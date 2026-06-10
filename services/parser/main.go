@@ -33,7 +33,7 @@ func main() {
 	defer cancel()
 
 	// 1. Postgres Connection
-	pool, err := db.Connect(ctx, cfg.Postgres.DSN)
+	pool, err := db.Connect(ctx, cfg.Postgres.DSN, cfg.Postgres.PoolMaxConns)
 	if err != nil {
 		logger.Log.Fatal("Postgres connection failed", zap.Error(err))
 	}

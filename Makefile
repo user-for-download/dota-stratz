@@ -371,7 +371,7 @@ lint: ## Run golangci-lint for all modules
 	done
 
 .PHONY: check
-check: fmt vet test ## Format, vet, and test
+check: fmt vet test-race ## Format, vet, and test (with race detector)
 
 .PHONY: build
 build: ## Build all Go services into ./bin

@@ -218,47 +218,10 @@ func runStartupFetch(
 		zap.Int("min_pool_size", minPoolSize),
 		zap.Duration("max_wait", maxWait))
 
-	// Poll every 5s. 5s is short enough to be responsive when the
-	// proxy-manager finishes its first validation pass (~40s in practice),
-	// and long enough to avoid hammering Redis.
-	const pollInterval = 5 * time.Second
-	deadline := time.Now().Add(maxWait)
-
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			logger.Log.Info("Startup fetch: cancelled during pool wait (shutdown)")
-			return
-		case <-ticker.C:
-			if time.Now().After(deadline) {
-				logger.Log.Warn("Startup fetch: pool did not reach minimum within max_wait, skipping",
-					zap.Int("min_pool_size", minPoolSize),
-					zap.Duration("max_wait", maxWait))
-				return
-			}
-			avail, err := pool.Available(ctx)
-			if err != nil {
-				// Transient Redis error — log at debug and keep polling.
-				logger.Log.Debug("Startup fetch: pool size check failed, retrying",
-					zap.Error(err))
-				continue
-			}
-			if avail >= int64(minPoolSize) {
-				logger.Log.Info("Startup fetch: pool reached minimum, acquiring trylock",
-					zap.Int64("available", avail),
-					zap.Int("min_pool_size", minPoolSize))
-				goto run
-			}
-			logger.Log.Debug("Startup fetch: pool not yet ready, waiting",
-				zap.Int64("available", avail),
-				zap.Int("min_pool_size", minPoolSize))
-		}
+	if !waitForPool(ctx, pool, minPoolSize, maxWait) {
+		return
 	}
 
-run:
 	// Reuse the cron job's trylock. If the cron job is mid-run when we
 	// wake up (unlikely — we'd be racing the very first tick), skip and
 	// let the cron tick take over.
@@ -282,6 +245,49 @@ run:
 		return
 	}
 	logger.Log.Info("Startup fetch: complete")
+}
+
+// waitForPool polls Redis until the proxy pool has at least minPoolSize
+// proxies or maxWait elapses. Returns true if the pool is ready, false if
+// the deadline expired or ctx was cancelled.
+//
+// Extracted as a separate function to avoid goto (golang-pro best practice).
+func waitForPool(ctx context.Context, pool *proxypool.Pool, minPoolSize int, maxWait time.Duration) bool {
+	const pollInterval = 5 * time.Second
+	deadline := time.Now().Add(maxWait)
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Log.Info("Startup fetch: cancelled during pool wait (shutdown)")
+			return false
+		case <-ticker.C:
+			if time.Now().After(deadline) {
+				logger.Log.Warn("Startup fetch: pool did not reach minimum within max_wait, skipping",
+					zap.Int("min_pool_size", minPoolSize),
+					zap.Duration("max_wait", maxWait))
+				return false
+			}
+			avail, err := pool.Available(ctx)
+			if err != nil {
+				logger.Log.Debug("Startup fetch: pool size check failed, retrying",
+					zap.Error(err))
+				continue
+			}
+			if avail >= int64(minPoolSize) {
+				logger.Log.Info("Startup fetch: pool reached minimum, acquiring trylock",
+					zap.Int64("available", avail),
+					zap.Int("min_pool_size", minPoolSize))
+				return true
+			}
+			logger.Log.Debug("Startup fetch: pool not yet ready, waiting",
+				zap.Int64("available", avail),
+				zap.Int("min_pool_size", minPoolSize))
+		}
+	}
 }
 
 // bootstrapCheckpoint reads ingestion_checkpoints.last_parsed_match_id
@@ -314,7 +320,7 @@ func bootstrapCheckpoint(ctx context.Context, cfg *config.Config, fetcher *api.F
 	bootCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	pool, err := db.Connect(bootCtx, cfg.Postgres.DSN)
+	pool, err := db.Connect(bootCtx, cfg.Postgres.DSN, 0) // 0 = use pgx default (4×GOMAXPROCS)
 	if err != nil {
 		return fmt.Errorf("postgres connect: %w", err)
 	}

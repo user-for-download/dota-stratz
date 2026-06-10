@@ -36,6 +36,10 @@ type matchIDPublisher interface {
 // lookback = 30k rows, well under the 1M Explorer limit).
 const watermarkOverscanMultiplier = 5
 
+// Compile-time interface satisfaction checks.
+var _ openDotaSource = (*OpenDotaClient)(nil)
+var _ matchIDPublisher = (*queue.Publisher)(nil)
+
 // Fetcher fetches match IDs from OpenDota and publishes them to RabbitMQ.
 //
 // On boot the caller invokes SetWatermark(w, lookbackDays). When
@@ -62,7 +66,7 @@ type Fetcher struct {
 	watermarkLookbackDays int
 }
 
-func NewFetcher(client *OpenDotaClient, pub *queue.Publisher, qName string, bSize int) *Fetcher {
+func NewFetcher(client openDotaSource, pub matchIDPublisher, qName string, bSize int) *Fetcher {
 	return &Fetcher{
 		client:    client,
 		publisher: pub,

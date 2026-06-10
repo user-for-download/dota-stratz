@@ -15,7 +15,7 @@ import numpy as np
 
 from .config import APIConfig
 from .draft_state import DraftContext
-from .features import build_feature_vector, load_schema
+from .features import BatchContext, build_feature_vector, load_schema, pre_fetch_batch
 from .reasoning import generate_reasoning
 from . import db as db_
 
@@ -123,22 +123,35 @@ class Predictor:
         taken_heroes = ctx.all_taken
 
         # Score all heroes (1..max_hero_id) that aren't already taken
-        hero_ids: list[int] = []
-        feature_vectors: list[np.ndarray] = []
+        eligible_hero_ids = [
+            hid for hid in range(1, self._max_hero_id + 1)
+            if hid not in taken_heroes
+        ]
+        if not eligible_hero_ids:
+            return [], None
 
-        for hid in range(1, self._max_hero_id + 1):
-            if hid in taken_heroes:
-                continue
+        team_id = radiant_team_id if ctx.recommending_team == 0 else dire_team_id
+        enemy_team_id = dire_team_id if ctx.recommending_team == 0 else radiant_team_id
+
+        # Pre-fetch all per-hero aggregate data in 2-3 batch queries,
+        # replacing the previous N+1 pattern (~500 queries per request).
+        batch = pre_fetch_batch(
+            patch_id=patch_id,
+            hero_ids=eligible_hero_ids,
+            team_id=team_id,
+            enemy_team_id=enemy_team_id,
+        )
+
+        feature_vectors: list[np.ndarray] = []
+        for hid in eligible_hero_ids:
             fv = build_feature_vector(
                 hero_id=hid,
                 ctx=ctx,
                 patch_id=patch_id,
-                radiant_team_id=radiant_team_id,
-                dire_team_id=dire_team_id,
+                batch=batch,
                 schema=schema,
                 max_hero_id=self._max_hero_id,
             )
-            hero_ids.append(hid)
             feature_vectors.append(fv)
 
         if not feature_vectors:
@@ -155,7 +168,7 @@ class Predictor:
         top_score = None
 
         for idx in indices:
-            hid = hero_ids[idx]
+            hid = eligible_hero_ids[idx]
             sc = float(scores[idx])
             if top_hero_id is None:
                 top_hero_id = hid
