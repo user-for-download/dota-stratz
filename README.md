@@ -185,7 +185,7 @@ make proxies-show   # Inspect proxy pool state
 │   ├── compose.yaml       # Docker Compose with profiles
 │   ├── docker-bake.hcl    # Buildx bake config
 │   ├── .env.example       # Environment variable template
-│   ├── migration/         # SQL migration files (001-006)
+│   ├── migration/         # SQL migration files (001_core–004_verify)
 │   ├── prometheus/        # Prometheus config + alert rules
 │   └── grafana/           # Pre-provisioned dashboards
 ├── Makefile               # Build/deploy/test orchestration

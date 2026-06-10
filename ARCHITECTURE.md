@@ -226,12 +226,10 @@ dota2:proxies:ratelimit:{proxy} STRING — rate-limit tracking
 
 | File | Description |
 |---|---|
-| `001_init.sql` | Core schema: `matches`, `players` (RANGE-partitioned), `player_minute_stats`, all child tables, indexes, `ingestion_checkpoints` |
-| `002_analytics.sql` | Analytics schema: Bayesian shrinkage config, materialized views (`mv_team_hero_profile`, `mv_hero_synergy`, `mv_hero_counter`, `mv_player_team_history`, `mv_player_hero_profile`), `feature_snapshots_player_hero`, `featurizer_runs`, `refresh_all_mv()`, `update_feature_snapshots()`, roles |
-| `003_constants.sql` | Static reference data: `const_game_mode`, `const_lobby_type`, `const_region`, `const_patch`, `const_hero` (with all stats), `const_item`, `const_ability`, FK constraints |
-| `004_seeds.sql` | Reference-data seeds (hero/item/ability lookups, stat baseline data) |
-| `005_partition_management.sql` | Dynamic partition functions `create_player_partition()` and `ensure_player_partitions()`. 6 base 5B-range partitions up to 30B match_id plus catchall. Idempotent. |
-| `006_deferrable_fk.sql` | FK constraints on players/matches/teamfights/teamfight_players/objectives/chat/picks_bans/match_gold_adv/match_xp_adv recreated as `DEFERRABLE INITIALLY DEFERRED`. Idempotent. |
+| `001_core.sql` | Core schema: `matches`, `players` (RANGE-partitioned), all child event tables, indexes, `ingestion_checkpoints`, partition management functions + initialization. FKs are `DEFERRABLE INITIALLY DEFERRED` for batch-insert throughput. |
+| `002_constants.sql` | Static reference data: `const_game_mode`, `const_lobby_type`, `const_region`, `const_patch`, `const_hero`, `const_item`, `const_ability` — table definitions + seed data combined. Internal FK constraints within constants schema. |
+| `003_analytics.sql` | Analytics schema: Bayesian shrinkage config, materialized views (`mv_team_hero_profile`, `mv_hero_synergy`, `mv_hero_counter`, `mv_player_team_history`), `feature_snapshots_player_hero`, `featurizer_runs`, `refresh_all_mv()`, `update_feature_snapshots()`, roles. |
+| `004_partition_verify.sql` | Idempotent assertion that the 6 expected `players` partitions exist. Performs no schema changes on a healthy database — safety check for CI/testing. |
 
 ### Table Structure
 

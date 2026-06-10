@@ -1,5 +1,12 @@
--- 002_analyse.sql
--- Analytics schema for Dota 2 professional match analysis and ML feature engineering
+-- 003_analytics.sql
+-- Analytics schema for Dota 2 professional match analysis and ML feature engineering.
+-- Materialized views, feature snapshots, configuration tables, roles, and functions.
+--
+-- Design decisions baked in (previously applied as patch migrations):
+--   - mv_team_hero_profile uses the correct team_id join (fix from 010)
+--   - mv_player_hero_profile removed (never referenced by code)
+--   - Ledger MVs included for ML point-in-time features
+
 CREATE SCHEMA IF NOT EXISTS analytics;
 
 -- ============================================================================
@@ -31,11 +38,11 @@ CREATE TABLE IF NOT EXISTS analytics.mv_refresh_log (
 CREATE INDEX IF NOT EXISTS idx_mv_refresh_log_view ON analytics.mv_refresh_log(view_name, started_at DESC);
 
 -- ============================================================================
--- 1. TEAM HERO PROFILE (Pick/Ban/Win Rates)
+-- 1. MATERIALIZED VIEW: TEAM HERO PROFILE
+--    Pick/Ban/Win rates per team per hero with Bayesian shrinkage.
+--    team_id is derived from matches (fix: uses actual team_id, not pb.team).
 -- ============================================================================
-DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_matviews WHERE schemaname = 'analytics' AND matviewname = 'mv_team_hero_profile') THEN
-        CREATE MATERIALIZED VIEW analytics.mv_team_hero_profile AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS analytics.mv_team_hero_profile AS
 WITH config AS (SELECT prior_games, prior_win_rate FROM analytics.shrinkage_config WHERE metric_name = 'team_hero_wr'),
 team_hero_picks AS (
     SELECT
@@ -58,11 +65,14 @@ team_hero_picks AS (
     GROUP BY team_id, p.hero_id
 ),
 team_hero_bans AS (
-    SELECT pb.team AS team_id, pb.hero_id, COUNT(*) AS times_banned
+    SELECT
+        CASE WHEN pb.team = 0 THEN m.radiant_team_id ELSE m.dire_team_id END AS team_id,
+        pb.hero_id,
+        COUNT(*) AS times_banned
     FROM picks_bans pb
     INNER JOIN matches m ON pb.match_id = m.match_id
     WHERE m.leagueid > 0 AND m.lobby_type IN (1, 2) AND pb.is_pick = FALSE
-    GROUP BY pb.team, pb.hero_id
+    GROUP BY CASE WHEN pb.team = 0 THEN m.radiant_team_id ELSE m.dire_team_id END, pb.hero_id
 )
 SELECT
     COALESCE(p.team_id, b.team_id) AS team_id,
@@ -86,19 +96,16 @@ SELECT
 FROM team_hero_picks p
 FULL OUTER JOIN team_hero_bans b ON p.team_id = b.team_id AND p.hero_id = b.hero_id
 CROSS JOIN config c;
-    END IF;
-END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_team_hero_profile_pk ON analytics.mv_team_hero_profile(team_id, hero_id);
 CREATE INDEX IF NOT EXISTS idx_mv_team_hero_profile_team ON analytics.mv_team_hero_profile(team_id);
 CREATE INDEX IF NOT EXISTS idx_mv_team_hero_profile_hero ON analytics.mv_team_hero_profile(hero_id);
 
 -- ============================================================================
--- 2. HERO SYNERGY
+-- 2. MATERIALIZED VIEW: HERO SYNERGY
+--    Bayesian-shrunk win rate for same-team hero pairs.
 -- ============================================================================
-DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_matviews WHERE schemaname = 'analytics' AND matviewname = 'mv_hero_synergy') THEN
-        CREATE MATERIALIZED VIEW analytics.mv_hero_synergy AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS analytics.mv_hero_synergy AS
 WITH config AS (SELECT prior_games, prior_win_rate FROM analytics.shrinkage_config WHERE metric_name = 'synergy_wr'),
 hero_pairs AS (
     SELECT p1.hero_id AS hero_a, p2.hero_id AS hero_b, p1.match_id, CASE WHEN p1.is_radiant THEN m.radiant_win ELSE NOT m.radiant_win END AS won
@@ -111,19 +118,16 @@ SELECT hero_a, hero_b, COUNT(*) AS games_together, SUM(CASE WHEN won THEN 1 ELSE
        SUM(CASE WHEN won THEN 1 ELSE 0 END)::FLOAT / NULLIF(COUNT(*), 0) AS raw_win_rate
 FROM hero_pairs CROSS JOIN config c
 GROUP BY hero_a, hero_b, c.prior_games, c.prior_win_rate HAVING COUNT(*) >= 3;
-    END IF;
-END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_hero_synergy_pk ON analytics.mv_hero_synergy(hero_a, hero_b);
 CREATE INDEX IF NOT EXISTS idx_mv_hero_synergy_hero_a ON analytics.mv_hero_synergy(hero_a);
 CREATE INDEX IF NOT EXISTS idx_mv_hero_synergy_hero_b ON analytics.mv_hero_synergy(hero_b);
 
 -- ============================================================================
--- 3. HERO COUNTER
+-- 3. MATERIALIZED VIEW: HERO COUNTER
+--    Bayesian-shrunk win rate for hero-vs-hero matchups.
 -- ============================================================================
-DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_matviews WHERE schemaname = 'analytics' AND matviewname = 'mv_hero_counter') THEN
-        CREATE MATERIALIZED VIEW analytics.mv_hero_counter AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS analytics.mv_hero_counter AS
 WITH config AS (SELECT prior_games, prior_win_rate FROM analytics.shrinkage_config WHERE metric_name = 'counter_wr'),
 hero_matchups AS (
     SELECT p1.hero_id AS hero_id, p2.hero_id AS enemy_hero_id, p1.match_id,
@@ -138,19 +142,16 @@ SELECT hero_id, enemy_hero_id, COUNT(*) AS games_against, SUM(CASE WHEN won THEN
        AVG(kd_diff) AS avg_kd_diff, SUM(CASE WHEN won THEN 1 ELSE 0 END)::FLOAT / NULLIF(COUNT(*), 0) AS raw_win_rate
 FROM hero_matchups CROSS JOIN config c
 GROUP BY hero_id, enemy_hero_id, c.prior_games, c.prior_win_rate HAVING COUNT(*) >= 3;
-    END IF;
-END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_hero_counter_pk ON analytics.mv_hero_counter(hero_id, enemy_hero_id);
 CREATE INDEX IF NOT EXISTS idx_mv_hero_counter_hero ON analytics.mv_hero_counter(hero_id);
 CREATE INDEX IF NOT EXISTS idx_mv_hero_counter_enemy ON analytics.mv_hero_counter(enemy_hero_id);
 
 -- ============================================================================
--- 4. PLAYER-TEAM HISTORY
+-- 4. MATERIALIZED VIEW: PLAYER TEAM HISTORY
+--    Aggregate stats per player per team.
 -- ============================================================================
-DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_matviews WHERE schemaname = 'analytics' AND matviewname = 'mv_player_team_history') THEN
-        CREATE MATERIALIZED VIEW analytics.mv_player_team_history AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS analytics.mv_player_team_history AS
 SELECT p.account_id, CASE WHEN p.is_radiant THEN m.radiant_team_id ELSE m.dire_team_id END AS team_id,
        COUNT(*) AS games_played, SUM(CASE WHEN p.win = 1 THEN 1 ELSE 0 END) AS wins,
        AVG(p.kills) AS avg_kills, AVG(p.deaths) AS avg_deaths, AVG(p.assists) AS avg_assists,
@@ -161,18 +162,13 @@ SELECT p.account_id, CASE WHEN p.is_radiant THEN m.radiant_team_id ELSE m.dire_t
 FROM players p INNER JOIN matches m ON p.match_id = m.match_id
 WHERE m.leagueid > 0 AND m.lobby_type IN (1, 2) AND p.account_id IS NOT NULL AND CASE WHEN p.is_radiant THEN m.radiant_team_id ELSE m.dire_team_id END IS NOT NULL
 GROUP BY p.account_id, team_id;
-    END IF;
-END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_player_team_history_pk ON analytics.mv_player_team_history(account_id, team_id);
 CREATE INDEX IF NOT EXISTS idx_mv_player_team_history_account ON analytics.mv_player_team_history(account_id);
 CREATE INDEX IF NOT EXISTS idx_mv_player_team_history_team ON analytics.mv_player_team_history(team_id);
 
--- Note: analytics.mv_player_hero_profile was removed in 007_cleanup.sql
--- (not referenced by any Go code or pipeline).
-
 -- ============================================================================
--- 6. SNAPSHOT & TRACKING TABLES
+-- 5. SNAPSHOT & TRACKING TABLES
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS analytics.feature_snapshots_player_hero (
     snapshot_date DATE NOT NULL, account_id BIGINT NOT NULL, hero_id INT NOT NULL, games_played INT, wins INT, shrunk_win_rate FLOAT,
@@ -188,7 +184,7 @@ CREATE TABLE IF NOT EXISTS analytics.featurizer_runs (
 INSERT INTO analytics.featurizer_runs (id, last_snapshot_date, last_run_timestamp, matches_processed) VALUES (1, NULL, NULL, 0) ON CONFLICT (id) DO NOTHING;
 
 -- ============================================================================
--- 7. ROLES (Fixed Syntax Bug)
+-- 6. ROLES
 -- ============================================================================
 DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'analytics_reader') THEN CREATE ROLE analytics_reader; END IF; END $$;
 GRANT USAGE ON SCHEMA public, analytics TO analytics_reader;
@@ -198,12 +194,11 @@ GRANT SELECT ON ALL SEQUENCES IN SCHEMA analytics TO analytics_reader;
 DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'analytics_writer') THEN CREATE ROLE analytics_writer; END IF; END $$;
 GRANT USAGE ON SCHEMA public, analytics TO analytics_writer;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO analytics_writer;
--- FIX: Separated TABLES and SEQUENCES grants
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA analytics TO analytics_writer;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA analytics TO analytics_writer;
 
 -- ============================================================================
--- 8. FUNCTIONS
+-- 7. FUNCTIONS
 -- ============================================================================
 CREATE OR REPLACE FUNCTION analytics.refresh_all_mv()
 RETURNS TABLE(view_name TEXT, duration INTERVAL, rows_affected BIGINT, status TEXT) AS $$

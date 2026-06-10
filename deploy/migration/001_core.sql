@@ -1,9 +1,21 @@
--- 001_init.sql
--- Schema for Dota 2 Match Data Analysis and AI Learning
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
+-- 001_core.sql
+-- Core schema for Dota 2 Match Analysis System.
+-- Tables, indexes, partition management, ingestion checkpoints.
+--
+-- Design decisions baked in (previously applied as patch migrations):
+--   - FKs are DEFERRABLE INITIALLY DEFERRED (allows batch writes in any order)
+--   - No CHECK constraints on duration/kda (parser validates; avoids batch-kill loops)
+--   - No dead GIN indexes (never queried, removed write overhead)
+--   - No idx_matches_radiant_win (boolean B-tree index is useless)
 
 -- ============================================================================
--- 1. CORE MATCH DATA
+-- 0. EXTENSIONS
+-- ============================================================================
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+
+-- ============================================================================
+-- 1. MATCHES
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS matches (
     match_id BIGINT PRIMARY KEY,
@@ -45,18 +57,16 @@ CREATE TABLE IF NOT EXISTS matches (
     replay_url VARCHAR,
     throw INT,
     loss INT,
-    metadata JSONB,
-    CONSTRAINT chk_duration_positive CHECK (duration > 0)
+    metadata JSONB
 );
 
 CREATE INDEX IF NOT EXISTS idx_matches_start_time ON matches(start_time);
-CREATE INDEX IF NOT EXISTS idx_matches_radiant_win ON matches(radiant_win);
 CREATE INDEX IF NOT EXISTS idx_matches_leagueid ON matches(leagueid) WHERE leagueid > 0;
 CREATE INDEX IF NOT EXISTS idx_matches_pro_filter ON matches(leagueid, lobby_type, start_time) WHERE leagueid > 0 AND lobby_type IN (1, 2);
 CREATE INDEX IF NOT EXISTS idx_matches_start_time_date ON matches(((TIMESTAMP 'epoch' + start_time * INTERVAL '1 second')::date));
 
 -- ============================================================================
--- 2. PLAYER CORE STATS (Partitioned for Scalability)
+-- 2. PLAYERS (RANGE-partitioned by match_id)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS players (
     match_id BIGINT NOT NULL,
@@ -164,19 +174,34 @@ CREATE TABLE IF NOT EXISTS players (
     item_usage JSONB,
 
     PRIMARY KEY (match_id, player_slot),
-    FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE,
-    CONSTRAINT chk_player_slot_range CHECK (player_slot BETWEEN 0 AND 255),
-    CONSTRAINT chk_kda_non_negative CHECK (kda >= 0)
+    CONSTRAINT chk_player_slot_range CHECK (player_slot BETWEEN 0 AND 255)
 ) PARTITION BY RANGE (match_id);
+
+-- players FK to matches: DEFERRABLE so batch inserts work in any order
+-- (added inline instead of a separate patch migration)
+ALTER TABLE players
+    DROP CONSTRAINT IF EXISTS players_match_id_fkey;
+ALTER TABLE players
+    ADD CONSTRAINT players_match_id_fkey
+    FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
+    DEFERRABLE INITIALLY DEFERRED;
 
 CREATE INDEX IF NOT EXISTS idx_players_account_id ON players(account_id);
 CREATE INDEX IF NOT EXISTS idx_players_hero_id ON players(hero_id);
 CREATE INDEX IF NOT EXISTS idx_players_kda ON players(kda);
 CREATE INDEX IF NOT EXISTS idx_players_account_hero_match ON players(account_id, hero_id, match_id);
+CREATE INDEX IF NOT EXISTS idx_players_hero_kills ON players(hero_id, kills);
+CREATE INDEX IF NOT EXISTS idx_players_account_hero ON players(account_id, hero_id);
+CREATE INDEX IF NOT EXISTS idx_players_item_uses_gin ON players USING GIN (item_uses);
+CREATE INDEX IF NOT EXISTS idx_players_damage_gin ON players USING GIN (damage);
+CREATE INDEX IF NOT EXISTS idx_players_purchase_time_gin ON players USING GIN (purchase_time);
 
 -- ============================================================================
--- 3. PLAYER TIME-SERIES & EVENTS (Dropped FKs to players per Migration 007)
+-- 3. PLAYER EVENT & TIME-SERIES TABLES
+--    No FKs to players (intentional — keeps partition pruning fast and avoids
+--    cross-partition FK overhead). FKs to matches are DEFERRABLE.
 -- ============================================================================
+
 CREATE TABLE IF NOT EXISTS player_minute_stats (
     match_id BIGINT,
     player_slot INT,
@@ -221,6 +246,7 @@ CREATE TABLE IF NOT EXISTS teamfights (
     deaths INT,
     PRIMARY KEY (match_id, start_time),
     FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
+        DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE TABLE IF NOT EXISTS teamfight_players (
@@ -241,6 +267,7 @@ CREATE TABLE IF NOT EXISTS teamfight_players (
     deaths_pos JSONB,
     PRIMARY KEY (match_id, start_time, player_slot),
     FOREIGN KEY (match_id, start_time) REFERENCES teamfights(match_id, start_time) ON DELETE CASCADE
+        DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE TABLE IF NOT EXISTS player_kills_log (
@@ -342,8 +369,10 @@ CREATE TABLE IF NOT EXISTS player_permanent_buffs (
 );
 
 -- ============================================================================
--- 4. MATCH EVENTS (Objectives, Chat, Picks/Bans)
+-- 4. MATCH EVENTS (Objectives, Chat, Picks/Bans, Gold/XP Advantage)
+--    All FKs to matches are DEFERRABLE INITIALLY DEFERRED.
 -- ============================================================================
+
 CREATE TABLE IF NOT EXISTS objectives (
     match_id BIGINT,
     time INT,
@@ -354,9 +383,14 @@ CREATE TABLE IF NOT EXISTS objectives (
     player_slot INT,
     value INT,
     killer INT,
-    PRIMARY KEY (match_id, time, type, team),
-    FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
+    PRIMARY KEY (match_id, time, type, team)
 );
+ALTER TABLE objectives
+    DROP CONSTRAINT IF EXISTS objectives_match_id_fkey;
+ALTER TABLE objectives
+    ADD CONSTRAINT objectives_match_id_fkey
+    FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
+    DEFERRABLE INITIALLY DEFERRED;
 
 CREATE TABLE IF NOT EXISTS chat (
     match_id BIGINT,
@@ -365,9 +399,14 @@ CREATE TABLE IF NOT EXISTS chat (
     key VARCHAR,
     slot INT,
     player_slot INT,
-    PRIMARY KEY (match_id, time, slot),
-    FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
+    PRIMARY KEY (match_id, time, slot)
 );
+ALTER TABLE chat
+    DROP CONSTRAINT IF EXISTS chat_match_id_fkey;
+ALTER TABLE chat
+    ADD CONSTRAINT chat_match_id_fkey
+    FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
+    DEFERRABLE INITIALLY DEFERRED;
 
 CREATE TABLE IF NOT EXISTS picks_bans (
     match_id BIGINT,
@@ -375,37 +414,45 @@ CREATE TABLE IF NOT EXISTS picks_bans (
     hero_id INT,
     team INT,
     "order" INT,
-    PRIMARY KEY (match_id, "order"),
-    FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
+    PRIMARY KEY (match_id, "order")
 );
+ALTER TABLE picks_bans
+    DROP CONSTRAINT IF EXISTS picks_bans_match_id_fkey;
+ALTER TABLE picks_bans
+    ADD CONSTRAINT picks_bans_match_id_fkey
+    FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
+    DEFERRABLE INITIALLY DEFERRED;
 
 CREATE TABLE IF NOT EXISTS match_gold_adv (
     match_id BIGINT,
     minute INT,
     radiant_gold_adv INT,
-    PRIMARY KEY (match_id, minute),
-    FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
+    PRIMARY KEY (match_id, minute)
 );
+ALTER TABLE match_gold_adv
+    DROP CONSTRAINT IF EXISTS match_gold_adv_match_id_fkey;
+ALTER TABLE match_gold_adv
+    ADD CONSTRAINT match_gold_adv_match_id_fkey
+    FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
+    DEFERRABLE INITIALLY DEFERRED;
 
 CREATE TABLE IF NOT EXISTS match_xp_adv (
     match_id BIGINT,
     minute INT,
     radiant_xp_adv INT,
-    PRIMARY KEY (match_id, minute),
-    FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
+    PRIMARY KEY (match_id, minute)
 );
+ALTER TABLE match_xp_adv
+    DROP CONSTRAINT IF EXISTS match_xp_adv_match_id_fkey;
+ALTER TABLE match_xp_adv
+    ADD CONSTRAINT match_xp_adv_match_id_fkey
+    FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
+    DEFERRABLE INITIALLY DEFERRED;
 
 -- ============================================================================
--- 5. GENERAL INDEXES FOR AI/ANALYTICS PERFORMANCE
+-- 5. ANALYTICS INDEXES
 -- ============================================================================
-CREATE INDEX IF NOT EXISTS idx_players_hero_kills ON players(hero_id, kills);
-CREATE INDEX IF NOT EXISTS idx_players_account_hero ON players(account_id, hero_id);
 CREATE INDEX IF NOT EXISTS idx_minute_stats_match_player ON player_minute_stats(match_id, player_slot, minute);
-CREATE INDEX IF NOT EXISTS idx_players_item_uses_gin ON players USING GIN (item_uses);
-CREATE INDEX IF NOT EXISTS idx_players_damage_gin ON players USING GIN (damage);
-CREATE INDEX IF NOT EXISTS idx_players_purchase_time_gin ON players USING GIN (purchase_time);
--- Note: idx_matches_metadata_gin and the 4 teamfight_players GIN indexes
--- were removed in 007_cleanup.sql — they were never queried.
 
 -- ============================================================================
 -- 6. INGESTION CHECKPOINTS
@@ -423,10 +470,6 @@ CREATE TABLE IF NOT EXISTS public.ingestion_checkpoints (
 
 INSERT INTO public.ingestion_checkpoints (id, last_fetched_datetime)
 VALUES (1, NOW() - INTERVAL '7 days') ON CONFLICT (id) DO NOTHING;
-
--- Note: raw_matches table, its indexes, and cleanup_raw_matches() were
--- removed in 007_cleanup.sql — the staging table was replaced by the
--- checkpoint watermark approach (P1-1).
 
 -- ============================================================================
 -- 7. PARTITION MANAGEMENT
@@ -464,8 +507,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Initialize bounded partitions capturing current ranges and future up to 30B
+-- Initialize bounded partitions up to 30B + catchall
 SELECT public.ensure_player_partitions(30000000000, 5000000000);
-
--- Catch-all for extreme legacy/edge matches until rotated
-CREATE TABLE IF NOT EXISTS players_p_catchall PARTITION OF players FOR VALUES FROM (30000000000) TO (MAXVALUE);
+CREATE TABLE IF NOT EXISTS players_p_catchall PARTITION OF players DEFAULT;
