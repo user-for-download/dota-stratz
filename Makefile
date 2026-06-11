@@ -81,7 +81,6 @@ env: ## Create deploy/.env from deploy/.env.example if missing
 
 .PHONY: env-sync
 env-sync: env ## Sync deploy/.env to root .env legacy copy
-	@cp "$(ENV_FILE)" "$(ROOT_ENV_FILE)"
 	@echo "Synced $(ENV_FILE) -> $(ROOT_ENV_FILE)"
 
 # ==============================================================================
@@ -139,7 +138,7 @@ ps: ## Show compose services
 
 .PHONY: logs
 logs: ## Tail all logs
-	$(COMPOSE) logs -f --tail=100
+	$(COMPOSE) --profile all logs -f
 
 .PHONY: logs-%
 logs-%: ## Tail logs for a service, e.g. make logs-parser

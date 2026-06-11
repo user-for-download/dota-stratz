@@ -45,11 +45,11 @@ done
 # write permission against the exchange name "amq.default", not the routing
 # key.  Using .* for write is the simplest fix; configure/read still limit
 # each service to its own queues.
-# id-fetcher: writes and configures queue.match_ids
-rabbitmqctl set_permissions -p / id-fetcher "queue\.match_ids(\.dlq)?" ".*" ""
+# id-fetcher: configures and writes to queue.match_ids; read needed for QueueDeclare (RabbitMQ 4.x)
+rabbitmqctl set_permissions -p / id-fetcher "queue\.match_ids(\.dlq)?" ".*" "queue\.match_ids(\.dlq)?"
 
-# detail-fetcher: configures and reads from queue.match_ids, writes to queue.raw_matches
-rabbitmqctl set_permissions -p / detail-fetcher "queue\.(match_ids|raw_matches)(\.dlq)?" ".*" "queue\.match_ids(\.dlq)?"
+# detail-fetcher: configures/writes/reads match_ids; configures/writes raw_matches
+rabbitmqctl set_permissions -p / detail-fetcher "queue\.(match_ids|raw_matches)(\.dlq)?" ".*" "queue\.(match_ids|raw_matches)(\.dlq)?"
 
 # parser: configure and read queue.raw_matches and its DLQ
 rabbitmqctl set_permissions -p / parser "queue\.raw_matches(\.dlq)?" ".*" "queue\.raw_matches(\.dlq)?"

@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/dota-stratz/services/id-fetcher/internal/metrics"
@@ -25,16 +24,6 @@ type openDotaSource interface {
 type matchIDPublisher interface {
 	PublishBatch(ctx context.Context, queueName string, matchIDs []int64) error
 }
-
-// watermarkOverscanMultiplier is the factor by which the watermark
-// path over-fetches from OpenDota to leave slack for the in-Go filter
-// (`match_id > watermark`). 5× the batch size means a single OpenDota
-// round-trip yields enough rows to fill one batch even if 80% of the
-// response is at or below the watermark (e.g. a long quiet period
-// followed by a burst of new matches). Tuned empirically — 5× is
-// generous for typical Dota 2 traffic (1k matches/day × 30-day
-// lookback = 30k rows, well under the 1M Explorer limit).
-const watermarkOverscanMultiplier = 5
 
 // Compile-time interface satisfaction checks.
 var _ openDotaSource = (*OpenDotaClient)(nil)
@@ -98,9 +87,16 @@ func (f *Fetcher) Watermark() int64 {
 	return f.watermark
 }
 
-// Run fetches matches (rolling window or watermark, depending on the
-// configured mode) and publishes their IDs to RabbitMQ in
-// batchSize-sized messages.
+// Run fetches matches via the rolling-window query (matches.sql) and
+// publishes their IDs to RabbitMQ in batchSize-sized messages. When a
+// watermark is configured, already-parsed match IDs (<= watermark) are
+// skipped in Go code so the pipeline does not re-queue committed work.
+//
+// Previously this method toggled between matches.sql (rolling window)
+// and matches_watermark.sql (watermark filter pushed into SQL), but the
+// watermark SQL's small LIMIT (batchSize × 5) caused a 2+ day catch-up
+// lag behind the 360-day window. Using matches.sql (LIMIT 50000) in a
+// single round-trip and filtering in Go is both simpler and faster.
 //
 // On context cancellation (graceful shutdown) Run stops after the
 // current in-flight batch finishes — any partial batch is flushed
@@ -114,13 +110,20 @@ func (f *Fetcher) Run(ctx context.Context) error {
 
 	logger.Log.Info("Fetched matches from OpenDota",
 		zap.Int("count", len(matches)),
-		zap.Int64("watermark", f.watermark),
-		zap.Bool("watermark_path", f.watermark > 0))
+		zap.Int64("watermark", f.watermark))
 
 	totalPublished := 0
 	var batch []int64
 
 	for _, m := range matches {
+		// Skip already-parsed matches when a watermark is set.
+		// The rolling-window query returns everything in the time
+		// window; we filter in Go so we don't re-queue IDs the
+		// parser has already committed.
+		if f.watermark > 0 && m.MatchID <= f.watermark {
+			continue
+		}
+
 		if ctx.Err() != nil {
 			// Flush any accumulated IDs before returning so they aren't lost.
 			// Use a fresh context since the caller's ctx is already cancelled.
@@ -162,27 +165,23 @@ func (f *Fetcher) Run(ctx context.Context) error {
 
 	logger.Log.Info("Fetch run complete",
 		zap.Int("total_published", totalPublished),
-		zap.Int64("watermark", f.watermark),
-		zap.Bool("watermark_path", f.watermark > 0))
+		zap.Int64("watermark", f.watermark))
 
 	metrics.PaginationRunsTotal.WithLabelValues("success").Inc()
 	return nil
 }
 
-// fetch dispatches to the rolling-window or watermark path based on
-// the configured mode. Extracted so the branching is testable in
-// isolation from the publish loop.
+// fetch always uses the rolling-window query (matches.sql) which returns
+// all match IDs in the configured time window with a generous LIMIT 50000.
+//
+// The watermark filter is applied in Go inside Run() so a single
+// round-trip covers the entire window — no more 2500-row limit that
+// takes multiple cron ticks to drain.
+//
+// Previously this method dispatched to FetchMatchesSince when a watermark
+// was set, but the small overscan window (batchSize × 5) caused a
+// multi-day catch-up lag. The rolling query is a single call regardless
+// of watermark state.
 func (f *Fetcher) fetch(ctx context.Context) ([]MatchNode, error) {
-	if f.watermark > 0 {
-		if f.watermarkLookbackDays <= 0 {
-			// Programmer error: SetWatermark called with a positive
-			// watermark but no lookback days. Config.Load already
-			// enforces the inverse (lookback >= rolling window), so
-			// reaching this branch indicates a wiring bug in main.go.
-			return nil, fmt.Errorf("fetcher: watermark path requires watermark_lookback_days > 0 (got %d)", f.watermarkLookbackDays)
-		}
-		maxResults := f.batchSize * watermarkOverscanMultiplier
-		return f.client.FetchMatchesSince(ctx, f.watermark, f.watermarkLookbackDays, maxResults)
-	}
 	return f.client.FetchMatches(ctx)
 }

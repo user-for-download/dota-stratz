@@ -41,23 +41,26 @@ services:
         profiles:
             - all
             - db
-        image: "rabbitmq:management-alpine"
+        build:
+            context: ./rabbitmq
+            dockerfile: Dockerfile
+        image: "dota2-rabbitmq:latest"
         container_name: dota2-rabbitmq
         restart: unless-stopped
         environment:
             RABBITMQ_DEFAULT_USER: "${RABBITMQ_DEFAULT_USER:-guest}"
             RABBITMQ_DEFAULT_PASS: "${RABBITMQ_DEFAULT_PASS:-guest}"
-            # Per-service users are created by deploy/rabbitmq/init.sh.
-            # Run after first start:
-            #   docker exec dota2-rabbitmq /workspace/init.sh
-            # In production, mount init.sh and run it as a post-start hook.
+            # Per-service credentials — passed through for automatic
+            # user creation on startup (see deploy/rabbitmq/startup.sh).
+            RABBITMQ_USER_ID_FETCHER_PASS: "${RABBITMQ_USER_ID_FETCHER_PASS:-idfetcher_secret}"
+            RABBITMQ_USER_DETAIL_FETCHER_PASS: "${RABBITMQ_USER_DETAIL_FETCHER_PASS:-detailfetcher_secret}"
+            RABBITMQ_USER_PARSER_PASS: "${RABBITMQ_USER_PARSER_PASS:-parser_secret}"
         ports:
             - "5672:5672"
             - "15672:15672"
             - "15692:15692" # Prometheus metrics endpoint (rabbitmq_prometheus plugin)
         volumes:
             - "rmq-data:/var/lib/rabbitmq"
-            - "./rabbitmq/init.sh:/workspace/init.sh:ro"
         networks:
             - dota2-net
         healthcheck:

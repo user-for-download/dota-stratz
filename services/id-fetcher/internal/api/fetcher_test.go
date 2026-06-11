@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"testing"
 
@@ -134,54 +133,59 @@ func Test_RollingWindowPublishesBatches(t *testing.T) {
 	pub.mu.Unlock()
 }
 
-// Test_WatermarkPathCallsFetchMatchesSince verifies that when a
-// watermark is set via SetWatermark, the fetcher calls FetchMatchesSince
-// with the correct watermark, lookback days, and maxResults.
-func Test_WatermarkPathCallsFetchMatchesSince(t *testing.T) {
+// Test_WatermarkFilterSkipsOldMatches verifies that when a watermark is
+// set via SetWatermark, the fetcher always uses the rolling-window query
+// (FetchMatches) and filters out match IDs <= watermark in Go code, so
+// only truly new matches are published.
+//
+// This replaces the former Test_WatermarkPathCallsFetchMatchesSince which
+// asserted FetchMatchesSince was called — the Go-side filter approach is
+// simpler and avoids the 2500-row LIMIT that caused multi-day catch-up lag.
+func Test_WatermarkFilterSkipsOldMatches(t *testing.T) {
 	const batchSize = 10
-	var recordedWatermark int64
-	var recordedLookback int
-	var recordedMaxResults int
 
 	src := &fakeSource{
-		fetchMatchesSinceFn: func(_ context.Context, watermark int64, lookbackDays int, maxResults int) ([]MatchNode, error) {
-			recordedWatermark = watermark
-			recordedLookback = lookbackDays
-			recordedMaxResults = maxResults
-			out := make([]MatchNode, 5)
-			for i := range out {
-				out[i] = MatchNode{MatchID: watermark + int64(i) + 1}
-			}
-			return out, nil
+		fetchMatchesFn: func(_ context.Context) ([]MatchNode, error) {
+			// Mixed set: below, at, and above the watermark.
+			return []MatchNode{
+				{MatchID: 50},
+				{MatchID: 80},
+				{MatchID: 100}, // exactly at watermark
+				{MatchID: 101},
+				{MatchID: 150},
+				{MatchID: 200},
+			}, nil
+		},
+		// FetchMatchesSince should never be called.
+		fetchMatchesSinceFn: func(_ context.Context, _ int64, _ int, _ int) ([]MatchNode, error) {
+			t.Error("FetchMatchesSince was called (expected rolling path only)")
+			return nil, nil
 		},
 	}
 	pub := &fakePublisher{}
 	f := newTestFetcher(src, pub, batchSize)
-	f.SetWatermark(12345, 7)
+	f.SetWatermark(100, 360)
 
 	if err := f.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
-	if recordedWatermark != 12345 {
-		t.Errorf("watermark = %d, want 12345", recordedWatermark)
+	published := pub.publishedItems()
+	want := []int64{101, 150, 200}
+	if len(published) != len(want) {
+		t.Fatalf("published %d items, want %d: %v", len(published), len(want), published)
 	}
-	if recordedLookback != 7 {
-		t.Errorf("lookbackDays = %d, want 7", recordedLookback)
-	}
-	wantMaxResults := batchSize * watermarkOverscanMultiplier // 10 * 5 = 50
-	if recordedMaxResults != wantMaxResults {
-		t.Errorf("maxResults = %d, want %d", recordedMaxResults, wantMaxResults)
-	}
-	if got := pub.publishedItems(); len(got) != 5 {
-		t.Errorf("published %d items, want 5", len(got))
+	for i, id := range published {
+		if id != want[i] {
+			t.Errorf("published[%d] = %d, want %d", i, id, want[i])
+		}
 	}
 }
 
-// Test_WatermarkZeroUsesRollingWindow asserts that when SetWatermark
-// is never called (watermark stays 0), FetchMatches is used and
-// FetchMatchesSince is never called.
-func Test_WatermarkZeroUsesRollingWindow(t *testing.T) {
+// Test_RollingWindowAlways asserts that the fetcher always uses
+// FetchMatches (rolling-window query) regardless of watermark state,
+// and FetchMatchesSince is never called.
+func Test_RollingWindowAlways(t *testing.T) {
 	rollingCalled := false
 	watermarkCalled := false
 
@@ -308,26 +312,32 @@ func isClosed(ch <-chan struct{}) bool {
 	}
 }
 
-// Test_WatermarkPositiveWithZeroLookbackDays_ReturnsError verifies
-// that calling SetWatermark with a positive watermark but zero
-// lookback days causes Run to return an error containing
-// "fetcher: watermark path requires".
-func Test_WatermarkPositiveWithZeroLookbackDays_ReturnsError(t *testing.T) {
+// Test_WatermarkPositiveWithZeroLookbackDays_NoError verifies that the
+// fetcher no longer requires lookbackDays > 0 when watermark is set.
+// Since the watermark filter is now applied in Go code (not in a separate
+// SQL path), a zero lookback is harmless — only the watermark value
+// determines which matches are skipped.
+func Test_WatermarkPositiveWithZeroLookbackDays_NoError(t *testing.T) {
 	src := &fakeSource{
 		fetchMatchesFn: func(_ context.Context) ([]MatchNode, error) {
-			return nil, nil
+			return []MatchNode{
+				{MatchID: 50},
+				{MatchID: 150},
+			}, nil
 		},
 	}
 	pub := &fakePublisher{}
 	f := newTestFetcher(src, pub, 10)
-	// Set watermark to 100 but leave lookbackDays at 0.
+	// Set watermark to 100 but leave lookbackDays at 0 (previously an error).
 	f.SetWatermark(100, 0)
 
-	err := f.Run(context.Background())
-	if err == nil {
-		t.Fatal("Run should return an error when watermark > 0 but lookback = 0")
+	if err := f.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v (expected no error even with lookback=0)", err)
 	}
-	if !strings.Contains(err.Error(), "fetcher: watermark path requires") {
-		t.Errorf("Run err = %q, want substring %q", err.Error(), "fetcher: watermark path requires")
+
+	published := pub.publishedItems()
+	// Only match_id > 100 should be published.
+	if len(published) != 1 || published[0] != 150 {
+		t.Errorf("published = %v, want [150]", published)
 	}
 }

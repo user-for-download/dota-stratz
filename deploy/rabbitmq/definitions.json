@@ -40,14 +40,14 @@
       "vhost": "/",
       "configure": "queue\\.match_ids(\\.dlq)?",
       "write": ".*",
-      "read": ""
+      "read": "queue\\.match_ids(\\.dlq)?"
     },
     {
       "user": "detail-fetcher",
       "vhost": "/",
       "configure": "queue\\.(match_ids|raw_matches)(\\.dlq)?",
       "write": ".*",
-      "read": "queue\\.match_ids(\\.dlq)?"
+      "read": "queue\\.(match_ids|raw_matches)(\\.dlq)?"
     },
     {
       "user": "parser",
