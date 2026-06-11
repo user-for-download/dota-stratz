@@ -26,7 +26,7 @@ def generate_reasoning(
     parts: list[str] = []
     team_label = "Radiant" if ctx.recommending_team == 0 else "Dire"
 
-    parts.append(f"Recommended for {team_label} (slot {ctx.turn})")
+    parts.append(f"Hero {hero_id} for {team_label} (slot {ctx.turn})")
 
     if baseline_win_rate is not None:
         parts.append(f"global WR {baseline_win_rate:.1%}")

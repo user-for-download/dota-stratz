@@ -27,10 +27,7 @@ dump_out/
 *~
 opencode.json
 # OpenCode: track context, ignore transient files
-.opencode/config
-.opencode/node_modules/
-.opencode/package.json
-.opencode/package-lock.json
+.opencode
 .agents/
 skills-lock.json
 # OS

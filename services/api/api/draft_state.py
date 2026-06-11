@@ -119,6 +119,12 @@ def _validate_draft(draft: list[DraftSlot], order: tuple[tuple[int, bool], ...],
 
     seen_heroes: set[int] = set()
     for i, slot in enumerate(draft):
+        # Validate that submitted order matches list position (BUG-018).
+        if slot.order != i + 1:
+            raise ValueError(
+                f"Slot {i + 1}: expected order {i + 1}, got {slot.order}. "
+                "Draft slots must be sent in order."
+            )
         expected_team, expected_is_pick = order[i]
         if slot.team != expected_team:
             raise ValueError(f"Slot {i + 1}: expected team {expected_team} (first_pick_team={first_pick_team}), got {slot.team}")
@@ -148,7 +154,7 @@ class DraftContext:
 
     @property
     def all_taken(self) -> set[int]:
-        return set(self.radiant_picks + self.dire_picks + self.radiant_bans + self.dire_bans)
+        return {h for h in (self.radiant_picks + self.dire_picks + self.radiant_bans + self.dire_bans) if h != 0}
 
     @property
     def ally_picks(self) -> list[int]:

@@ -11,7 +11,7 @@ class DraftSlot(BaseModel):
     hero_id: int = Field(..., ge=0, description="Hero ID (0 = not yet decided)")
     is_pick: bool = Field(..., description="True if pick, False if ban")
     team: int = Field(..., ge=0, le=1, description="0 = radiant, 1 = dire")
-    order: int = Field(..., ge=1, le=30, description="Draft order (1-indexed; max varies by patch)")
+    order: int = Field(..., ge=1, le=50, description="Draft order (1-indexed; max varies by patch; raised from 30 for future patches)")
     account_id: int | None = Field(None, description="Steam account ID of the player (for player-hero agg lookup)")
 
 
@@ -28,8 +28,8 @@ class PredictRequest(BaseModel):
     draft: list[DraftSlot] = Field(
         ...,
         min_length=1,
-        max_length=30,
-        description="Current draft state (1-30 slots filled; max varies by patch)",
+        max_length=50,
+        description="Current draft state (1-50 slots filled; max varies by patch)",
     )
     account_id: int | None = Field(
         None,

@@ -110,7 +110,7 @@ def load_dataset(
 
     metadata: dict[str, Any] = {
         "n_train": len(X_train),
-        "n_val": (~train_mask).sum(),
+        "n_val": int(val_mask.sum()),
         "n_features": X.shape[1],
     }
 

@@ -27,14 +27,21 @@ import (
 )
 
 // sourceFetchLimiter prevents redundant calls to the remote proxy API within
-// SourceFetchCooldown. This avoids getting instantly HTTP 429 rate-limited on
-// boot when bootstrap + topUpIfBelowMin both try to fetch from the same remote
-// source in rapid succession (Issue #27).
-var (
-	lastSourceFetch     time.Time
-	sourceFetchMu       sync.Mutex
-	SourceFetchCooldown = 10 * time.Minute
-)
+// a configured cooldown window. This avoids getting instantly HTTP 429
+// rate-limited on boot when bootstrap + topUpIfBelowMin both try to fetch
+// from the same remote source in rapid succession (Issue #27).
+//
+// BUG-015: moved from package-level vars (which caused test pollution) to
+// an explicitly constructed struct owned by Run().
+type sourceFetchLimiter struct {
+	mu       sync.Mutex
+	lastFetch time.Time
+	cooldown  time.Duration
+}
+
+func newSourceFetchLimiter(cooldown time.Duration) *sourceFetchLimiter {
+	return &sourceFetchLimiter{cooldown: cooldown}
+}
 
 // Run starts the proxy-manager service and blocks until SIGINT/SIGTERM.
 func Run() {
@@ -109,13 +116,17 @@ func Run() {
 	wg.Add(1)
 	go startMetricsServer(ctx, &wg, int(cfg.MetricsPort), proxyPool, cfg.PoolMinSize)
 
+	// BUG-015: create a dedicated limiter so its state is owned by Run()
+	// rather than package-level vars that cause test pollution.
+	sourceFetchLimiter := newSourceFetchLimiter(10 * time.Minute)
+
 	// Bootstrap: load from local file + remote GET source, validate together,
 	// then top-up from the same combined list before considering a re-fetch.
 	// This ensures the pool starts populated regardless of which source is healthy.
 	if ctx.Err() != nil {
 		logger.Log.Info("Shutdown signal before bootstrap, exiting cleanly")
 	} else {
-		bootstrap(ctx, cfg, val, proxyPool)
+		bootstrap(ctx, cfg, val, proxyPool, sourceFetchLimiter)
 	}
 
 	// Background loops (skip if already cancelled during bootstrap)
@@ -123,7 +134,7 @@ func Run() {
 		logger.Log.Info("Shutdown during bootstrap, skipping background loops")
 	} else {
 		wg.Add(1)
-		go refreshLoop(ctx, &wg, cfg, val, proxyPool)
+		go refreshLoop(ctx, &wg, cfg, val, proxyPool, sourceFetchLimiter)
 		wg.Add(1)
 		go leaseReaperLoop(ctx, &wg, cfg, proxyPool)
 	}
@@ -143,30 +154,30 @@ func Run() {
 }
 
 // limitedFetchWithRetry wraps fetchWithRetry with a cooldown guard: if a
-// source fetch succeeded within SourceFetchCooldown, subsequent calls are
-// skipped and the last result is returned as empty. This prevents redundant
-// API calls that would trigger HTTP 429 rate-limiting.
+// source fetch succeeded within the limiter's cooldown window, subsequent
+// calls are skipped and the last result is returned as empty. This prevents
+// redundant API calls that would trigger HTTP 429 rate-limiting.
 //
-// NOTE: lastSourceFetch is updated ONLY on success so that a transient
-// network failure does not silence the source for the entire cooldown
-// window (Issue #27 refinement).
-func limitedFetchWithRetry(ctx context.Context, cfg *config.Config) ([]string, error) {
-	sourceFetchMu.Lock()
-	elapsed := time.Since(lastSourceFetch)
-	if !lastSourceFetch.IsZero() && elapsed < SourceFetchCooldown {
-		sourceFetchMu.Unlock()
+// NOTE: lastFetch is updated ONLY on success so that a transient network
+// failure does not silence the source for the entire cooldown window
+// (Issue #27 refinement).
+func limitedFetchWithRetry(ctx context.Context, cfg *config.Config, limiter *sourceFetchLimiter) ([]string, error) {
+	limiter.mu.Lock()
+	elapsed := time.Since(limiter.lastFetch)
+	if !limiter.lastFetch.IsZero() && elapsed < limiter.cooldown {
+		limiter.mu.Unlock()
 		logger.Log.Debug("Source fetch rate-limited (cooldown active)",
 			zap.Duration("elapsed", elapsed),
-			zap.Duration("cooldown", SourceFetchCooldown))
+			zap.Duration("cooldown", limiter.cooldown))
 		return nil, nil
 	}
-	sourceFetchMu.Unlock()
+	limiter.mu.Unlock()
 
 	proxies, err := fetchWithRetry(ctx, cfg)
 	if err == nil {
-		sourceFetchMu.Lock()
-		lastSourceFetch = time.Now()
-		sourceFetchMu.Unlock()
+		limiter.mu.Lock()
+		limiter.lastFetch = time.Now()
+		limiter.mu.Unlock()
 	}
 	return proxies, err
 }
@@ -248,6 +259,7 @@ func refreshLoop(
 	cfg *config.Config,
 	val *validator.Validator,
 	proxyPool *proxypool.Pool,
+	limiter *sourceFetchLimiter,
 ) {
 	defer wg.Done()
 
@@ -264,14 +276,14 @@ func refreshLoop(
 
 	// Run once at startup so the pool can be re-seeded without waiting
 	// a full interval (e.g. when bootstrap was empty).
-	runRefresh(ctx, cfg, val, proxyPool)
+	runRefresh(ctx, cfg, val, proxyPool, limiter)
 	for {
 		select {
 		case <-ctx.Done():
 			logger.Log.Debug("Refresh loop stopped")
 			return
 		case <-ticker.C:
-			runRefresh(ctx, cfg, val, proxyPool)
+			runRefresh(ctx, cfg, val, proxyPool, limiter)
 		}
 	}
 }
@@ -312,6 +324,7 @@ func bootstrap(
 	cfg *config.Config,
 	val *validator.Validator,
 	proxyPool *proxypool.Pool,
+	limiter *sourceFetchLimiter,
 ) {
 	if ctx.Err() != nil {
 		return
@@ -344,7 +357,7 @@ func bootstrap(
 	// instant HTTP 429 ban (issue #27).
 	if cfg.RefreshSourceURL == "" {
 		logger.Log.Debug("Bootstrap: remote source URL not configured, skipping")
-	} else if urlProxies, err := limitedFetchWithRetry(ctx, cfg); err != nil {
+	} else if urlProxies, err := limitedFetchWithRetry(ctx, cfg, limiter); err != nil {
 		logger.Log.Warn("Bootstrap: remote source fetch failed", zap.Error(err))
 	} else {
 		added := 0
@@ -374,13 +387,13 @@ func bootstrap(
 
 	// Top-up: runValidation already added validated proxies to the pool,
 	// so just check if we still need more from the remote source.
-	topUpIfBelowMin(ctx, cfg, val, proxyPool)
+	topUpIfBelowMin(ctx, cfg, val, proxyPool, limiter)
 }
 
 // runRefresh fetches, filters, validates and tops-up the pool. The
 // validated set is recorded in Redis (proxypool) for downstream services
 // to consume. Records outcome in ProxyRefreshRunsTotal.
-func runRefresh(ctx context.Context, cfg *config.Config, val *validator.Validator, proxyPool *proxypool.Pool) {
+func runRefresh(ctx context.Context, cfg *config.Config, val *validator.Validator, proxyPool *proxypool.Pool, limiter *sourceFetchLimiter) {
 	if cfg.RefreshSourceURL == "" {
 		logger.Log.Debug("Refresh: no source URL configured, skipping")
 		return
@@ -389,7 +402,7 @@ func runRefresh(ctx context.Context, cfg *config.Config, val *validator.Validato
 	logger.Log.Debug("Refresh: fetching new proxies from source",
 		zap.String("url", cfg.RefreshSourceURL))
 
-	proxies, err := limitedFetchWithRetry(ctx, cfg)
+	proxies, err := limitedFetchWithRetry(ctx, cfg, limiter)
 	if err != nil {
 		logger.Log.Error("Refresh fetch exhausted retries", zap.Error(err))
 		proxypool.ProxyRefreshRunsTotal.WithLabelValues("fetch_failed").Inc()
@@ -408,7 +421,7 @@ func runRefresh(ctx context.Context, cfg *config.Config, val *validator.Validato
 
 	// Top-up: runValidation already added validated proxies to the pool,
 	// so just check if we still need more from the remote source.
-	topUpIfBelowMin(ctx, cfg, val, proxyPool)
+	topUpIfBelowMin(ctx, cfg, val, proxyPool, limiter)
 
 	proxypool.ProxyRefreshRunsTotal.WithLabelValues("success").Inc()
 }
@@ -508,6 +521,7 @@ func topUpIfBelowMin(
 	cfg *config.Config,
 	val *validator.Validator,
 	proxyPool *proxypool.Pool,
+	limiter *sourceFetchLimiter,
 ) {
 	if ctx.Err() != nil {
 		return
@@ -540,7 +554,7 @@ func topUpIfBelowMin(
 	logger.Log.Info("Top-up: fetching new GET proxies from source",
 		zap.String("url", cfg.RefreshSourceURL))
 
-	proxies, err := limitedFetchWithRetry(ctx, cfg)
+	proxies, err := limitedFetchWithRetry(ctx, cfg, limiter)
 	if err != nil {
 		proxypool.ProxyTopUpRunsTotal.WithLabelValues("fetch_failed").Inc()
 		logger.Log.Error("Top-up: fetch failed", zap.Error(err))

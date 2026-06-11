@@ -168,7 +168,7 @@ def pre_fetch_batch(
     )
     player_hero_agg = (
         db_.fetch_player_hero_agg_batch(patch_id, account_id, hero_ids)
-        if account_id and hero_ids
+        if account_id is not None and hero_ids
         else {}
     )
     synergy = db_.fetch_synergy_batch(patch_id, hero_ids, ctx.ally_picks) if ctx and hero_ids else {}
@@ -304,7 +304,7 @@ def build_feature_vector(
     # -- Hero draft-slot (pick-position) win rate --
     hds = batch.hero_draft_slot.get(hero_id)
     vec["hds_win_rate"] = _float(hds[0] if hds else None, "hds_win_rate")
-    vec["hds_games"] = _float(hds[1] if hds else None, "hds_games")
+    vec["hds_games"] = float(_int(hds[1] if hds else None, "hds_games"))
 
     # -- Hero baseline (from pre-fetched batch dict) --
     bl = batch.baselines.get(hero_id)

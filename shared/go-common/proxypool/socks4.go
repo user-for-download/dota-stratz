@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"time"
@@ -98,9 +99,10 @@ func (d *socks4Dialer) DialContext(ctx context.Context, network, addr string) (n
 		return nil, fmt.Errorf("socks4: write request: %w", err)
 	}
 
-	// Read response: 8 bytes.
+	// Read response: 8 bytes (BUG-009: use io.ReadFull so a partial
+	// TCP read doesn't leave us checking an incompletely-filled buffer).
 	resp := make([]byte, 8)
-	if _, err := proxyConn.Read(resp); err != nil {
+	if _, err := io.ReadFull(proxyConn, resp); err != nil {
 		proxyConn.Close()
 		return nil, fmt.Errorf("socks4: read response: %w", err)
 	}

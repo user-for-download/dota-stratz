@@ -180,7 +180,7 @@ var rateLimitScript = redis.NewScript(`
 
 func (p *Pool) Add(ctx context.Context, proxy string) (bool, error) {
 	n, err := p.rdb.ZAddNX(ctx, RedisKey, redis.Z{
-		Score:  p.initialScore(),
+		Score:  p.nowScore(),
 		Member: proxy,
 	}).Result()
 	if err != nil {
@@ -317,7 +317,7 @@ func (p *Pool) AcquireWithRateLimit(ctx context.Context, maxPerMinute int) (stri
 }
 
 func (p *Pool) Release(ctx context.Context, proxy string) error {
-	newScore := p.nextScore()
+	newScore := p.nowScore()
 	res, err := releaseScript.Run(ctx, p.rdb, []string{RedisKey, LeaseKey}, proxy, newScore).Result()
 	if err != nil {
 		return err
@@ -478,7 +478,7 @@ func (p *Pool) ReapExpiredLeases(ctx context.Context) (int, error) {
 		}
 
 		res, runErr := reapReleaseScript.Run(ctx, p.rdb,
-			[]string{RedisKey, LeaseKey}, proxy, p.nextScore(), expiresAtStr).Result()
+			[]string{RedisKey, LeaseKey}, proxy, p.nowScore(), expiresAtStr).Result()
 		if runErr != nil {
 			logger.Log.Warn("Reap: failed to release expired lease",
 				zap.String("proxy", proxy), zap.Error(runErr))
@@ -578,17 +578,16 @@ func failureKey(proxy string) string {
 	return FailureCounterKeyPrefix + proxy
 }
 
-// initialScore and nextScore return a monotonic timestamp suitable for
-// Redis ZSET scores.  We use UnixMicro() instead of UnixNano() because
-// float64 only guarantees 53 bits of mantissa (~9e15 integer precision).
-// Current UnixNano() values (~1.7e18) exceed this range and lose
-// sub-microsecond precision.  UnixMicro() values (~1.7e15) fit safely
-// within float64's exact integer range (Issue #29).
-func (p *Pool) initialScore() float64 {
-	return float64(time.Now().UnixMicro())
-}
-
-func (p *Pool) nextScore() float64 {
+// nowScore returns a monotonic timestamp suitable for Redis ZSET scores.
+// We use UnixMicro() instead of UnixNano() because float64 only guarantees
+// 53 bits of mantissa (~9e15 integer precision).  Current UnixNano()
+// values (~1.7e18) exceed this range and lose sub-microsecond precision.
+// UnixMicro() values (~1.7e15) fit safely within float64's exact integer
+// range (Issue #29).
+//
+// BUG-016: collapsed identical initialScore / nextScore into this single
+// function to eliminate dead abstraction.
+func (p *Pool) nowScore() float64 {
 	return float64(time.Now().UnixMicro())
 }
 

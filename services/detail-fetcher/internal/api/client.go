@@ -124,6 +124,10 @@ func (c *Client) FetchRaw(ctx context.Context, matchID int64) ([]byte, error) {
 			_ = c.pool.Release(ctx, proxy)
 			return nil, ErrMatchNotFound
 		}
+		// Unknown API error (not "not found" or "private") — the proxy
+		// itself worked fine, so report success to reset its failure
+		// counter, then release (BUG-008).
+		_ = c.pool.ReportSuccess(ctx, proxy)
 		_ = c.pool.Release(ctx, proxy)
 		return nil, fmt.Errorf("opendota error: %s", errResp.Error)
 	}

@@ -21,7 +21,7 @@ def connect(cfg: TrainerConfig):
     return psycopg2.connect(cfg.pg_dsn)
 
 
-def engine(cfg: TrainerConfig):
+def make_engine(cfg: TrainerConfig):
     """Return a SQLAlchemy engine for pandas read_sql."""
     return create_engine(cfg.sqlalchemy_url, pool_pre_ping=True)
 

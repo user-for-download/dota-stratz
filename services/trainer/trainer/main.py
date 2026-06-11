@@ -25,7 +25,7 @@ import sys
 
 from .aggregates import populate_all
 from .config import TrainerConfig
-from .db import connect, engine as create_engine, fetch_patch_id
+from .db import connect, make_engine as create_db_engine, fetch_patch_id
 from .train import train_model
 
 logger = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Database connection
     conn = connect(cfg)
-    eng = create_engine(cfg)
+    eng = create_db_engine(cfg)
 
     try:
         # Resolve patch ID

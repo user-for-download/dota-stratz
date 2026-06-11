@@ -12,7 +12,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Request
 
 from .config import APIConfig
 from .db import close_pool, init_pool
@@ -26,24 +26,27 @@ from .models import (
 )
 from .predictor import Predictor
 
+# Logging setup at module level so it applies regardless of ASGI server
+# behaviour — basicConfig is a no-op after the root logger has handlers.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Globals (set during lifespan)
-# ---------------------------------------------------------------------------
-
-cfg = APIConfig()
-predictor = Predictor(cfg)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Startup/shutdown lifecycle."""
-    # Startup
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    # Startup — construct config and predictor INSIDE lifespan so they are
+    # not created at module import time (BUG-011). Store on app.state for
+    # endpoint access via request.app.state.
+    cfg = APIConfig()
+    predictor = Predictor(cfg)
+    app.state.cfg = cfg
+    app.state.predictor = predictor
+
     init_pool(cfg)
     n_loaded = predictor.reload_all()
     logger.info(
@@ -69,7 +72,8 @@ app = FastAPI(
 
 
 @app.get("/health", response_model=HealthResponse)
-def health():
+def health(request: Request):
+    predictor: Predictor = request.app.state.predictor
     return HealthResponse(
         status="ok",
         patch_models_loaded=predictor.loaded_patches(),
@@ -77,7 +81,8 @@ def health():
 
 
 @app.post("/predict", response_model=PredictResponse)
-def predict(req: PredictRequest):
+def predict(req: PredictRequest, request: Request):
+    predictor: Predictor = request.app.state.predictor
     try:
         ctx = build_draft_context(req.draft, patch_id=req.patch_id, first_pick_team=req.first_pick_team)
     except ValueError as e:
@@ -110,8 +115,12 @@ def predict(req: PredictRequest):
 @app.post("/reload/{patch_id}", response_model=ReloadResponse)
 def reload_model(
     patch_id: int,
+    request: Request,
     authorization: str = Header(None),
 ):
+    predictor: Predictor = request.app.state.predictor
+    cfg: APIConfig = request.app.state.cfg
+
     # Validate admin token
     if cfg.admin_token:
         token = ""

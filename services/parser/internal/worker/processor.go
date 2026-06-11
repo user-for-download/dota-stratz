@@ -184,6 +184,10 @@ func (p *Processor) Run(ctx context.Context) {
 					zap.Error(err),
 					zap.Int("batch_size", len(validMatches)))
 				p.processIndividualMatches(ctx, validDeliveries, validMatches)
+				// BUG-010: reset the consecutive failure counter so the
+				// next non-FK error starts fresh instead of inheriting
+				// the previous streak and prematurely escalating to DLQ.
+				p.consecutiveBatchFailures = 0
 				currentBatch = nil
 				continue
 			}

@@ -2,11 +2,16 @@
 
 Models are lazy-loaded per patch ID. The ``Predictor`` class manages
 a cache of loaded LightGBM Boosters and their associated feature schemas.
+
+Thread safety: ``_models`` and ``_schemas`` are guarded by ``_lock``
+(``threading.RLock``) so a concurrent ``/reload`` call cannot race with
+an in-flight ``/predict`` (BUG-001).
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +22,6 @@ from .config import APIConfig
 from .draft_state import DraftContext
 from .features import BatchContext, build_feature_vector, load_schema, pre_fetch_batch
 from .reasoning import generate_reasoning
-from . import db as db_
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +35,7 @@ class Predictor:
         self._schemas: dict[int, dict[str, Any]] = {}
         self._model_dir = Path(cfg.model_dir)
         self._max_hero_id = cfg.max_hero_id
+        self._lock = threading.RLock()
 
     # ------------------------------------------------------------------
     # Model management
@@ -40,10 +45,12 @@ class Predictor:
         return self._model_dir / f"model_patch_{patch_id}.txt"
 
     def is_loaded(self, patch_id: int) -> bool:
-        return patch_id in self._models
+        with self._lock:
+            return patch_id in self._models
 
     def loaded_patches(self) -> list[int]:
-        return sorted(self._models.keys())
+        with self._lock:
+            return sorted(self._models.keys())
 
     def load_model(self, patch_id: int) -> bool:
         """Load model + schema for *patch_id*. Returns True on success."""
@@ -55,8 +62,9 @@ class Predictor:
         try:
             model = lgb.Booster(model_file=str(model_path))
             schema = load_schema(self._model_dir)
-            self._models[patch_id] = model
-            self._schemas[patch_id] = schema
+            with self._lock:
+                self._models[patch_id] = model
+                self._schemas[patch_id] = schema
             logger.info(
                 "Loaded model for patch %s (%d features)",
                 patch_id, schema["n_features"],
@@ -68,14 +76,16 @@ class Predictor:
 
     def unload_model(self, patch_id: int):
         """Remove a model from the cache."""
-        self._models.pop(patch_id, None)
-        self._schemas.pop(patch_id, None)
+        with self._lock:
+            self._models.pop(patch_id, None)
+            self._schemas.pop(patch_id, None)
         logger.info("Unloaded model for patch %s", patch_id)
 
     def reload_all(self):
         """Scan the model directory and load all available models."""
-        self._models.clear()
-        self._schemas.clear()
+        with self._lock:
+            self._models.clear()
+            self._schemas.clear()
         count = 0
         for fpath in sorted(self._model_dir.glob("model_patch_*.txt")):
             try:
@@ -110,31 +120,22 @@ class Predictor:
         reasoning : str or None
             Human-readable explanation for the top hero.
         """
-        # Ensure model is loaded
-        if patch_id not in self._models:
-            loaded = self.load_model(patch_id)
-            if not loaded:
-                raise ValueError(
-                    f"No model available for patch {patch_id}. "
-                    "Run the trainer first (`make train PATCH=<id>`)."
-                )
-
-        # Use .get() instead of direct dict access so a concurrent /reload
-        # endpoint cannot trigger a KeyError by deleting the entry between
-        # the existence check and the read (issue #13).
-        model = self._models.get(patch_id)
-        schema = self._schemas.get(patch_id)
-        if model is None or schema is None:
-            # Re-attempt loading — the model may have been unloaded by a
-            # concurrent /reload call between our initial check and here.
-            loaded = self.load_model(patch_id)
-            if not loaded:
-                raise ValueError(
-                    f"No model available for patch {patch_id}. "
-                    "Run the trainer first (`make train PATCH=<id>`)."
-                )
+        # Atomically load (if missing) and capture references under the lock
+        # so a concurrent /reload cannot produce a None between check and use.
+        with self._lock:
+            if patch_id not in self._models:
+                loaded = self.load_model(patch_id)
+                if not loaded:
+                    raise ValueError(
+                        f"No model available for patch {patch_id}. "
+                        "Run the trainer first (`make train PATCH=<id>`)."
+                    )
             model = self._models[patch_id]
             schema = self._schemas[patch_id]
+
+        # model and schema are now local references — the lock is released.
+        # LightGBM Booster.predict() is read-only after load, so concurrent
+        # threads can use the same Booster safely.
 
         taken_heroes = ctx.all_taken
 
@@ -218,6 +219,7 @@ class Predictor:
             reasoning = self._build_reasoning(
                 top_hero_id, top_score, ctx, patch_id,
                 radiant_team_id, dire_team_id,
+                batch=batch,
             )
 
         return recommendations, reasoning
@@ -230,23 +232,41 @@ class Predictor:
         patch_id: int,
         radiant_team_id: int | None = None,
         dire_team_id: int | None = None,
+        batch: BatchContext | None = None,
     ) -> str | None:
-        """Gather explanation data for the top hero."""
-        team_id = radiant_team_id if ctx.recommending_team == 0 else dire_team_id
-        enemy_team_id = dire_team_id if ctx.recommending_team == 0 else radiant_team_id
+        """Gather explanation data for the top hero.
 
-        # Fetch supporting data for explanation
-        bl = db_.fetch_baseline(patch_id, hero_id)
-        bl_wr = bl["win_rate"] if bl else None
+        Reads from the pre-fetched ``BatchContext`` (passed from ``predict``)
+        instead of making 4 independent DB round-trips (BUG-002, BUG-003).
+        Falls back to database queries if ``batch`` is not provided.
+        """
+        if batch is not None:
+            # Read from pre-fetched batch — zero extra queries (BUG-002).
+            bl = batch.baselines.get(hero_id)
+            bl_wr = bl["win_rate"] if bl else None
 
-        # Team-hero: now threaded through from the caller
-        th = db_.fetch_team_hero_agg(patch_id, team_id, hero_id) if team_id else None
-        th_wr = th["win_rate"] if th else None
+            th = batch.team_hero_agg.get(hero_id)
+            th_wr = th["win_rate"] if th else None
 
-        sy_wr, _ = db_.fetch_synergy_avg(patch_id, hero_id, ctx.ally_picks)
-        co_wr, _ = db_.fetch_counter_avg(patch_id, hero_id, ctx.enemy_picks)
-        h2h_row = None
-        h2h_wr = None
+            sy = batch.synergy.get(hero_id)
+            sy_wr = sy[0] if sy else None
+
+            co = batch.counter.get(hero_id)
+            co_wr = co[0] if co else None
+
+            # BUG-003: h2h_row was fetched in pre_fetch_batch but never read.
+            h2h = batch.h2h_row
+            h2h_wr = h2h["win_rate"] if h2h else None
+        else:
+            # Fallback (should not happen in production).
+            team_id = radiant_team_id if ctx.recommending_team == 0 else dire_team_id
+            bl = db_.fetch_baseline(patch_id, hero_id)
+            bl_wr = bl["win_rate"] if bl else None
+            th = db_.fetch_team_hero_agg(patch_id, team_id, hero_id) if team_id else None
+            th_wr = th["win_rate"] if th else None
+            sy_wr, _ = db_.fetch_synergy_avg(patch_id, hero_id, ctx.ally_picks)
+            co_wr, _ = db_.fetch_counter_avg(patch_id, hero_id, ctx.enemy_picks)
+            h2h_wr = None
 
         return generate_reasoning(
             hero_id=hero_id,
@@ -254,7 +274,7 @@ class Predictor:
             ctx=ctx,
             baseline_win_rate=bl_wr,
             team_hero_win_rate=th_wr,
-            synergy_win_rate=sy_wr if sy_wr != 0.5 else None,
-            counter_win_rate=co_wr if co_wr != 0.5 else None,
+            synergy_win_rate=sy_wr if sy_wr is not None and sy_wr != 0.5 else None,
+            counter_win_rate=co_wr if co_wr is not None and co_wr != 0.5 else None,
             h2h_win_rate=h2h_wr,
         )

@@ -46,11 +46,19 @@ def close_pool():
 
 
 def get_conn() -> Any:
-    """Get a connection from the pool."""
+    """Get a connection from the pool.
+
+    The lock is only held for the pool reference read, NOT during
+    ``getconn()`` (which may block if all connections are in use).
+    Holding the lock during a blocking call would prevent any other
+    thread from returning a connection via ``put_conn``, causing a
+    deadlock when the pool is exhausted (BUG-004).
+    """
     if _pool is None:
         raise RuntimeError("DB pool not initialised")
     with _pool_lock:
-        return _pool.getconn()
+        pool = _pool
+    return pool.getconn()
 
 
 def put_conn(conn):
@@ -154,7 +162,7 @@ def fetch_player_hero_agg_batch(
 
     Returns ``{hero_id: row_dict}`` (or empty dict for missing/unknown account).
     """
-    if not hero_ids or not account_id:
+    if not hero_ids or account_id is None:
         return {}
     conn = get_conn()
     try:
