@@ -411,13 +411,14 @@ class TestPreFetchBatch:
             assert result.team_hero_agg == {}
             mock_db.fetch_team_hero_agg_batch.assert_not_called()
 
-    def test_team_id_zero_no_db_call(self):
-        """❌ team_id=0 → team_hero_agg={}, no db call —
-        REGRESSION BUG-N03 (0 is falsy but not None, should be treated
-        as "not available").
+    def test_team_id_zero_triggers_query(self):
+        """✅ team_id=0 → query IS executed (0 is a valid team_id, not None).
+        REGRESSION BUG-N03: the old `if team_id` falsy check skipped
+        team_id=0; the correct guard is `team_id is not None`.
         """
         with mock.patch("api.features.db_") as mock_db:
             mock_db.fetch_baselines_batch.return_value = {}
+            mock_db.fetch_team_hero_agg_batch.return_value = {}
             result = pre_fetch_batch(
                 patch_id=1,
                 hero_ids=[1, 2],
@@ -426,8 +427,9 @@ class TestPreFetchBatch:
                 ctx=None,
                 account_id=None,
             )
-            assert result.team_hero_agg == {}
-            mock_db.fetch_team_hero_agg_batch.assert_not_called()
+            mock_db.fetch_team_hero_agg_batch.assert_called_once()
+            # Result is {} because the mock returns {}, but the point is
+            # the function was called (not skipped by a falsy check).
 
     def test_account_id_none_returns_empty_player_agg(self):
         """✅ account_id=None → player_hero_agg={}, no db call."""

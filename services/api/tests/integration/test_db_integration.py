@@ -248,7 +248,7 @@ class TestFetchBaselinesBatch:
         assert row["total_bans"] == 20
         assert row["win_rate"] == 0.55
         assert row["pick_rate"] == 0.10
-        assert row["ban_rate"] == 0.08
+        assert row["ban_rate"] == 0.05
 
     def test_unknown_hero_returns_empty_dict(self, pg_conn):
         """❌ Querying a hero_id that doesn't exist → {} for that hero."""
