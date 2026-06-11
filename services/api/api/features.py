@@ -163,7 +163,7 @@ def pre_fetch_batch(
     baselines = db_.fetch_baselines_batch(patch_id, hero_ids) if hero_ids else {}
     team_hero_agg = (
         db_.fetch_team_hero_agg_batch(patch_id, team_id, hero_ids)
-        if team_id and hero_ids
+        if team_id is not None and hero_ids
         else {}
     )
     player_hero_agg = (
@@ -175,7 +175,7 @@ def pre_fetch_batch(
     counter = db_.fetch_counter_batch(patch_id, hero_ids, ctx.enemy_picks) if ctx and hero_ids else {}
     h2h_row = (
         db_.fetch_h2h(patch_id, team_id, enemy_team_id)
-        if team_id and enemy_team_id
+        if team_id is not None and enemy_team_id is not None
         else None
     )
     # Hero draft-slot (pick-position) aggregate — uses the upcoming pick
@@ -237,9 +237,6 @@ def build_feature_vector(
     max_hero_id : int
         Maximum hero ID for one-hot encoding (default 160).
     """
-    cols = schema["columns"]  # authoritative column order
-    n_features_total = schema["n_features"]
-
     # We need the same order as feature_column_names(include_onehot=False)
     # from the trainer. Build a dict keyed by column name.
     vec: dict[str, float] = {}

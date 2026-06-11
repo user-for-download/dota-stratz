@@ -118,7 +118,9 @@ func Run() {
 
 	// BUG-015: create a dedicated limiter so its state is owned by Run()
 	// rather than package-level vars that cause test pollution.
-	sourceFetchLimiter := newSourceFetchLimiter(10 * time.Minute)
+	sourceFetchLimiter := newSourceFetchLimiter(
+		time.Duration(cfg.SourceFetchCooldownMin) * time.Minute,
+	)
 
 	// Bootstrap: load from local file + remote GET source, validate together,
 	// then top-up from the same combined list before considering a re-fetch.

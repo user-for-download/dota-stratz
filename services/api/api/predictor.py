@@ -18,6 +18,7 @@ from typing import Any
 import lightgbm as lgb
 import numpy as np
 
+from . import db as db_
 from .config import APIConfig
 from .draft_state import DraftContext
 from .features import BatchContext, build_feature_vector, load_schema, pre_fetch_batch
@@ -82,18 +83,34 @@ class Predictor:
         logger.info("Unloaded model for patch %s", patch_id)
 
     def reload_all(self):
-        """Scan the model directory and load all available models."""
-        with self._lock:
-            self._models.clear()
-            self._schemas.clear()
+        """Scan the model directory and reload all available models.
+
+        Uses a copy-on-write pattern (BUG-N05): builds the new model/schema
+        dicts in local variables, then atomically swaps them in under the
+        lock.  This avoids exposing an empty ``_models`` dict between the
+        old ``clear()`` and the first ``load_model()``, which would cause
+        live ``/predict`` requests to fail with ``ValueError`` during a
+        full reload.
+        """
+        new_models: dict[int, lgb.Booster] = {}
+        new_schemas: dict[int, dict[str, Any]] = {}
         count = 0
         for fpath in sorted(self._model_dir.glob("model_patch_*.txt")):
             try:
                 pid = int(fpath.stem.replace("model_patch_", ""))
-                if self.load_model(pid):
-                    count += 1
-            except (ValueError, IndexError):
+                model_path = self._model_path(pid)
+                if not model_path.exists():
+                    continue
+                model = lgb.Booster(model_file=str(model_path))
+                schema = load_schema(self._model_dir)
+                new_models[pid] = model
+                new_schemas[pid] = schema
+                count += 1
+            except (ValueError, IndexError, Exception):
                 continue
+        with self._lock:
+            self._models = new_models
+            self._schemas = new_schemas
         logger.info("Loaded %d models from %s", count, self._model_dir)
         return count
 

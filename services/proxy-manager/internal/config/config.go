@@ -25,10 +25,11 @@ type Config struct {
 	Concurrency           int64
 
 	// Refresh & pool
-	RefreshIntervalMin int64
-	RotationStrategy   string
-	PoolMaxSize        int64
-	PoolMinSize        int64
+	RefreshIntervalMin     int64
+	SourceFetchCooldownMin int64
+	RotationStrategy       string
+	PoolMaxSize            int64
+	PoolMinSize            int64
 
 	// Invalidation & leasing
 	SoftFailThreshold      int64
@@ -106,6 +107,15 @@ func Load() (*Config, error) {
 			return nil, err
 		}
 		*p.dst = n
+	}
+
+	// Source fetch cooldown (optional, defaults to 10 min)
+	cfg.SourceFetchCooldownMin = 10
+	if v := os.Getenv("PROXY_SOURCE_FETCH_COOLDOWN_MIN"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err == nil {
+			cfg.SourceFetchCooldownMin = n
+		}
 	}
 
 	// Validate enums / ranges centrally
