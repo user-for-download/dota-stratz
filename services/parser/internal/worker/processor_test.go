@@ -30,8 +30,8 @@ func TestMain(m *testing.M) {
 type fakeAcknowledger struct {
 	mu          sync.Mutex
 	ackCalled   bool
-	nackRequeue bool   // records the `requeue` parameter from the last Nack call
-	nackCalled  bool   // true if Nack was ever called
+	nackRequeue bool // records the `requeue` parameter from the last Nack call
+	nackCalled  bool // true if Nack was ever called
 	ackCount    int
 }
 

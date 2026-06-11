@@ -34,7 +34,7 @@ import (
 // BUG-015: moved from package-level vars (which caused test pollution) to
 // an explicitly constructed struct owned by Run().
 type sourceFetchLimiter struct {
-	mu       sync.Mutex
+	mu        sync.Mutex
 	lastFetch time.Time
 	cooldown  time.Duration
 }
@@ -46,7 +46,6 @@ func newSourceFetchLimiter(cooldown time.Duration) *sourceFetchLimiter {
 // Run starts the proxy-manager service and blocks until SIGINT/SIGTERM.
 func Run() {
 	_ = godotenv.Load("deploy/.env")
-	_ = godotenv.Load(".env")
 
 	logger.InitLogger()
 	defer logger.Sync()

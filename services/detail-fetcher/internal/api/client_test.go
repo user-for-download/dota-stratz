@@ -250,5 +250,3 @@ func TestFetchRaw_BodyTooLarge(t *testing.T) {
 	assert.False(t, pool.released, "Release should NOT be called — Report already handled the proxy")
 	pool.mu.Unlock()
 }
-
-
