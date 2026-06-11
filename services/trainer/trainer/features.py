@@ -83,6 +83,8 @@ TRAINING_FEATURES_SQL = """
         COALESCE(th.firstblood_rate, 0) AS th_firstblood_rate,
         COALESCE(th.avg_camps_stacked, 0) AS th_avg_camps_stacked,
         COALESCE(th.avg_vision_placed, 0) AS th_avg_vision_placed,
+        COALESCE(th.avg_gold_10, 0) AS th_avg_gold_10,
+        COALESCE(th.avg_xp_10, 0) AS th_avg_xp_10,
 
         -- Player-hero aggregate (only for picks — NULL for bans)
         COALESCE(ph.games, 0)       AS ph_games,
@@ -98,6 +100,8 @@ TRAINING_FEATURES_SQL = """
         COALESCE(ph.firstblood_rate, 0) AS ph_firstblood_rate,
         COALESCE(ph.avg_camps_stacked, 0) AS ph_avg_camps_stacked,
         COALESCE(ph.avg_vision_placed, 0) AS ph_avg_vision_placed,
+        COALESCE(ph.avg_gold_10, 0) AS ph_avg_gold_10,
+        COALESCE(ph.avg_xp_10, 0) AS ph_avg_xp_10,
 
         -- Synergy with already-picked allies (uses LEAST/GREATEST for index)
         COALESCE(sy_avg.wr, 0.5)    AS sy_avg_win_rate,
@@ -122,7 +126,21 @@ TRAINING_FEATURES_SQL = """
         COALESCE(bl.avg_xpm, 0)       AS bl_avg_xpm,
         COALESCE(bl.avg_kills, 0)     AS bl_avg_kills,
         COALESCE(bl.avg_deaths, 0)    AS bl_avg_deaths,
-        COALESCE(bl.avg_assists, 0)   AS bl_avg_assists
+        COALESCE(bl.avg_assists, 0)   AS bl_avg_assists,
+        COALESCE(bl.avg_gold_10, 0)   AS bl_avg_gold_10,
+        COALESCE(bl.avg_xp_10, 0)     AS bl_avg_xp_10,
+
+        -- Task 4: Low-game missingness flags
+        CASE WHEN ph.games < 5 THEN 1 ELSE 0 END AS ph_is_new_player,
+        CASE WHEN th.games < 5 THEN 1 ELSE 0 END AS th_is_new_team_hero,
+
+        -- Task 5: Draft-state delta features
+        (COALESCE(th.win_rate, 0.5) - COALESCE(bl.win_rate, 0.5)) AS rel_th_win_rate,
+        (COALESCE(ph.win_rate, 0.5) - COALESCE(bl.win_rate, 0.5)) AS rel_ph_win_rate,
+
+        -- Task 6: Role interaction features
+        CASE WHEN ph.lane_role = 5 THEN COALESCE(ph.avg_vision_placed, 0) ELSE 0 END AS ph_vision_support_score,
+        CASE WHEN ph.lane_role = 1 THEN COALESCE(ph.avg_gpm, 0) ELSE 0 END AS ph_gpm_carry_score
 
     FROM draft_slots ds
 
@@ -195,11 +213,13 @@ def feature_column_names(include_onehot: bool = True, max_hero_id: int = 160) ->
         "th_games", "th_wins", "th_win_rate", "th_bans",
         "th_avg_gpm", "th_avg_xpm", "th_avg_kills", "th_avg_deaths", "th_avg_assists",
         "th_firstblood_rate", "th_avg_camps_stacked", "th_avg_vision_placed",
+        "th_avg_gold_10", "th_avg_xp_10",
         # Player-hero aggregates
         "ph_games", "ph_wins", "ph_win_rate",
         "ph_avg_gpm", "ph_avg_xpm", "ph_avg_kills", "ph_avg_deaths", "ph_avg_assists",
         "ph_avg_kda", "ph_lane_role",
         "ph_firstblood_rate", "ph_avg_camps_stacked", "ph_avg_vision_placed",
+        "ph_avg_gold_10", "ph_avg_xp_10",
         # Synergy
         "sy_avg_win_rate", "sy_n_teammates",
         # Counter
@@ -210,6 +230,16 @@ def feature_column_names(include_onehot: bool = True, max_hero_id: int = 160) ->
         "bl_total_picks", "bl_total_wins", "bl_total_bans",
         "bl_win_rate", "bl_pick_rate", "bl_ban_rate",
         "bl_avg_gpm", "bl_avg_xpm", "bl_avg_kills", "bl_avg_deaths", "bl_avg_assists",
+        "bl_avg_gold_10", "bl_avg_xp_10",
+        # Task 4: Low-game flags
+        "ph_is_new_player",
+        "th_is_new_team_hero",
+        # Task 5: Delta features
+        "rel_th_win_rate",
+        "rel_ph_win_rate",
+        # Task 6: Role interactions
+        "ph_vision_support_score",
+        "ph_gpm_carry_score",
     ]
     if include_onehot:
         cols.extend(f"oh_hero_{i}" for i in range(1, max_hero_id + 1))

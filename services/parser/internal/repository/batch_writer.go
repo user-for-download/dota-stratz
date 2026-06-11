@@ -155,6 +155,8 @@ func (r *Repository) WriteBatch(ctx context.Context, matches []models.OpenDotaMa
 			if err := writeNeutralItemHistory(batch, m.MatchID, p.PlayerSlot, p.NeutralItemHistory); err != nil {
 				return fmt.Errorf("match %d player %d neutral_item_history: %w", m.MatchID, p.PlayerSlot, err)
 			}
+			// 2f. Minute-by-minute gold/XP arrays (JSONB, minute=0 sentinel)
+			writeMinuteStats(batch, m.MatchID, p.PlayerSlot, p.GoldT, p.XPT)
 		}
 
 		// 3. Picks/Bans

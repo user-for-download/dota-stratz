@@ -212,8 +212,10 @@ type Player struct {
 	LeaverStatus int `json:"leaver_status"`
 	LastHits     int `json:"last_hits"`
 	Denies       int `json:"denies"`
-	GoldPerMin   int `json:"gold_per_min"`
-	XpPerMin     int `json:"xp_per_min"`
+	GoldPerMin   int       `json:"gold_per_min"`
+	XpPerMin     int       `json:"xp_per_min"`
+	GoldT        []float64 `json:"gold_t"` // Minute-by-minute gold array
+	XPT          []float64 `json:"xp_t"`   // Minute-by-minute XP array
 	Level        int `json:"level"`
 	NetWorth     int `json:"net_worth"`
 	Gold         int `json:"gold"`

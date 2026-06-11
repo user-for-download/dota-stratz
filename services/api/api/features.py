@@ -47,6 +47,8 @@ _FLOAT_DEFAULTS: dict[str, float] = {
     "firstblood_rate": 0.0,
     "avg_camps_stacked": 0.0,
     "avg_vision_placed": 0.0,
+    "avg_gold_10": 0.0,
+    "avg_xp_10": 0.0,
 }
 
 _INT_DEFAULTS: dict[str, int] = {
@@ -243,6 +245,8 @@ def build_feature_vector(
     vec["th_firstblood_rate"] = _float(th.get("firstblood_rate") if th else None, "firstblood_rate")
     vec["th_avg_camps_stacked"] = _float(th.get("avg_camps_stacked") if th else None, "avg_camps_stacked")
     vec["th_avg_vision_placed"] = _float(th.get("avg_vision_placed") if th else None, "avg_vision_placed")
+    vec["th_avg_gold_10"] = _float(th.get("avg_gold_10") if th else None, "avg_gold_10")
+    vec["th_avg_xp_10"] = _float(th.get("avg_xp_10") if th else None, "avg_xp_10")
 
     # -- Player-hero aggregates (from pre-fetched batch dict) --
     # Falls back to hardcoded defaults when account_id is unavailable
@@ -262,6 +266,8 @@ def build_feature_vector(
     vec["ph_firstblood_rate"] = _float(ph.get("firstblood_rate") if ph else None, "firstblood_rate")
     vec["ph_avg_camps_stacked"] = _float(ph.get("avg_camps_stacked") if ph else None, "avg_camps_stacked")
     vec["ph_avg_vision_placed"] = _float(ph.get("avg_vision_placed") if ph else None, "avg_vision_placed")
+    vec["ph_avg_gold_10"] = _float(ph.get("avg_gold_10") if ph else None, "avg_gold_10")
+    vec["ph_avg_xp_10"] = _float(ph.get("avg_xp_10") if ph else None, "avg_xp_10")
 
     # -- Synergy with allies (from pre-fetched batch dict) --
     sy = batch.synergy.get(hero_id)
@@ -291,6 +297,28 @@ def build_feature_vector(
     vec["bl_avg_kills"] = _float(bl.get("avg_kills") if bl else None, "avg_kills")
     vec["bl_avg_deaths"] = _float(bl.get("avg_deaths") if bl else None, "avg_deaths")
     vec["bl_avg_assists"] = _float(bl.get("avg_assists") if bl else None, "avg_assists")
+    vec["bl_avg_gold_10"] = _float(bl.get("avg_gold_10") if bl else None, "avg_gold_10")
+    vec["bl_avg_xp_10"] = _float(bl.get("avg_xp_10") if bl else None, "avg_xp_10")
+
+    # -- Task 4: Low-game missingness flags --
+    ph_games_val = vec.get("ph_games", 0.0)
+    th_games_val = vec.get("th_games", 0.0)
+    vec["ph_is_new_player"] = 1.0 if ph_games_val < 5 else 0.0
+    vec["th_is_new_team_hero"] = 1.0 if th_games_val < 5 else 0.0
+
+    # -- Task 5: Draft-state delta features --
+    bl_wr = vec.get("bl_win_rate", 0.5)
+    th_wr = vec.get("th_win_rate", 0.5)
+    ph_wr = vec.get("ph_win_rate", 0.5)
+    vec["rel_th_win_rate"] = th_wr - bl_wr
+    vec["rel_ph_win_rate"] = ph_wr - bl_wr
+
+    # -- Task 6: Role interaction features --
+    ph_lane_role_val = vec.get("ph_lane_role", 0.0)
+    ph_vision_val = vec.get("ph_avg_vision_placed", 0.0)
+    ph_gpm_val = vec.get("ph_avg_gpm", 0.0)
+    vec["ph_vision_support_score"] = ph_vision_val if ph_lane_role_val == 5 else 0.0
+    vec["ph_gpm_carry_score"] = ph_gpm_val if ph_lane_role_val == 1 else 0.0
 
     # Build numeric array in the exact column order from the schema
     numeric_values = []

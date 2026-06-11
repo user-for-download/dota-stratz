@@ -36,7 +36,7 @@ def _batched(rows: list[tuple], batch_size: int):
 # ---------------------------------------------------------------------------
 
 POPULATE_TEAM_HERO = """
-    INSERT INTO ml.team_hero_agg (patch_id, team_id, hero_id, games, wins, bans, win_rate, avg_gpm, avg_xpm, avg_kills, avg_deaths, avg_assists, firstblood_rate, avg_camps_stacked, avg_vision_placed, last_played)
+    INSERT INTO ml.team_hero_agg (patch_id, team_id, hero_id, games, wins, bans, win_rate, avg_gpm, avg_xpm, avg_kills, avg_deaths, avg_assists, firstblood_rate, avg_camps_stacked, avg_vision_placed, avg_gold_10, avg_xp_10, last_played)
     VALUES %s
     ON CONFLICT (patch_id, team_id, hero_id) DO UPDATE SET
         games      = EXCLUDED.games,
@@ -51,6 +51,8 @@ POPULATE_TEAM_HERO = """
         firstblood_rate   = EXCLUDED.firstblood_rate,
         avg_camps_stacked = EXCLUDED.avg_camps_stacked,
         avg_vision_placed = EXCLUDED.avg_vision_placed,
+        avg_gold_10       = EXCLUDED.avg_gold_10,
+        avg_xp_10         = EXCLUDED.avg_xp_10,
         last_played= EXCLUDED.last_played;
 """
 
@@ -76,9 +78,29 @@ def populate_team_hero(cfg: TrainerConfig, conn) -> int:
                 AVG(p.firstblood_claimed)::FLOAT                    AS firstblood_rate,
                 AVG(p.camps_stacked)::FLOAT                         AS avg_camps_stacked,
                 AVG(p.obs_placed + p.sen_placed)::FLOAT             AS avg_vision_placed,
+                COALESCE(AVG(gold10.avg_gold_10)::FLOAT, 0)        AS avg_gold_10,
+                COALESCE(AVG(xp10.avg_xp_10)::FLOAT, 0)            AS avg_xp_10,
                 MAX(m.start_time)                                   AS last_played
             FROM matches m
             INNER JOIN players p ON p.match_id = m.match_id
+            LEFT JOIN LATERAL (
+                SELECT AVG(arr.elem::numeric) AS avg_gold_10
+                FROM player_minute_stats pms,
+                LATERAL jsonb_array_elements_text(pms.gold_t) WITH ORDINALITY AS arr(elem, pos)
+                WHERE pms.match_id = m.match_id
+                  AND pms.player_slot = p.player_slot
+                  AND pms.minute = 0
+                  AND pos <= 10
+            ) gold10 ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT AVG(arr.elem::numeric) AS avg_xp_10
+                FROM player_minute_stats pms,
+                LATERAL jsonb_array_elements_text(pms.xp_t) WITH ORDINALITY AS arr(elem, pos)
+                WHERE pms.match_id = m.match_id
+                  AND pms.player_slot = p.player_slot
+                  AND pms.minute = 0
+                  AND pos <= 10
+            ) xp10 ON TRUE
             WHERE m.patch = %s
               AND m.radiant_win IS NOT NULL
               AND CASE WHEN p.is_radiant THEN m.radiant_team_id ELSE m.dire_team_id END IS NOT NULL
@@ -87,11 +109,11 @@ def populate_team_hero(cfg: TrainerConfig, conn) -> int:
         """, (patch_id,))
         rows: list[tuple[Any, ...]] = []
         for r in cur.fetchall():
-            team_id, hero_id, games, wins, bans_, ag, ax, ak, ad, aa, fbr, acs, avp, lp = r
+            team_id, hero_id, games, wins, bans_, ag, ax, ak, ad, aa, fbr, acs, avp, ag10, ax10, lp = r
             rows.append((
                 patch_id, team_id, hero_id, games, wins, 0,
                 _shrunk_wr(wins, games, pg, pw), ag, ax, ak, ad, aa,
-                fbr, acs, avp, lp,
+                fbr, acs, avp, ag10, ax10, lp,
             ))
 
     # Write in batches
@@ -110,7 +132,7 @@ def populate_team_hero(cfg: TrainerConfig, conn) -> int:
 # ---------------------------------------------------------------------------
 
 POPULATE_PLAYER_HERO = """
-    INSERT INTO ml.player_hero_agg (patch_id, account_id, hero_id, games, wins, win_rate, avg_gpm, avg_xpm, avg_kills, avg_deaths, avg_assists, avg_kda, lane_role, firstblood_rate, avg_camps_stacked, avg_vision_placed, last_played)
+    INSERT INTO ml.player_hero_agg (patch_id, account_id, hero_id, games, wins, win_rate, avg_gpm, avg_xpm, avg_kills, avg_deaths, avg_assists, avg_kda, lane_role, firstblood_rate, avg_camps_stacked, avg_vision_placed, avg_gold_10, avg_xp_10, last_played)
     VALUES %s
     ON CONFLICT (patch_id, account_id, hero_id) DO UPDATE SET
         games       = EXCLUDED.games,
@@ -126,6 +148,8 @@ POPULATE_PLAYER_HERO = """
         firstblood_rate   = EXCLUDED.firstblood_rate,
         avg_camps_stacked = EXCLUDED.avg_camps_stacked,
         avg_vision_placed = EXCLUDED.avg_vision_placed,
+        avg_gold_10       = EXCLUDED.avg_gold_10,
+        avg_xp_10         = EXCLUDED.avg_xp_10,
         last_played = EXCLUDED.last_played;
 """
 
@@ -151,9 +175,29 @@ def populate_player_hero(cfg: TrainerConfig, conn) -> int:
                 AVG(p.firstblood_claimed)::FLOAT            AS firstblood_rate,
                 AVG(p.camps_stacked)::FLOAT                 AS avg_camps_stacked,
                 AVG(p.obs_placed + p.sen_placed)::FLOAT     AS avg_vision_placed,
+                COALESCE(AVG(gold10.avg_gold_10)::FLOAT, 0) AS avg_gold_10,
+                COALESCE(AVG(xp10.avg_xp_10)::FLOAT, 0)     AS avg_xp_10,
                 MAX(m.start_time)                           AS last_played
             FROM matches m
             INNER JOIN players p ON p.match_id = m.match_id
+            LEFT JOIN LATERAL (
+                SELECT AVG(arr.elem::numeric) AS avg_gold_10
+                FROM player_minute_stats pms,
+                LATERAL jsonb_array_elements_text(pms.gold_t) WITH ORDINALITY AS arr(elem, pos)
+                WHERE pms.match_id = m.match_id
+                  AND pms.player_slot = p.player_slot
+                  AND pms.minute = 0
+                  AND pos <= 10
+            ) gold10 ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT AVG(arr.elem::numeric) AS avg_xp_10
+                FROM player_minute_stats pms,
+                LATERAL jsonb_array_elements_text(pms.xp_t) WITH ORDINALITY AS arr(elem, pos)
+                WHERE pms.match_id = m.match_id
+                  AND pms.player_slot = p.player_slot
+                  AND pms.minute = 0
+                  AND pos <= 10
+            ) xp10 ON TRUE
             WHERE m.patch = %s
               AND m.radiant_win IS NOT NULL
               AND p.account_id IS NOT NULL
@@ -162,10 +206,10 @@ def populate_player_hero(cfg: TrainerConfig, conn) -> int:
         """, (patch_id,))
         rows = []
         for r in cur.fetchall():
-            aid, hid, games, wins, ag, ax, ak, ad, aa, akda, lr, fbr, acs, avp, lp = r
+            aid, hid, games, wins, ag, ax, ak, ad, aa, akda, lr, fbr, acs, avp, ag10, ax10, lp = r
             rows.append((
                 patch_id, aid, hid, games, wins, _shrunk_wr(wins, games, pg, pw),
-                ag, ax, ak, ad, aa, akda, lr, fbr, acs, avp, lp,
+                ag, ax, ak, ad, aa, akda, lr, fbr, acs, avp, ag10, ax10, lp,
             ))
 
     total = 0
@@ -349,7 +393,7 @@ def populate_h2h(cfg: TrainerConfig, conn) -> int:
 # ---------------------------------------------------------------------------
 
 POPULATE_BASELINE = """
-    INSERT INTO ml.hero_baseline_agg (patch_id, hero_id, total_picks, total_wins, total_bans, win_rate, pick_rate, ban_rate, avg_gpm, avg_xpm, avg_kills, avg_deaths, avg_assists)
+    INSERT INTO ml.hero_baseline_agg (patch_id, hero_id, total_picks, total_wins, total_bans, win_rate, pick_rate, ban_rate, avg_gpm, avg_xpm, avg_kills, avg_deaths, avg_assists, avg_gold_10, avg_xp_10)
     VALUES %s
     ON CONFLICT (patch_id, hero_id) DO UPDATE SET
         total_picks  = EXCLUDED.total_picks,
@@ -362,7 +406,9 @@ POPULATE_BASELINE = """
         avg_xpm      = EXCLUDED.avg_xpm,
         avg_kills    = EXCLUDED.avg_kills,
         avg_deaths   = EXCLUDED.avg_deaths,
-        avg_assists  = EXCLUDED.avg_assists;
+        avg_assists  = EXCLUDED.avg_assists,
+        avg_gold_10  = EXCLUDED.avg_gold_10,
+        avg_xp_10    = EXCLUDED.avg_xp_10;
 """
 
 
@@ -381,9 +427,29 @@ def populate_baseline(cfg: TrainerConfig, conn) -> int:
                     AVG(p.xp_per_min)::FLOAT                    AS avg_xpm,
                     AVG(p.kills)::FLOAT                         AS avg_kills,
                     AVG(p.deaths)::FLOAT                        AS avg_deaths,
-                    AVG(p.assists)::FLOAT                       AS avg_assists
+                    AVG(p.assists)::FLOAT                       AS avg_assists,
+                    COALESCE(AVG(gold10.avg_gold_10)::FLOAT, 0) AS avg_gold_10,
+                    COALESCE(AVG(xp10.avg_xp_10)::FLOAT, 0)     AS avg_xp_10
                 FROM matches m
                 INNER JOIN players p ON p.match_id = m.match_id
+                LEFT JOIN LATERAL (
+                    SELECT AVG(arr.elem::numeric) AS avg_gold_10
+                    FROM player_minute_stats pms,
+                    LATERAL jsonb_array_elements_text(pms.gold_t) WITH ORDINALITY AS arr(elem, pos)
+                    WHERE pms.match_id = m.match_id
+                      AND pms.player_slot = p.player_slot
+                      AND pms.minute = 0
+                      AND pos <= 10
+                ) gold10 ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT AVG(arr.elem::numeric) AS avg_xp_10
+                    FROM player_minute_stats pms,
+                    LATERAL jsonb_array_elements_text(pms.xp_t) WITH ORDINALITY AS arr(elem, pos)
+                    WHERE pms.match_id = m.match_id
+                      AND pms.player_slot = p.player_slot
+                      AND pms.minute = 0
+                      AND pos <= 10
+                ) xp10 ON TRUE
                 WHERE m.patch = %s
                   AND m.radiant_win IS NOT NULL
                 GROUP BY p.hero_id
@@ -405,6 +471,7 @@ def populate_baseline(cfg: TrainerConfig, conn) -> int:
                 COALESCE(p.total_wins, 0)      AS total_wins,
                 COALESCE(b.total_bans, 0)      AS total_bans,
                 p.avg_gpm, p.avg_xpm, p.avg_kills, p.avg_deaths, p.avg_assists,
+                p.avg_gold_10, p.avg_xp_10,
                 tm.total
             FROM hero_picks p
             FULL OUTER JOIN hero_bans b ON b.hero_id = p.hero_id
@@ -413,13 +480,13 @@ def populate_baseline(cfg: TrainerConfig, conn) -> int:
         """, (patch_id, patch_id, patch_id))
         rows = []
         for r in cur.fetchall():
-            hid, picks, wins, bans, ag, ax, ak, ad, aa, tot = r
+            hid, picks, wins, bans, ag, ax, ak, ad, aa, ag10, ax10, tot = r
             pick_rate = picks / tot if tot > 0 else 0.0
             ban_rate  = bans / tot if tot > 0 else 0.0
             rows.append((
                 patch_id, hid, picks, wins, bans,
                 _shrunk_wr(wins, picks, pg, pw),
-                pick_rate, ban_rate, ag, ax, ak, ad, aa,
+                pick_rate, ban_rate, ag, ax, ak, ad, aa, ag10, ax10,
             ))
 
     total = 0

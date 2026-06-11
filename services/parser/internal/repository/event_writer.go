@@ -153,6 +153,27 @@ func writeObsLeftLog(batch *pgx.Batch, matchID int64, playerSlot int, raw json.R
 // order (e.g. [5625, 5625, 5108]) — NOT as a list of {time, ability}
 // objects (Issue #33). We decode as []int and use the array index as the
 // upgrade order.
+// writeMinuteStats queues an INSERT for the minute-by-minute gold/XP arrays.
+// The JSONB arrays (gold_t, xp_t) are stored with minute=0 as a sentinel
+// because player_minute_stats has a 3-column PK (match_id, player_slot, minute).
+// Each player gets exactly one JSONB row. Uses ON CONFLICT DO UPDATE so
+// backfilled matches patch the missing data in.
+func writeMinuteStats(batch *pgx.Batch, matchID int64, playerSlot int, goldT, xpT []float64) {
+	if len(goldT) == 0 && len(xpT) == 0 {
+		return
+	}
+	goldJSON, _ := json.Marshal(goldT)
+	xpJSON, _ := json.Marshal(xpT)
+	batch.Queue(`
+		INSERT INTO player_minute_stats (match_id, player_slot, minute, gold_t, xp_t)
+		VALUES ($1, $2, 0, $3, $4)
+		ON CONFLICT (match_id, player_slot, minute) DO UPDATE SET
+			gold_t = EXCLUDED.gold_t,
+			xp_t = EXCLUDED.xp_t`,
+		matchID, playerSlot, goldJSON, xpJSON,
+	)
+}
+
 func writeAbilityUpgrades(batch *pgx.Batch, matchID int64, playerSlot int, raw json.RawMessage) error {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil

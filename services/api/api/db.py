@@ -97,7 +97,8 @@ def fetch_team_hero_agg_batch(patch_id: int, team_id: int, hero_ids: list[int]) 
             cur.execute(
                 """SELECT hero_id, games, wins, win_rate, bans, avg_gpm, avg_xpm,
                           avg_kills, avg_deaths, avg_assists,
-                          firstblood_rate, avg_camps_stacked, avg_vision_placed
+                          firstblood_rate, avg_camps_stacked, avg_vision_placed,
+                          avg_gold_10, avg_xp_10
                    FROM ml.team_hero_agg
                    WHERE patch_id = %s AND team_id = %s AND hero_id = ANY(%s)""",
                 (patch_id, team_id, hero_ids),
@@ -109,6 +110,7 @@ def fetch_team_hero_agg_batch(patch_id: int, team_id: int, hero_ids: list[int]) 
                     "bans": row[4], "avg_gpm": row[5], "avg_xpm": row[6],
                     "avg_kills": row[7], "avg_deaths": row[8], "avg_assists": row[9],
                     "firstblood_rate": row[10], "avg_camps_stacked": row[11], "avg_vision_placed": row[12],
+                    "avg_gold_10": row[13], "avg_xp_10": row[14],
                 }
             return result
     finally:
@@ -123,7 +125,8 @@ def fetch_team_hero_agg(patch_id: int, team_id: int, hero_id: int) -> dict | Non
             cur.execute(
                 """SELECT games, wins, win_rate, bans, avg_gpm, avg_xpm,
                           avg_kills, avg_deaths, avg_assists,
-                          firstblood_rate, avg_camps_stacked, avg_vision_placed
+                          firstblood_rate, avg_camps_stacked, avg_vision_placed,
+                          avg_gold_10, avg_xp_10
                    FROM ml.team_hero_agg
                    WHERE patch_id = %s AND team_id = %s AND hero_id = %s""",
                 (patch_id, team_id, hero_id),
@@ -136,6 +139,7 @@ def fetch_team_hero_agg(patch_id: int, team_id: int, hero_id: int) -> dict | Non
                 "bans": row[3], "avg_gpm": row[4], "avg_xpm": row[5],
                 "avg_kills": row[6], "avg_deaths": row[7], "avg_assists": row[8],
                 "firstblood_rate": row[9], "avg_camps_stacked": row[10], "avg_vision_placed": row[11],
+                "avg_gold_10": row[12], "avg_xp_10": row[13],
             }
     finally:
         put_conn(conn)
@@ -158,7 +162,8 @@ def fetch_player_hero_agg_batch(
             cur.execute(
                 """SELECT hero_id, games, wins, win_rate, avg_gpm, avg_xpm,
                           avg_kills, avg_deaths, avg_assists, avg_kda, lane_role,
-                          firstblood_rate, avg_camps_stacked, avg_vision_placed
+                          firstblood_rate, avg_camps_stacked, avg_vision_placed,
+                          avg_gold_10, avg_xp_10
                    FROM ml.player_hero_agg
                    WHERE patch_id = %s AND account_id = %s AND hero_id = ANY(%s)""",
                 (patch_id, account_id, hero_ids),
@@ -171,6 +176,7 @@ def fetch_player_hero_agg_batch(
                     "avg_kills": row[6], "avg_deaths": row[7], "avg_assists": row[8],
                     "avg_kda": row[9], "lane_role": row[10],
                     "firstblood_rate": row[11], "avg_camps_stacked": row[12], "avg_vision_placed": row[13],
+                    "avg_gold_10": row[14], "avg_xp_10": row[15],
                 }
             return result
     finally:
@@ -184,7 +190,8 @@ def fetch_player_hero_agg(patch_id: int, account_id: int, hero_id: int) -> dict 
             cur.execute(
                 """SELECT games, wins, win_rate, avg_gpm, avg_xpm,
                           avg_kills, avg_deaths, avg_assists, avg_kda, lane_role,
-                          firstblood_rate, avg_camps_stacked, avg_vision_placed
+                          firstblood_rate, avg_camps_stacked, avg_vision_placed,
+                          avg_gold_10, avg_xp_10
                    FROM ml.player_hero_agg
                    WHERE patch_id = %s AND account_id = %s AND hero_id = %s""",
                 (patch_id, account_id, hero_id),
@@ -198,6 +205,7 @@ def fetch_player_hero_agg(patch_id: int, account_id: int, hero_id: int) -> dict 
                 "avg_kills": row[5], "avg_deaths": row[6], "avg_assists": row[7],
                 "avg_kda": row[8], "lane_role": row[9],
                 "firstblood_rate": row[10], "avg_camps_stacked": row[11], "avg_vision_placed": row[12],
+                "avg_gold_10": row[13], "avg_xp_10": row[14],
             }
     finally:
         put_conn(conn)
@@ -283,7 +291,8 @@ def fetch_baselines_batch(patch_id: int, hero_ids: list[int]) -> dict[int, dict]
             cur.execute(
                 """SELECT hero_id, total_picks, total_wins, total_bans, win_rate,
                           pick_rate, ban_rate, avg_gpm, avg_xpm,
-                          avg_kills, avg_deaths, avg_assists
+                          avg_kills, avg_deaths, avg_assists,
+                          avg_gold_10, avg_xp_10
                    FROM ml.hero_baseline_agg
                    WHERE patch_id = %s AND hero_id = ANY(%s)""",
                 (patch_id, hero_ids),
@@ -295,6 +304,7 @@ def fetch_baselines_batch(patch_id: int, hero_ids: list[int]) -> dict[int, dict]
                     "win_rate": row[4], "pick_rate": row[5], "ban_rate": row[6],
                     "avg_gpm": row[7], "avg_xpm": row[8],
                     "avg_kills": row[9], "avg_deaths": row[10], "avg_assists": row[11],
+                    "avg_gold_10": row[12], "avg_xp_10": row[13],
                 }
             return result
     finally:
@@ -309,7 +319,8 @@ def fetch_baseline(patch_id: int, hero_id: int) -> dict | None:
             cur.execute(
                 """SELECT total_picks, total_wins, total_bans, win_rate,
                           pick_rate, ban_rate, avg_gpm, avg_xpm,
-                          avg_kills, avg_deaths, avg_assists
+                          avg_kills, avg_deaths, avg_assists,
+                          avg_gold_10, avg_xp_10
                    FROM ml.hero_baseline_agg
                    WHERE patch_id = %s AND hero_id = %s""",
                 (patch_id, hero_id),
@@ -322,6 +333,7 @@ def fetch_baseline(patch_id: int, hero_id: int) -> dict | None:
                 "win_rate": row[3], "pick_rate": row[4], "ban_rate": row[5],
                 "avg_gpm": row[6], "avg_xpm": row[7],
                 "avg_kills": row[8], "avg_deaths": row[9], "avg_assists": row[10],
+                "avg_gold_10": row[11], "avg_xp_10": row[12],
             }
     finally:
         put_conn(conn)
