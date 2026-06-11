@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 #   co_  — counter (hero vs enemy hero)
 #   h2h_ — head-to-head (team vs team)
 #   bl_  — hero baseline (global, all teams)
+#   hds_ — hero draft-slot (pick-position) win rate
 #   oh_  — one-hot encoded hero ID (sparse indicator)
 
 # ---------------------------------------------------------------------------
@@ -51,7 +52,15 @@ TRAINING_FEATURES_SQL = """
             m.radiant_win,
             m.patch AS patch_id,
             p.account_id,
-            p.player_slot
+            p.player_slot,
+            -- Per-team pick ordinal (NULL for bans) — used to join
+            -- ml.hero_draft_slot_agg for pick-position win rate.
+            CASE WHEN pb.is_pick THEN
+                ROW_NUMBER() OVER (
+                    PARTITION BY pb.match_id, pb.team, pb.is_pick
+                    ORDER BY pb."order"
+                )
+            END AS team_pick_ordinal
         FROM picks_bans pb
         INNER JOIN matches m ON pb.match_id = m.match_id
         LEFT JOIN players p
@@ -131,6 +140,10 @@ TRAINING_FEATURES_SQL = """
         COALESCE(bl.avg_gold_10, 0)   AS bl_avg_gold_10,
         COALESCE(bl.avg_xp_10, 0)     AS bl_avg_xp_10,
 
+        -- Hero draft-slot (pick-position) win rate
+        COALESCE(hds.win_rate, 0.5) AS hds_win_rate,
+        COALESCE(hds.games, 0)      AS hds_games,
+
         -- Low-game missingness flags
         CASE WHEN COALESCE(ph.games, 0) < 5 THEN 1 ELSE 0 END AS ph_is_new_player,
         CASE WHEN COALESCE(th.games, 0) < 5 THEN 1 ELSE 0 END AS th_is_new_team_hero,
@@ -200,6 +213,13 @@ TRAINING_FEATURES_SQL = """
         ON bl.hero_id = ds.hero_id
        AND bl.patch_id = ds.patch_id
 
+    -- Hero draft-slot (pick-position) aggregate
+    -- NULL team_pick_ordinal for bans → join misses → COALESCE gives defaults.
+    LEFT JOIN ml.hero_draft_slot_agg hds
+        ON hds.hero_id = ds.hero_id
+       AND hds.team_pick_ordinal = ds.team_pick_ordinal
+       AND hds.patch_id = ds.patch_id
+
     ORDER BY ds.match_id, ds."order"
 """
 
@@ -234,6 +254,8 @@ def feature_column_names(include_onehot: bool = True, max_hero_id: int = 160) ->
         "bl_win_rate", "bl_pick_rate", "bl_ban_rate",
         "bl_avg_gpm", "bl_avg_xpm", "bl_avg_kills", "bl_avg_deaths", "bl_avg_assists",
         "bl_avg_gold_10", "bl_avg_xp_10",
+        # Hero draft-slot (pick-position) win rate
+        "hds_win_rate", "hds_games",
         # Task 4: Low-game flags
         "ph_is_new_player",
         "th_is_new_team_hero",

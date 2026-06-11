@@ -49,6 +49,8 @@ _FLOAT_DEFAULTS: dict[str, float] = {
     "avg_vision_placed": 0.0,
     "avg_gold_10": 0.0,
     "avg_xp_10": 0.0,
+    "hds_win_rate": 0.5,
+    "hds_games": 0,
 }
 
 _INT_DEFAULTS: dict[str, int] = {
@@ -113,8 +115,8 @@ class BatchContext:
 
     Storing these in a single dataclass avoids N+1 query patterns: instead
     of making per-hero round-trips for baseline, team-hero, synergy,
-    counter, and h2h data, we fetch them all in 5 queries and distribute
-    the results here.
+    counter, h2h, and draft-slot data, we fetch them all in 7 queries and
+    distribute the results here.
     """
 
     baselines: dict[int, dict]
@@ -137,6 +139,10 @@ class BatchContext:
     h2h_row: dict | None
     """Single head-to-head row for the team pair (same for all heroes)."""
 
+    hero_draft_slot: dict[int, tuple[float, int]]
+    """hero_id → (hds_win_rate, hds_games) — pick-position win rate for the
+    current team_pick_ordinal. Falls back to ``(0.5, 0)`` per-hero."""
+
 
 def pre_fetch_batch(
     patch_id: int,
@@ -146,12 +152,13 @@ def pre_fetch_batch(
     ctx: DraftContext | None = None,
     account_id: int | None = None,
 ) -> BatchContext:
-    """Pre-fetch all per-hero aggregate data in bulk (6 queries total).
+    """Pre-fetch all per-hero aggregate data in bulk (7 queries total).
 
     This replaces hundreds of individual ``fetch_baseline``,
     ``fetch_team_hero_agg``, ``fetch_player_hero_agg``,
     ``fetch_synergy_avg``, ``fetch_counter_avg``,
-    and ``fetch_h2h`` calls with 6 batched queries.
+    ``fetch_h2h``, and ``fetch_hero_draft_slot_batch`` calls
+    with 7 batched queries.
     """
     baselines = db_.fetch_baselines_batch(patch_id, hero_ids) if hero_ids else {}
     team_hero_agg = (
@@ -171,6 +178,15 @@ def pre_fetch_batch(
         if team_id and enemy_team_id
         else None
     )
+    # Hero draft-slot (pick-position) aggregate — uses the upcoming pick
+    # ordinal for the recommending team (e.g. if team has 2 picks already,
+    # the next pick is ordinal 3).
+    team_pick_ordinal = len(ctx.ally_picks) + 1 if ctx else 1
+    hero_draft_slot = (
+        db_.fetch_hero_draft_slot_batch(patch_id, hero_ids, team_pick_ordinal)
+        if hero_ids
+        else {}
+    )
     return BatchContext(
         baselines=baselines,
         team_hero_agg=team_hero_agg,
@@ -178,6 +194,7 @@ def pre_fetch_batch(
         synergy=synergy,
         counter=counter,
         h2h_row=h2h_row,
+        hero_draft_slot=hero_draft_slot,
     )
 
 
@@ -283,6 +300,11 @@ def build_feature_vector(
     h2h = batch.h2h_row
     vec["h2h_win_rate"] = _float(h2h.get("win_rate") if h2h else None, "win_rate")
     vec["h2h_games"] = _float(h2h.get("games") if h2h else None, "games")
+
+    # -- Hero draft-slot (pick-position) win rate --
+    hds = batch.hero_draft_slot.get(hero_id)
+    vec["hds_win_rate"] = _float(hds[0] if hds else None, "hds_win_rate")
+    vec["hds_games"] = _float(hds[1] if hds else None, "hds_games")
 
     # -- Hero baseline (from pre-fetched batch dict) --
     bl = batch.baselines.get(hero_id)

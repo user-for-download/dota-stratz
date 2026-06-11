@@ -507,21 +507,91 @@ def populate_baseline(cfg: TrainerConfig, conn) -> int:
 
 
 # ---------------------------------------------------------------------------
+# 7. ml.hero_draft_slot_agg
+# ---------------------------------------------------------------------------
+
+POPULATE_HERO_DRAFT_SLOT = """
+    INSERT INTO ml.hero_draft_slot_agg (patch_id, hero_id, team_pick_ordinal, games, wins, win_rate)
+    VALUES %s
+    ON CONFLICT (patch_id, hero_id, team_pick_ordinal) DO UPDATE SET
+        games    = EXCLUDED.games,
+        wins     = EXCLUDED.wins,
+        win_rate = EXCLUDED.win_rate;
+"""
+
+
+def populate_hero_draft_slot(cfg: TrainerConfig, conn) -> int:
+    """Populate ml.hero_draft_slot_agg for *patch_id*.
+
+    Computes the pick position (1st/2nd/3rd/4th/5th) within each team and
+    aggregates win/loss outcome for each (hero, team_pick_ordinal) bucket.
+    """
+    patch_id = cfg.patch_id
+    pg = cfg.prior_games
+    pw = cfg.prior_win_rate
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT
+                ds.hero_id,
+                ds.team_pick_ordinal,
+                COUNT(*) AS games,
+                SUM(CASE WHEN ds.won THEN 1 ELSE 0 END) AS wins
+            FROM (
+                SELECT
+                    pb.match_id,
+                    pb.hero_id,
+                    pb.team,
+                    pb."order",
+                    pb.is_pick,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY pb.match_id, pb.team, pb.is_pick
+                        ORDER BY pb."order"
+                    ) AS team_pick_ordinal,
+                    CASE
+                        WHEN (pb.team = 0 AND m.radiant_win) OR (pb.team = 1 AND NOT m.radiant_win)
+                        THEN TRUE ELSE FALSE
+                    END AS won
+                FROM picks_bans pb
+                INNER JOIN matches m ON m.match_id = pb.match_id
+                WHERE m.patch = %s
+                  AND m.radiant_win IS NOT NULL
+                  AND pb.is_pick = TRUE
+            ) ds
+            GROUP BY ds.hero_id, ds.team_pick_ordinal
+            ORDER BY ds.hero_id, ds.team_pick_ordinal
+        """, (patch_id,))
+        rows = []
+        for r in cur.fetchall():
+            hid, tpo, games, wins = r
+            rows.append((patch_id, hid, tpo, games, wins, _shrunk_wr(wins, games, pg, pw)))
+
+    total = 0
+    with conn.cursor() as cur:
+        for batch in _batched(rows, cfg.agg_batch_size):
+            psycopg2.extras.execute_values(cur, POPULATE_HERO_DRAFT_SLOT, batch, template=None)
+            total += len(batch)
+    conn.commit()
+    logger.info("populate_hero_draft_slot: %s rows for patch %s", total, patch_id)
+    return total
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 ALL_POPULATORS = [
-    ("ml.team_hero_agg",    populate_team_hero),
-    ("ml.player_hero_agg",  populate_player_hero),
-    ("ml.hero_synergy_agg", populate_synergy),
-    ("ml.hero_counter_agg", populate_counter),
-    ("ml.team_h2h_agg",     populate_h2h),
-    ("ml.hero_baseline_agg", populate_baseline),
+    ("ml.team_hero_agg",        populate_team_hero),
+    ("ml.player_hero_agg",      populate_player_hero),
+    ("ml.hero_synergy_agg",     populate_synergy),
+    ("ml.hero_counter_agg",     populate_counter),
+    ("ml.team_h2h_agg",         populate_h2h),
+    ("ml.hero_baseline_agg",    populate_baseline),
+    ("ml.hero_draft_slot_agg",  populate_hero_draft_slot),
 ]
 
 
 def _analyze_ml_tables(conn) -> None:
-    """Refresh statistics on all six ML aggregate tables after population."""
+    """Refresh statistics on all seven ML aggregate tables after population."""
     tables = [
         "ml.team_hero_agg",
         "ml.player_hero_agg",
@@ -529,6 +599,7 @@ def _analyze_ml_tables(conn) -> None:
         "ml.hero_counter_agg",
         "ml.team_h2h_agg",
         "ml.hero_baseline_agg",
+        "ml.hero_draft_slot_agg",
     ]
     with conn.cursor() as cur:
         for tbl in tables:
@@ -538,7 +609,7 @@ def _analyze_ml_tables(conn) -> None:
 
 
 def populate_all(cfg: TrainerConfig, conn) -> dict[str, int]:
-    """Run all six populator functions, then ANALYZE for fresh stats.
+    """Run all seven populator functions, then ANALYZE for fresh stats.
 
     Returns a dict of ``{table_name: row_count}``.
     """

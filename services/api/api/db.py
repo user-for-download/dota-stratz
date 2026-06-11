@@ -420,6 +420,38 @@ def fetch_counter_batch(
         put_conn(conn)
 
 
+def fetch_hero_draft_slot_batch(
+    patch_id: int,
+    hero_ids: list[int],
+    team_pick_ordinal: int,
+) -> dict[int, tuple[float, int]]:
+    """Batch fetch hero draft-slot aggregates for the given *team_pick_ordinal*.
+
+    Returns ``{hero_id: (win_rate, games)}`` — missing heroes get defaults
+    of ``(0.5, 0)`` from the caller.
+    """
+    if not hero_ids:
+        return {}
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT hero_id, win_rate, games
+                   FROM ml.hero_draft_slot_agg
+                   WHERE patch_id = %s
+                     AND team_pick_ordinal = %s
+                     AND hero_id = ANY(%s)""",
+                (patch_id, team_pick_ordinal, hero_ids),
+            )
+            result: dict[int, tuple[float, int]] = {}
+            for row in cur.fetchall():
+                hid, wr, games = row
+                result[hid] = (float(wr), int(games))
+            return result
+    finally:
+        put_conn(conn)
+
+
 def fetch_pick_ban_hero_ids(
     patch_id: int,
     match_ids: list[int],
