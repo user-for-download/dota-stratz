@@ -47,6 +47,7 @@ TRAINING_FEATURES_SQL = """
             pb.is_pick,
             pb.team,
             pb."order",
+            m.start_time,
             m.radiant_team_id,
             m.dire_team_id,
             m.radiant_win,
@@ -68,7 +69,10 @@ TRAINING_FEATURES_SQL = """
               AND p.hero_id = pb.hero_id
               AND p.is_radiant = (pb.team = 0)
         WHERE m.patch = %(patch_id)s
+          AND m.radiant_win IS NOT NULL
           AND pb."order" IS NOT NULL
+          AND pb.hero_id IS NOT NULL
+          AND pb.team IN (0, 1)
     )
     SELECT
         ds.match_id,
@@ -295,10 +299,14 @@ def make_target(df: pd.DataFrame) -> np.ndarray:
 
 
 def make_group(df: pd.DataFrame) -> np.ndarray:
-    """Return the query group array for LightGBM lambdarank.
+    """Return the query group array for LightGBM.
 
     Each match is one query group. The group size is the number of
     draft slots (picks + bans) for that match.
+
+    NOTE: This function is currently unused because the trainer uses
+    binary classification (not lambdarank). It is kept as a convenience
+    for future ranking-based approaches.
     """
     return df.groupby("match_id", sort=False).size().values
 

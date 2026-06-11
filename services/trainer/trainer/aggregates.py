@@ -1,14 +1,14 @@
-"""Populate the six ML aggregate tables.
+"""Populate the ML aggregate tables.
 
 Each function reads from the core tables (matches, players, picks_bans, teams,
 team_games, etc.) and writes into the corresponding ml.*_agg table, filtered
 to a single patch_id. These are UNLOGGED tables — fast for batch writes but
 volatile on crash. The inference API reads from them at prediction time.
 
-**NOTE**: These aggregate tables are used for LIVE INFERENCE and contain ALL
-historical matches. The training pipeline uses point-in-time (PIT) aggregates
-computed inline via LATERAL subqueries with ``start_time < ds.start_time``
-filters to prevent feature leakage. See ``features.py`` for the PIT variants.
+**NOTE**: These aggregate tables contain ALL matches in a patch (not
+PIT-filtered). Both training and inference use the same pre-computed tables,
+so feature distributions are consistent. PIT-safe aggregates remain a future
+improvement (tracked as a deferred work item).
 """
 
 from __future__ import annotations
@@ -71,54 +71,89 @@ def populate_team_hero(cfg: TrainerConfig, conn) -> int:
     pw = cfg.prior_win_rate
     with conn.cursor() as cur:
         cur.execute("""
+            WITH team_hero_picks AS (
+                SELECT
+                    CASE WHEN p.is_radiant THEN m.radiant_team_id ELSE m.dire_team_id END AS team_id,
+                    p.hero_id,
+                    COUNT(*)                                           AS games,
+                    SUM(CASE WHEN p.win = 1 THEN 1 ELSE 0 END)         AS wins,
+                    AVG(p.gold_per_min)::FLOAT                          AS avg_gpm,
+                    AVG(p.xp_per_min)::FLOAT                            AS avg_xpm,
+                    AVG(p.kills)::FLOAT                                 AS avg_kills,
+                    AVG(p.deaths)::FLOAT                                AS avg_deaths,
+                    AVG(p.assists)::FLOAT                               AS avg_assists,
+                    AVG(p.firstblood_claimed)::FLOAT                    AS firstblood_rate,
+                    AVG(p.camps_stacked)::FLOAT                         AS avg_camps_stacked,
+                    AVG(p.obs_placed + p.sen_placed)::FLOAT             AS avg_vision_placed,
+                    COALESCE(AVG(gold10.avg_gold_10)::FLOAT, 0)        AS avg_gold_10,
+                    COALESCE(AVG(xp10.avg_xp_10)::FLOAT, 0)            AS avg_xp_10,
+                    MAX(m.start_time)                                   AS last_played
+                FROM matches m
+                INNER JOIN players p ON p.match_id = m.match_id
+                LEFT JOIN LATERAL (
+                    SELECT AVG(arr.elem::numeric) AS avg_gold_10
+                    FROM player_minute_stats pms,
+                    LATERAL jsonb_array_elements_text(pms.gold_t) WITH ORDINALITY AS arr(elem, pos)
+                    WHERE pms.match_id = m.match_id
+                      AND pms.player_slot = p.player_slot
+                      AND pms.minute = 0
+                      AND pos <= 10
+                ) gold10 ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT AVG(arr.elem::numeric) AS avg_xp_10
+                    FROM player_minute_stats pms,
+                    LATERAL jsonb_array_elements_text(pms.xp_t) WITH ORDINALITY AS arr(elem, pos)
+                    WHERE pms.match_id = m.match_id
+                      AND pms.player_slot = p.player_slot
+                      AND pms.minute = 0
+                      AND pos <= 10
+                ) xp10 ON TRUE
+                WHERE m.patch = %s
+                  AND m.radiant_win IS NOT NULL
+                  AND CASE WHEN p.is_radiant THEN m.radiant_team_id ELSE m.dire_team_id END IS NOT NULL
+                GROUP BY team_id, p.hero_id
+            ),
+            team_hero_bans AS (
+                SELECT
+                    CASE WHEN pb.team = 0 THEN m.radiant_team_id ELSE m.dire_team_id END AS team_id,
+                    pb.hero_id,
+                    COUNT(*) AS bans
+                FROM matches m
+                INNER JOIN picks_bans pb ON pb.match_id = m.match_id
+                WHERE m.patch = %s
+                  AND m.radiant_win IS NOT NULL
+                  AND pb.is_pick = FALSE
+                  AND pb.team IN (0, 1)
+                  AND pb.hero_id IS NOT NULL
+                  AND CASE WHEN pb.team = 0 THEN m.radiant_team_id ELSE m.dire_team_id END IS NOT NULL
+                GROUP BY team_id, pb.hero_id
+            )
             SELECT
-                CASE WHEN p.is_radiant THEN m.radiant_team_id ELSE m.dire_team_id END AS team_id,
+                p.team_id,
                 p.hero_id,
-                COUNT(*)                                           AS games,
-                SUM(CASE WHEN p.win = 1 THEN 1 ELSE 0 END)         AS wins,
-                0::INT                                              AS bans,
-                AVG(p.gold_per_min)::FLOAT                          AS avg_gpm,
-                AVG(p.xp_per_min)::FLOAT                            AS avg_xpm,
-                AVG(p.kills)::FLOAT                                 AS avg_kills,
-                AVG(p.deaths)::FLOAT                                AS avg_deaths,
-                AVG(p.assists)::FLOAT                               AS avg_assists,
-                AVG(p.firstblood_claimed)::FLOAT                    AS firstblood_rate,
-                AVG(p.camps_stacked)::FLOAT                         AS avg_camps_stacked,
-                AVG(p.obs_placed + p.sen_placed)::FLOAT             AS avg_vision_placed,
-                COALESCE(AVG(gold10.avg_gold_10)::FLOAT, 0)        AS avg_gold_10,
-                COALESCE(AVG(xp10.avg_xp_10)::FLOAT, 0)            AS avg_xp_10,
-                MAX(m.start_time)                                   AS last_played
-            FROM matches m
-            INNER JOIN players p ON p.match_id = m.match_id
-            LEFT JOIN LATERAL (
-                SELECT AVG(arr.elem::numeric) AS avg_gold_10
-                FROM player_minute_stats pms,
-                LATERAL jsonb_array_elements_text(pms.gold_t) WITH ORDINALITY AS arr(elem, pos)
-                WHERE pms.match_id = m.match_id
-                  AND pms.player_slot = p.player_slot
-                  AND pms.minute = 0
-                  AND pos <= 10
-            ) gold10 ON TRUE
-            LEFT JOIN LATERAL (
-                SELECT AVG(arr.elem::numeric) AS avg_xp_10
-                FROM player_minute_stats pms,
-                LATERAL jsonb_array_elements_text(pms.xp_t) WITH ORDINALITY AS arr(elem, pos)
-                WHERE pms.match_id = m.match_id
-                  AND pms.player_slot = p.player_slot
-                  AND pms.minute = 0
-                  AND pos <= 10
-            ) xp10 ON TRUE
-            WHERE m.patch = %s
-              AND m.radiant_win IS NOT NULL
-              AND CASE WHEN p.is_radiant THEN m.radiant_team_id ELSE m.dire_team_id END IS NOT NULL
-            GROUP BY team_id, p.hero_id
-            ORDER BY team_id, p.hero_id
-        """, (patch_id,))
+                p.games,
+                p.wins,
+                COALESCE(b.bans, 0) AS bans,
+                p.avg_gpm,
+                p.avg_xpm,
+                p.avg_kills,
+                p.avg_deaths,
+                p.avg_assists,
+                p.firstblood_rate,
+                p.avg_camps_stacked,
+                p.avg_vision_placed,
+                p.avg_gold_10,
+                p.avg_xp_10,
+                p.last_played
+            FROM team_hero_picks p
+            LEFT JOIN team_hero_bans b ON b.team_id = p.team_id AND b.hero_id = p.hero_id
+            ORDER BY p.team_id, p.hero_id
+        """, (patch_id, patch_id))
         rows: list[tuple[Any, ...]] = []
         for r in cur.fetchall():
-            team_id, hero_id, games, wins, bans_, ag, ax, ak, ad, aa, fbr, acs, avp, ag10, ax10, lp = r
+            team_id, hero_id, games, wins, bans_v, ag, ax, ak, ad, aa, fbr, acs, avp, ag10, ax10, lp = r
             rows.append((
-                patch_id, team_id, hero_id, games, wins, 0,
+                patch_id, team_id, hero_id, games, wins, bans_v,
                 _shrunk_wr(wins, games, pg, pw), ag, ax, ak, ad, aa,
                 fbr, acs, avp, ag10, ax10, lp,
             ))

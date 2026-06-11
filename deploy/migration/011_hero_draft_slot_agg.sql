@@ -19,8 +19,10 @@ CREATE UNLOGGED TABLE IF NOT EXISTS ml.hero_draft_slot_agg (
     games              INT      NOT NULL DEFAULT 0,
     wins               INT      NOT NULL DEFAULT 0,
     win_rate           FLOAT    NOT NULL DEFAULT 0.5,
-    PRIMARY KEY (patch_id, hero_id, team_pick_ordinal)
+    PRIMARY KEY (patch_id, hero_id, team_pick_ordinal),
+    CONSTRAINT chk_hero_draft_slot_ordinal
+        CHECK (team_pick_ordinal BETWEEN 1 AND 5)
 );
 
-CREATE INDEX IF NOT EXISTS idx_hero_draft_slot_agg_lookup
-    ON ml.hero_draft_slot_agg (patch_id, hero_id, team_pick_ordinal);
+-- No separate lookup index needed — the PK already covers the join pattern
+-- (patch_id, hero_id, team_pick_ordinal).
