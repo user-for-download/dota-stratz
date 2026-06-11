@@ -1,8 +1,14 @@
-"""Populate the six patch-aware ML aggregate tables.
+"""Populate the six ML aggregate tables.
 
 Each function reads from the core tables (matches, players, picks_bans, teams,
 team_games, etc.) and writes into the corresponding ml.*_agg table, filtered
-to a single patch_id.
+to a single patch_id. These are UNLOGGED tables — fast for batch writes but
+volatile on crash. The inference API reads from them at prediction time.
+
+**NOTE**: These aggregate tables are used for LIVE INFERENCE and contain ALL
+historical matches. The training pipeline uses point-in-time (PIT) aggregates
+computed inline via LATERAL subqueries with ``start_time < ds.start_time``
+filters to prevent feature leakage. See ``features.py`` for the PIT variants.
 """
 
 from __future__ import annotations
@@ -11,6 +17,7 @@ import logging
 from typing import Any
 
 import psycopg2
+import psycopg2.extras
 
 from .config import TrainerConfig
 

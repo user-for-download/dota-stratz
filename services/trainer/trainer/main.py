@@ -98,11 +98,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         # Step 2: Train model
-        logger.info("Step 2: Training LightGBM lambdarank model ...")
-        model, ndcg = train_model(cfg, eng)
+        logger.info("Step 2: Training LightGBM binary classification model ...")
+        model, best_loss = train_model(cfg, eng)
         logger.info(
-            "Training complete. Patch %d | NDCG@5: %.4f",
-            patch_id, ndcg,
+            "Training complete. Patch %d | binary_logloss: %.4f",
+            patch_id, best_loss,
         )
 
     except Exception:

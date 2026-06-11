@@ -1,17 +1,13 @@
 -- 005_ml_tables.sql
 -- ML aggregate tables for LightGBM draft prediction training and real-time inference.
 --
--- All six tables are patch-aware (partitioned by patch_id). The trainer populates
--- these during `make train PATCH=<id>`, and the inference API queries them at
--- /predict time to build feature vectors for the current draft state.
---
--- Tables use UNLOGGED for write speed during batch population (the trainer can
--- re-populate at any time). Each table has a GIST exclusion on (patch_id, hero_id)
--- to prevent duplicates during incremental upserts.
---
--- Bayesian shrinkage priors are applied in SQL (not in Python) so that both the
--- trainer (LightGBM dataset.py) and the inference API (features.py) see identical
--- prior-adjusted rates without duplicating the logic.
+-- All six tables are patch-aware (filtered by patch_id in queries) with PRIMARY KEY
+-- constraints that prevent duplicate rows during incremental upserts.
+-- They are **not** physically partitioned. Bayesian shrinkage priors are applied
+-- in SQL so that both the trainer (LightGBM dataset.py) and the inference API
+-- (features.py) see identical prior-adjusted rates without duplicating the logic.
+-- These tables are UNLOGGED for write speed during batch population (the trainer
+-- can re-populate at any time).
 
 -- ============================================================================
 -- 1. ml.team_hero_agg

@@ -47,5 +47,5 @@ def fetch_patch_id(cfg: TrainerConfig, conn) -> int:
 def load_heroes(conn) -> dict[int, str]:
     """Return {hero_id: localized_name} for all heroes in the constants table."""
     with conn.cursor() as cur:
-        cur.execute("SELECT hero_id, localized_name FROM heroes ORDER BY hero_id")
+        cur.execute("SELECT id, localized_name FROM const_hero ORDER BY id")
         return dict(cur.fetchall())
