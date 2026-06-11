@@ -19,6 +19,12 @@ const (
 	socks4IdentdDiffers = 0x5D
 )
 
+// tcpDialer is an interface for TCP dialers, satisfied by *net.Dialer.
+// It exists so tests can inject a net.Pipe-based dialer without real TCP.
+type tcpDialer interface {
+	DialContext(ctx context.Context, network, addr string) (net.Conn, error)
+}
+
 // socks4Dialer implements a minimal SOCKS4/SOCKS4a dialer.
 // The golang.org/x/net/proxy package does not include SOCKS4,
 // so this fills the gap for proxy sources that return socks4:// URLs.
@@ -26,7 +32,7 @@ type socks4Dialer struct {
 	host      string
 	userID    string
 	timeout   time.Duration
-	tcpDialer *net.Dialer
+	tcpDialer tcpDialer
 }
 
 func newSocks4Dialer(host string, userID string, timeout time.Duration) *socks4Dialer {

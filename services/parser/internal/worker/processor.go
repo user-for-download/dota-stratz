@@ -9,7 +9,6 @@ import (
 
 	"github.com/dota-stratz/services/parser/internal/metrics"
 	"github.com/dota-stratz/services/parser/internal/models"
-	"github.com/dota-stratz/services/parser/internal/repository"
 	"github.com/dota-stratz/shared/go-common/logger"
 	"github.com/jackc/pgx/v5/pgconn"
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -23,9 +22,15 @@ import (
 // See CRITICAL BUG C-4.
 const maxConsecutiveBatchFailures = 3
 
+// matchWriter is the subset of *repository.Repository used by Processor.
+// Defined as an interface so tests can inject fakes without a real database.
+type matchWriter interface {
+	WriteBatch(ctx context.Context, matches []models.OpenDotaMatch) error
+}
+
 // Processor batches messages from RabbitMQ and writes parsed matches to Postgres.
 type Processor struct {
-	repo         *repository.Repository
+	repo         matchWriter
 	batchSize    int
 	fetchTimeout time.Duration
 	msgs         <-chan amqp.Delivery
@@ -37,7 +42,7 @@ type Processor struct {
 }
 
 func NewProcessor(
-	repo *repository.Repository,
+	repo matchWriter,
 	msgs <-chan amqp.Delivery,
 	batchSize int,
 	fetchTimeout time.Duration,

@@ -17,15 +17,28 @@ import (
 
 var ErrMatchNotFound = errors.New("match not found or private")
 
+// proxyPool is the subset of *proxypool.Pool used by Client. Defined as an
+// interface so tests can inject deterministic fakes without a Redis-backed
+// proxy pool.
+type proxyPool interface {
+	AcquireWithRateLimit(ctx context.Context, maxPerMin int) (string, error)
+	Report(ctx context.Context, proxy string, reason proxypool.FailureReason) error
+	ReportSuccess(ctx context.Context, proxy string) error
+	Release(ctx context.Context, proxy string) error
+}
+
+// Compile-time check that *proxypool.Pool satisfies proxyPool.
+var _ proxyPool = (*proxypool.Pool)(nil)
+
 type Client struct {
 	baseURL      string
-	pool         *proxypool.Pool
+	pool         proxyPool
 	timeout      time.Duration
 	maxReqPerMin int
 	userAgent    string
 }
 
-func NewClient(baseURL string, pool *proxypool.Pool, timeoutSec, maxReqPerMin int, userAgent string) *Client {
+func NewClient(baseURL string, pool proxyPool, timeoutSec, maxReqPerMin int, userAgent string) *Client {
 	return &Client{
 		baseURL:      baseURL,
 		pool:         pool,

@@ -16,6 +16,8 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/dota-stratz/shared/go-common/logger"
 	"github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // errReader is a helper that returns a fixed error on Read — used to simulate
@@ -30,9 +32,9 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// newTestPool creates a Pool backed by miniredis for testing.
+// newTestPoolDefault creates a Pool backed by miniredis for testing with standard config.
 // Returns the pool, the miniredis server (for direct state checks), and a cleanup func.
-func newTestPool(t *testing.T) (*Pool, *miniredis.Miniredis, func()) {
+func newTestPoolDefault(t *testing.T) (*Pool, *miniredis.Miniredis, func()) {
 	t.Helper()
 
 	mr, err := miniredis.Run()
@@ -62,8 +64,19 @@ func newTestPool(t *testing.T) (*Pool, *miniredis.Miniredis, func()) {
 	}
 }
 
+// newTestPool creates a Pool from the given miniredis and config.
+// The caller owns the miniredis lifecycle.
+func newTestPool(t *testing.T, s *miniredis.Miniredis, cfg Config) *Pool {
+	t.Helper()
+	rdb := redis.NewClient(&redis.Options{Addr: s.Addr()})
+	t.Cleanup(func() { rdb.Close() })
+	pool, err := New(rdb, cfg)
+	require.NoError(t, err)
+	return pool
+}
+
 func TestAddAndExists(t *testing.T) {
-	pool, _, cleanup := newTestPool(t)
+	pool, _, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -94,7 +107,7 @@ func TestAddAndExists(t *testing.T) {
 }
 
 func TestAcquireRelease(t *testing.T) {
-	pool, _, cleanup := newTestPool(t)
+	pool, _, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -126,7 +139,7 @@ func TestAcquireRelease(t *testing.T) {
 }
 
 func TestAcquireEmpty(t *testing.T) {
-	pool, _, cleanup := newTestPool(t)
+	pool, _, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -137,7 +150,7 @@ func TestAcquireEmpty(t *testing.T) {
 }
 
 func TestAcquireAllCooledDown(t *testing.T) {
-	pool, _, cleanup := newTestPool(t)
+	pool, _, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -163,7 +176,7 @@ func TestAcquireAllCooledDown(t *testing.T) {
 }
 
 func TestReportHardFailure(t *testing.T) {
-	pool, _, cleanup := newTestPool(t)
+	pool, _, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -201,7 +214,7 @@ func TestReportHardFailure(t *testing.T) {
 }
 
 func TestReportTimeout(t *testing.T) {
-	pool, mr, cleanup := newTestPool(t)
+	pool, mr, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -240,7 +253,7 @@ func TestReportTimeout(t *testing.T) {
 }
 
 func TestTrim(t *testing.T) {
-	pool, _, cleanup := newTestPool(t)
+	pool, _, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -290,7 +303,7 @@ func TestTrim(t *testing.T) {
 }
 
 func TestConcurrency(t *testing.T) {
-	pool, _, cleanup := newTestPool(t)
+	pool, _, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -344,7 +357,7 @@ func TestConcurrency(t *testing.T) {
 }
 
 func TestReapExpiredLeasesIgnoresLive(t *testing.T) {
-	pool, mr, cleanup := newTestPool(t)
+	pool, mr, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -389,7 +402,7 @@ func TestReapExpiredLeasesIgnoresLive(t *testing.T) {
 }
 
 func TestReapExpiredLeasesExpired(t *testing.T) {
-	pool, mr, cleanup := newTestPool(t)
+	pool, mr, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -441,7 +454,7 @@ func TestReapExpiredLeasesExpired(t *testing.T) {
 // --- AcquireWithRateLimit tests ---
 
 func TestAcquireWithRateLimit_UnderLimit(t *testing.T) {
-	pool, _, cleanup := newTestPool(t)
+	pool, _, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -460,7 +473,7 @@ func TestAcquireWithRateLimit_UnderLimit(t *testing.T) {
 }
 
 func TestAcquireWithRateLimit_OverLimit(t *testing.T) {
-	pool, _, cleanup := newTestPool(t)
+	pool, _, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -490,7 +503,7 @@ func TestAcquireWithRateLimit_OverLimit(t *testing.T) {
 }
 
 func TestAcquireWithRateLimit_Disabled(t *testing.T) {
-	pool, _, cleanup := newTestPool(t)
+	pool, _, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -509,7 +522,7 @@ func TestAcquireWithRateLimit_Disabled(t *testing.T) {
 }
 
 func TestAcquireWithRateLimit_MinuteBoundary(t *testing.T) {
-	pool, mr, cleanup := newTestPool(t)
+	pool, mr, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -551,7 +564,7 @@ func TestAcquireWithRateLimit_MinuteBoundary(t *testing.T) {
 // --- WithProxy tests ---
 
 func TestWithProxy_AcquireFail(t *testing.T) {
-	pool, _, cleanup := newTestPool(t)
+	pool, _, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -566,7 +579,7 @@ func TestWithProxy_AcquireFail(t *testing.T) {
 }
 
 func TestWithProxy_NilResponse(t *testing.T) {
-	pool, _, cleanup := newTestPool(t)
+	pool, _, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -590,7 +603,7 @@ func TestWithProxy_NilResponse(t *testing.T) {
 }
 
 func TestWithProxy_TimeoutError(t *testing.T) {
-	pool, _, cleanup := newTestPool(t)
+	pool, _, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -616,7 +629,7 @@ func TestWithProxy_TimeoutError(t *testing.T) {
 }
 
 func TestWithProxy_BadStatus(t *testing.T) {
-	pool, _, cleanup := newTestPool(t)
+	pool, _, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -641,7 +654,7 @@ func TestWithProxy_BadStatus(t *testing.T) {
 }
 
 func TestWithProxy_BodyReadFail(t *testing.T) {
-	pool, _, cleanup := newTestPool(t)
+	pool, _, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -666,7 +679,7 @@ func TestWithProxy_BodyReadFail(t *testing.T) {
 }
 
 func TestWithProxy_Success(t *testing.T) {
-	pool, _, cleanup := newTestPool(t)
+	pool, _, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -692,7 +705,7 @@ func TestWithProxy_Success(t *testing.T) {
 }
 
 func TestWithProxy_429IsCooldown(t *testing.T) {
-	pool, _, cleanup := newTestPool(t)
+	pool, _, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -723,7 +736,7 @@ func TestWithProxy_429IsCooldown(t *testing.T) {
 // exact opposite of the intended deprioritization. All ZSET operations must
 // use the same time unit.
 func TestCooldownScoreNotPickedFirst(t *testing.T) {
-	pool, mr, cleanup := newTestPool(t)
+	pool, mr, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -769,7 +782,7 @@ func TestCooldownScoreNotPickedFirst(t *testing.T) {
 // bug as TestCooldownScoreNotPickedFirst, but in the incrementAndMaybeRemove
 // (soft-fail) path.
 func TestSoftFailScoreNotPickedFirst(t *testing.T) {
-	pool, _, cleanup := newTestPool(t)
+	pool, _, cleanup := newTestPoolDefault(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -819,4 +832,460 @@ func TestSoftFailScoreNotPickedFirst(t *testing.T) {
 		t.Errorf("BUG: soft-failed proxy 'a' has score %v, not > max(b,c)=%v; "+
 			"all ZSET scores must use the same time unit", aScore, maxBC)
 	}
+}
+
+// =============================================================================
+// Additional pool tests
+// =============================================================================
+
+// waitForZSET polls until pool.Available() returns expected, with a 5s timeout.
+func waitForZSET(ctx context.Context, pool *Pool, expected int) error {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		n, err := pool.Available(ctx)
+		if err != nil {
+			return err
+		}
+		if n == int64(expected) {
+			return nil
+		}
+		select {
+		case <-time.After(50 * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	n, _ := pool.Available(ctx)
+	return fmt.Errorf("timed out waiting for ZCARD=%d, last value=%d", expected, n)
+}
+
+func TestAcquireLeaseAndZSET(t *testing.T) {
+	t.Parallel()
+	pool, mr, cleanup := newTestPoolDefault(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Seed 1 proxy
+	_, err := pool.Add(ctx, "http://proxy-a:8080")
+	require.NoError(t, err)
+
+	// Acquire
+	proxy, err := pool.Acquire(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "http://proxy-a:8080", proxy)
+
+	// Assert lease is set in Redis HASH
+	leaseVal := mr.HGet(LeaseKey, proxy)
+	assert.NotEmpty(t, leaseVal, "expected lease HGET to return a timestamp")
+	// Assert ZCARD=0 (popped from ZSET)
+	zcard, err := pool.Available(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), zcard, "expected ZSET to be empty after acquire")
+}
+
+func TestAcquireSkipsCooldownProxy(t *testing.T) {
+	t.Parallel()
+	pool, mr, cleanup := newTestPoolDefault(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Seed 2 proxies
+	_, err := pool.Add(ctx, "http://proxy-a:8080")
+	require.NoError(t, err)
+	_, err = pool.Add(ctx, "http://proxy-b:8080")
+	require.NoError(t, err)
+
+	// SET cooldown key for the first proxy
+	mr.Set(CooldownKeyPrefix+"http://proxy-a:8080", "1")
+
+	// Acquire should skip proxy-a (in cooldown) and return proxy-b
+	proxy, err := pool.Acquire(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "http://proxy-b:8080", proxy)
+}
+
+func TestReportHardFailureRemoves(t *testing.T) {
+	t.Parallel()
+	pool, _, cleanup := newTestPoolDefault(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Seed 1 proxy
+	_, err := pool.Add(ctx, "http://proxy-a:8080")
+	require.NoError(t, err)
+
+	// Acquire
+	proxy, err := pool.Acquire(ctx)
+	require.NoError(t, err)
+
+	// Report hard failure
+	err = pool.Report(ctx, proxy, ReasonHardFailure)
+	require.NoError(t, err)
+
+	// Assert ZCARD=0 and HLEN=0
+	zcard, err := pool.Available(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), zcard, "expected ZCARD=0 after hard failure")
+
+	hlen, err := pool.InUse(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), hlen, "expected HLEN=0 after hard failure")
+
+	// Proxy should not exist in pool or lease
+	exists, err := pool.Exists(ctx, proxy)
+	require.NoError(t, err)
+	assert.False(t, exists, "expected proxy to be fully removed")
+}
+
+func TestReportTimeoutRemovesAfterThreshold(t *testing.T) {
+	t.Parallel()
+	pool, mr, _ := newTestPoolDefault(t)
+	// Override config pool to use lower threshold
+	mr.Close()
+	mr2, err := miniredis.Run()
+	require.NoError(t, err)
+
+	rdb := redis.NewClient(&redis.Options{Addr: mr2.Addr()})
+	pool, err = New(rdb, Config{
+		Strategy:          "timestamp",
+		SoftFailThreshold: 2, // lower threshold
+		CooldownDuration:  1 * time.Minute,
+		LeaseDuration:     10 * time.Second,
+		SoftRetryDelay:    1 * time.Second,
+		FailureCounterTTL: 1 * time.Hour,
+	})
+	require.NoError(t, err)
+	defer func() {
+		rdb.Close()
+		mr2.Close()
+	}()
+	ctx := context.Background()
+
+	_, err = pool.Add(ctx, "http://proxy-a:8080")
+	require.NoError(t, err)
+
+	// First timeout: should increment counter and return to pool
+	proxy, err := pool.Acquire(ctx)
+	require.NoError(t, err)
+	err = pool.Report(ctx, proxy, ReasonTimeout)
+	require.NoError(t, err)
+
+	exists, err := pool.Exists(ctx, proxy)
+	require.NoError(t, err)
+	assert.True(t, exists, "proxy should still exist after first timeout")
+
+	// Second timeout: threshold exceeded, should remove
+	proxy, err = pool.Acquire(ctx)
+	require.NoError(t, err)
+	err = pool.Report(ctx, proxy, ReasonTimeout)
+	require.NoError(t, err)
+
+	exists, err = pool.Exists(ctx, proxy)
+	require.NoError(t, err)
+	assert.False(t, exists, "proxy should be removed after exceeding soft-fail threshold")
+
+	zcard, err := pool.Available(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), zcard, "expected ZCARD=0 after removal")
+}
+
+func TestReportRateLimitedCooldown(t *testing.T) {
+	t.Parallel()
+	pool, mr, cleanup := newTestPoolDefault(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, err := pool.Add(ctx, "http://proxy-a:8080")
+	require.NoError(t, err)
+
+	proxy, err := pool.Acquire(ctx)
+	require.NoError(t, err)
+
+	// Report rate-limited
+	err = pool.Report(ctx, proxy, ReasonRateLimited)
+	require.NoError(t, err)
+
+	// Assert cooldown key exists
+	cooldownKey := CooldownKeyPrefix + proxy
+	assert.True(t, mr.Exists(cooldownKey), "expected cooldown key to exist")
+
+	// Assert cooldown key has a TTL
+	ttl := mr.TTL(cooldownKey)
+	assert.Greater(t, ttl, time.Duration(0), "expected cooldown key to have TTL")
+	assert.LessOrEqual(t, ttl, 1*time.Minute, "expected cooldown TTL <= 1m")
+
+	// Assert proxy is back in the ZSET (re-added with deferred score)
+	exists, err := pool.Exists(ctx, proxy)
+	require.NoError(t, err)
+	assert.True(t, exists, "expected proxy to be re-added to pool after cooldown")
+}
+
+func TestAcquireWithRateLimitExhaustion(t *testing.T) {
+	t.Parallel()
+	pool, _, cleanup := newTestPoolDefault(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, err := pool.Add(ctx, "http://proxy-a:8080")
+	require.NoError(t, err)
+
+	// maxPerMinute=2: we can acquire the same proxy 2 times, 3rd should fail
+	proxy, err := pool.AcquireWithRateLimit(ctx, 2)
+	require.NoError(t, err)
+	assert.Equal(t, "http://proxy-a:8080", proxy)
+	err = pool.Release(ctx, proxy)
+	require.NoError(t, err)
+
+	proxy, err = pool.AcquireWithRateLimit(ctx, 2)
+	require.NoError(t, err)
+	assert.Equal(t, "http://proxy-a:8080", proxy)
+	err = pool.Release(ctx, proxy)
+	require.NoError(t, err)
+
+	// Third call should exceed rate limit
+	_, err = pool.AcquireWithRateLimit(ctx, 2)
+	assert.ErrorIs(t, err, ErrNoProxyAvailable)
+}
+
+func TestTrimRemovesExcess(t *testing.T) {
+	t.Parallel()
+	pool, _, cleanup := newTestPoolDefault(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Seed 5 proxies with distinct scores (small sleep between adds)
+	for i := 0; i < 5; i++ {
+		p := "http://proxy-" + strconv.Itoa(i) + ":8080"
+		_, err := pool.Add(ctx, p)
+		require.NoError(t, err)
+		if i < 4 {
+			time.Sleep(1 * time.Millisecond)
+		}
+	}
+
+	// Trim to 3
+	err := pool.Trim(ctx, 3)
+	require.NoError(t, err)
+
+	zcard, err := pool.Available(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), zcard, "expected ZCARD=3 after Trim to 3")
+}
+
+func TestNowScore(t *testing.T) {
+	t.Parallel()
+	pool, _, cleanup := newTestPoolDefault(t)
+	defer cleanup()
+
+	before := float64(time.Now().UnixMicro())
+	got := pool.nowScore()
+	after := float64(time.Now().UnixMicro())
+
+	// nowScore must be within [before, after] range
+	assert.GreaterOrEqual(t, got, before, "nowScore should be >= before timestamp")
+	assert.LessOrEqual(t, got, after, "nowScore should be <= after timestamp")
+
+	// Verify it's in microsecond range (not seconds, not nanoseconds)
+	// Current UnixMicro is ~1.7e15, seconds is ~1.7e9
+	assert.Greater(t, got, float64(1e12), "nowScore should be in microsecond range (>= 1e12)")
+	assert.Less(t, got, float64(1e18), "nowScore should be in microsecond range (< 1e18)")
+}
+
+func TestReapExpiredLeasesRestoresToPool(t *testing.T) {
+	t.Parallel()
+	pool, mr, cleanup := newTestPoolDefault(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Seed 1 proxy and acquire it
+	_, err := pool.Add(ctx, "http://proxy-a:8080")
+	require.NoError(t, err)
+
+	proxy, err := pool.Acquire(ctx)
+	require.NoError(t, err)
+
+	// Manually backdate the lease entry to 1 hour ago
+	past := strconv.FormatInt(time.Now().Add(-1*time.Hour).Unix(), 10)
+	mr.HSet(LeaseKey, proxy, past)
+
+	// Reap
+	reaped, err := pool.ReapExpiredLeases(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, reaped)
+
+	// Assert proxy back in ZSET
+	exists, err := pool.Exists(ctx, proxy)
+	require.NoError(t, err)
+	assert.True(t, exists, "expected proxy to be restored to pool after reap")
+
+	// Assert lease cleared
+	hlen, err := pool.InUse(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), hlen, "expected HLEN=0 after reap")
+
+	// Assert ZCARD=1
+	zcard, err := pool.Available(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), zcard)
+}
+
+// waitFor polls pool.Available until it reaches the expected value.
+// Used in tests that need to wait for Redis state to converge.
+func waitFor(t *testing.T, ctx context.Context, pool *Pool, expected int) {
+	t.Helper()
+	for i := 0; i < 50; i++ {
+		n, err := pool.Available(ctx)
+		if err == nil && n == int64(expected) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestAcquire seeds 1 proxy and verifies Acquire returns it with a lease.
+func TestAcquire(t *testing.T) {
+	t.Parallel()
+	pool, mr, cleanup := newTestPoolDefault(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, err := pool.Add(ctx, "http://proxy-a:8080")
+	require.NoError(t, err)
+
+	proxy, err := pool.Acquire(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "http://proxy-a:8080", proxy)
+
+	// Lease exists (HGET returns non-empty)
+	leaseVal := mr.HGet(LeaseKey, proxy)
+	assert.NotEmpty(t, leaseVal, "expected lease HGET to return a timestamp")
+
+	// ZCARD=0 (popped from ZSET)
+	zcard, err := pool.Available(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), zcard, "expected ZSET to be empty after acquire")
+}
+
+// TestAcquireSkipsCooldown verifies Acquire skips a cooldown proxy.
+func TestAcquireSkipsCooldown(t *testing.T) {
+	t.Parallel()
+	pool, mr, cleanup := newTestPoolDefault(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Seed 2 proxies
+	_, err := pool.Add(ctx, "http://proxy-a:8080")
+	require.NoError(t, err)
+	_, err = pool.Add(ctx, "http://proxy-b:8080")
+	require.NoError(t, err)
+
+	// SET cooldown key for the first proxy
+	mr.Set(CooldownKeyPrefix+"http://proxy-a:8080", "1")
+
+	// Acquire should skip proxy-a (in cooldown) and return proxy-b
+	proxy, err := pool.Acquire(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "http://proxy-b:8080", proxy)
+}
+
+// TestAcquireReturnsErrNoProxyAvailable verifies Acquire fails on empty pool.
+func TestAcquireReturnsErrNoProxyAvailable(t *testing.T) {
+	t.Parallel()
+	pool, _, cleanup := newTestPoolDefault(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, err := pool.Acquire(ctx)
+	assert.ErrorIs(t, err, ErrNoProxyAvailable)
+}
+
+// TestReleaseReturnsProxy verifies Release returns a proxy to the ZSET.
+func TestReleaseReturnsProxy(t *testing.T) {
+	t.Parallel()
+	pool, _, cleanup := newTestPoolDefault(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, err := pool.Add(ctx, "http://proxy-a:8080")
+	require.NoError(t, err)
+
+	proxy, err := pool.Acquire(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "http://proxy-a:8080", proxy)
+
+	// Release back
+	err = pool.Release(ctx, proxy)
+	require.NoError(t, err)
+
+	// ZCARD should be back to 1
+	avail, err := pool.Available(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), avail, "expected ZCARD=1 after release")
+}
+
+// TestAcquireWithRateLimit verifies AcquireWithRateLimit exhausts after maxPerMinute.
+func TestAcquireWithRateLimit(t *testing.T) {
+	t.Parallel()
+	pool, _, cleanup := newTestPoolDefault(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, err := pool.Add(ctx, "http://proxy-a:8080")
+	require.NoError(t, err)
+
+	// maxPerMinute=2: we can acquire the same proxy 2 times, 3rd should fail
+	proxy, err := pool.AcquireWithRateLimit(ctx, 2)
+	require.NoError(t, err)
+	assert.Equal(t, "http://proxy-a:8080", proxy)
+	err = pool.Release(ctx, proxy)
+	require.NoError(t, err)
+
+	proxy, err = pool.AcquireWithRateLimit(ctx, 2)
+	require.NoError(t, err)
+	assert.Equal(t, "http://proxy-a:8080", proxy)
+	err = pool.Release(ctx, proxy)
+	require.NoError(t, err)
+
+	// Third call should exceed rate limit
+	_, err = pool.AcquireWithRateLimit(ctx, 2)
+	assert.ErrorIs(t, err, ErrNoProxyAvailable)
+}
+
+// TestReapExpiredLeases verifies expired leases are returned to the ZSET.
+func TestReapExpiredLeases(t *testing.T) {
+	t.Parallel()
+	pool, mr, cleanup := newTestPoolDefault(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Seed 1 proxy and acquire it
+	_, err := pool.Add(ctx, "http://proxy-a:8080")
+	require.NoError(t, err)
+
+	proxy, err := pool.Acquire(ctx)
+	require.NoError(t, err)
+
+	// Manually backdate the lease entry to 1 hour ago
+	past := strconv.FormatInt(time.Now().Add(-1*time.Hour).Unix(), 10)
+	mr.HSet(LeaseKey, proxy, past)
+
+	// Reap
+	reaped, err := pool.ReapExpiredLeases(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, reaped)
+
+	// Assert proxy back in ZSET
+	exists, err := pool.Exists(ctx, proxy)
+	require.NoError(t, err)
+	assert.True(t, exists, "expected proxy to be restored to pool after reap")
+
+	// Assert lease cleared
+	hlen, err := pool.InUse(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), hlen, "expected HLEN=0 after reap")
+
+	// Assert ZCARD=1
+	zcard, err := pool.Available(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), zcard)
 }
