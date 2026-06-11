@@ -29,6 +29,7 @@ opencode.json
 # OpenCode: track context, ignore transient files
 .opencode
 .agents/
+.pytest_cache
 skills-lock.json
 # OS
 .DS_Store

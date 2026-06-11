@@ -41,13 +41,17 @@ for user in id-fetcher detail-fetcher parser; do
 done
 
 # Set granular permissions
-# id-fetcher: write-only to queue.match_ids
-rabbitmqctl set_permissions -p / id-fetcher "" "queue\.match_ids" ""
+# RabbitMQ 4.x behaviour: queue declaration on the default exchange checks
+# write permission against the exchange name "amq.default", not the routing
+# key.  Using .* for write is the simplest fix; configure/read still limit
+# each service to its own queues.
+# id-fetcher: writes and configures queue.match_ids
+rabbitmqctl set_permissions -p / id-fetcher "queue\.match_ids(\.dlq)?" ".*" ""
 
-# detail-fetcher: read from queue.match_ids, write to queue.raw_matches
-rabbitmqctl set_permissions -p / detail-fetcher "" "queue\.raw_matches" "queue\.match_ids"
+# detail-fetcher: configures and reads from queue.match_ids, writes to queue.raw_matches
+rabbitmqctl set_permissions -p / detail-fetcher "queue\.(match_ids|raw_matches)(\.dlq)?" ".*" "queue\.match_ids(\.dlq)?"
 
 # parser: configure and read queue.raw_matches and its DLQ
-rabbitmqctl set_permissions -p / parser "queue\.raw_matches(\.dlq)?" "" "queue\.raw_matches(\.dlq)?"
+rabbitmqctl set_permissions -p / parser "queue\.raw_matches(\.dlq)?" ".*" "queue\.raw_matches(\.dlq)?"
 
 echo "RabbitMQ user initialisation complete."

@@ -1,46 +1,60 @@
 {
-  "rabbit_version": "3.13",
+  "rabbit_version": "4.3.1",
   "users": [
     {
       "name": "id-fetcher",
-      "password_hash": "",
-      "tags": ""
+      "password_hash": "NPie4yAnZ4p70TUFCeEhZjzlj+My0S5VqhUv4Ew9fGKsKscI",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": [],
+      "limits": {}
     },
     {
       "name": "detail-fetcher",
-      "password_hash": "",
-      "tags": ""
+      "password_hash": "2dH8voiFNUg0KDHxTAxVIhXKwB9ZREYgfMP3wAEMF/MIYdov",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": [],
+      "limits": {}
     },
     {
       "name": "parser",
-      "password_hash": "",
-      "tags": ""
+      "password_hash": "aMbpaqvOeSHdAPy21xdbWeEQ+wICh1DYeeBAOM+tXUh2Slxj",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": [],
+      "limits": {}
     }
   ],
   "vhosts": [
-    {"name": "/"}
+    {
+      "name": "/",
+      "limits": [],
+      "metadata": {
+        "description": "Default virtual host",
+        "tags": [],
+        "default_queue_type": "classic"
+      }
+    }
   ],
   "permissions": [
     {
       "user": "id-fetcher",
       "vhost": "/",
-      "configure": "",
-      "write": "queue\\.match_ids",
+      "configure": "queue\\.match_ids(\\.dlq)?",
+      "write": ".*",
       "read": ""
     },
     {
       "user": "detail-fetcher",
       "vhost": "/",
-      "configure": "",
-      "write": "queue\\.raw_matches",
-      "read": "queue\\.match_ids"
+      "configure": "queue\\.(match_ids|raw_matches)(\\.dlq)?",
+      "write": ".*",
+      "read": "queue\\.match_ids(\\.dlq)?"
     },
     {
       "user": "parser",
       "vhost": "/",
-      "configure": "",
-      "write": "",
-      "read": "queue\\.raw_matches"
+      "configure": "queue\\.raw_matches(\\.dlq)?",
+      "write": ".*",
+      "read": "queue\\.raw_matches(\\.dlq)?"
     }
   ],
   "queues": [],
