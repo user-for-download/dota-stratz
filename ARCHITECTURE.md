@@ -81,9 +81,11 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 
 **Key behaviors:**
 - Self-scheduled: no external trigger required, no coordinator dependency
-- Rolling time window (`start_time >= NOW() - N days`) — single query per cron tick, no pagination
+- Two query modes: **bootstrap** (rolling window `start_time >= NOW() - N days`) and **watermark** (`match_id > last_parsed_match_id ORDER BY match_id ASC LIMIT N`). Watermark pushed into SQL to guarantee correctness regardless of backlog depth
+- Watermark is read on startup from `ingestion_checkpoints.last_parsed_match_id` via the shared `checkpoint` package. If DB is unreachable during bootstrap, falls back to rolling-window path (transient DB outage does not block fetches)
 - Only fetches ranked (lobby_type 1,2) and normal (6) matches
 - Rate-limit avoidance via proxy pool integration; infinite retry until success, pool exhaustion, or shutdown
+- Redis-sourced Prometheus metrics via `NewRedisPoolCollector` for accurate pool size (replaces per-process gauge that diverged across services)
 
 ---
 
@@ -151,12 +153,15 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 | `player_benchmarks` | Hero-specific benchmark percentiles |
 | `player_permanent_buffs` | Permanent modifier events (e.g., Aghanim's Shard) |
 | `player_neutral_item_history` | Neutral item acquisitions |
+| `player_minute_stats` | Per-minute gold/xp stats + gold_t/xp_t JSONB arrays (minute=0 sentinel row) |
 
 **Key behaviors:**
 - **FK violation fallback**: On SQLSTATE 23503, falls back to per-match inserts. The offending match goes to DLQ; healthy matches commit. Prevents pipeline deadlock on unseeded reference data (e.g., new Valve heroes).
 - **Division-by-zero guard**: If `duration.Seconds() <= 0`, clamps to 0.001 before computing `matches_per_sec`.
-- **`context.WithoutCancel`**: All batch I/O (`SendBatch`, `Commit`) uses orphaned context to prevent connection pool corruption during graceful shutdown.
+- **`context.WithoutCancel`**: All batch I/O (`SendBatch`, `Commit`) uses orphaned context with a 30s deadline to prevent connection pool corruption during graceful shutdown.
 - **Idempotent inserts**: `ON CONFLICT DO NOTHING` on all tables enables safe retry.
+- **Checkpoint watermark**: The checkpoint upsert is queued in the SAME `pgx.Batch` as the match inserts — it runs inside the same transaction, so the watermark only advances when the entire batch commits. Uses `GREATEST(...)` to guarantee monotonicity: a late-arriving batch with a smaller match_id can never rewind the watermark.
+- **gold_t/xp_t JSONB arrays**: The parser writes minute-by-minute gold/XP arrays to `player_minute_stats` (minute=0 sentinel row) for early-game feature computation (avg_gold_10, avg_xp_10).
 
 ---
 
@@ -210,16 +215,19 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 | Config | Environment variables (`TRAINER_*`) |
 
 **Pipeline stages:**
-1. **Aggregate population** — 6 populator functions compute `ml.*_agg` tables per patch via bulk INSERT (TRUNCATE + insert). Queries aggregate match data grouped by team/hero/player/patch.
-2. **Feature extraction** — `TRAINING_FEATURES_SQL` computes 196-dim feature vectors (36 aggregate columns + 160 one-hot hero ID) with `LEAST`/`GREATEST` index-friendly joins (~11s for 108k draft slots). NULL-safe with `COALESCE`.
-3. **Training** — LightGBM lambdarank with NDCG evaluation, 80/15 train/val split at match level. Writes model, metadata JSON, and `feature_schema.json` (column order contract with API).
+1. **Aggregate population** — **7** populator functions compute `ml.*_agg` tables per patch via bulk INSERT (ON CONFLICT DO UPDATE). Queries aggregate match data grouped by team/hero/player/patch, filtering `WHERE radiant_win IS NOT NULL`. Includes hero_draft_slot_agg (pick-position win rates) and avg_gold_10/avg_xp_10 from gold_t/xp_t JSONB arrays.
+2. **Feature extraction** — `TRAINING_FEATURES_SQL` computes **58 aggregate + 160 one-hot hero ID = 218-dim feature vectors** via a single query with `LATERAL` subqueries for PIT synergy/counter lookups, `LEAST`/`GREATEST` index-friendly joins on synergy aggregates, and `COALESCE` for NULL safety (~11s for 108k draft slots). Includes low-game missingness flags, delta features, and role interaction features.
+3. **Training** — LightGBM **binary classification** (`binary` objective, not `lambdarank`) with NDCG evaluation, 80/15 train/val split at match level. Uses `binary` because all draft slots in a match share the same `radiant_win` target. Writes model, metadata JSON, and `feature_schema.json` (218-column column-order contract with API).
 4. **Output** — Model per patch (`model_patch_N.txt`), metadata (`model_patch_N_meta.json`), and shared `feature_schema.json` to `/models` volume.
 
 **Key behaviors:**
-- Idempotent: aggregates are TRUNCATE + re-insert on each run
-- Feature column order is frozen in `feature_schema.json` at training time; API loads this to guarantee agreement
+- Idempotent: aggregates use INSERT ON CONFLICT DO UPDATE (no longer TRUNCATE + insert)
+- Feature column order is frozen in `feature_schema.json` at training time (218 columns); API loads this to guarantee agreement
 - Draft phase reconstruction uses per-patch patterns from `DRAFT_PATTERNS` dict with a normalizer that ensures 0 = first-pick team
 - Bayesian shrinkage applied to win rates (`prior_games` / `prior_win_rate` config)
+- Target is relative to the picking team: `(df["radiant_win"] == (df["team"] == 0)).astype(int)` — previously returned bare `radiant_win` which inverted the target for Dire training rows
+- `POST /predict` accepts optional `account_id` parameter — when provided, enables player-hero aggregate features for personalized predictions
+- Response includes a `reasoning` field explaining top-5 hero recommendations
 
 ---
 
@@ -235,22 +243,24 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 | Config | Environment variables (`API_*`) |
 
 **Endpoints:**
-- `GET /health` — Returns status and list of loaded model patches
-- `POST /predict` — Accepts draft state (`patch_id`, `first_pick_team`, `draft[]`), returns top-5 hero recommendations with model scores
-- `POST /reload/{patch_id}` — Hot-reload a model (requires admin token)
+- `GET /health` — Returns `{"status":"ok","patch_models_loaded":[...]}`
+- `POST /predict` — Accepts `patch_id`, `first_pick_team`, `draft[]`, `radiant_team_id`, `dire_team_id`, optional `account_id`, optional `num_recommendations`. Returns top-5 hero scores with **reasoning** string
+- `POST /reload/{patch_id}` — Hot-reload a model (requires `STRATZ_ADMIN_TOKEN` in Bearer auth header)
 
 **Prediction flow:**
-1. Client sends current draft state (picks/bans, teams, patch)
+1. Client sends current draft state (picks/bans, teams, patch) with optional `account_id` for personalized player-hero features
 2. API validates draft order against per-patch pattern, reconstructs `DraftContext`
-3. Pre-fetches batch aggregate data (baselines, team-hero, H2H) per request
-4. For each candidate hero not yet picked/banned, builds 196-dim feature vector (matching trainer's schema) and scores via LightGBM
-5. Returns top-5 recommendations sorted by score
+3. Pre-fetches batch aggregate data (baselines, team-hero, H2H) per request using six batch queries
+4. For each candidate hero not yet picked/banned, builds **218-dim feature vector** (58 aggregate + 160 one-hot hero ID, matching trainer's schema) and scores via LightGBM
+5. Returns top-N recommendations sorted by score + reasoning explanation
 
 **Key behaviors:**
-- Thread-safe: uses `psycopg2.pool.ThreadedConnectionPool` for concurrent requests
-- Feature computation mirrors trainer logic exactly (same column order via `feature_schema.json`)
+- Thread-safe: uses `psycopg2.pool.ThreadedConnectionPool` guarded by `threading.Lock`; broken connections discarded via `putconn(conn, close=True)` on rollback failure
+- Feature computation mirrors trainer logic exactly (same 218-column order via `feature_schema.json`)
+- Six pre-fetched batch queries replace hundreds of individual lookups: baselines, team-hero, player-hero, synergy, counter, h2h
 - NULL-safe: all aggregate lookups guarded by `_float()`/`_int()` helpers with sensible defaults
 - Draft patterns dynamically selected by `patch_id` from per-patch dict (supports patches 8–60 with fallback)
+- Optional `account_id` enables player-hero aggregate features; falls back to hardcoded defaults when absent (no train-serving skew)
 
 ---
 
@@ -266,7 +276,8 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 | `db` | `postgres.go` | `Connect(ctx, dsn)` | pgxpool connection with ping |
 | `mq` | `rabbitmq.go` | `Connect(url)` | AMQP connection + channel |
 | `logger` | `logger.go` | `InitLogger()`, `Sync()`, `Log` | Global zap.Logger from `LOG_LEVEL` |
-| `proxypool` | `pool.go`, `classify.go`, `metrics.go`, `transport.go` | `Pool`, `Acquire`, `Release`, `WithProxy`, `Report`, `MakeTransport` | Redis-backed proxy pool (~710 lines). `MakeTransport(proxyStr, timeout)` builds an `*http.Transport` for any scheme: HTTP/HTTPS CONNECT, SOCKS5, SOCKS4. Shared by all services that make HTTP requests through proxies. |
+| `checkpoint` | `checkpoint.go` | `ReadWatermark(ctx, pool)`, `CheckpointPipelineParser`, `CheckpointPipelineIDFetcher` | Shared constants + SQL for `ingestion_checkpoints` table — single source of truth for `last_parsed_match_id` column, used by parser (writer) and id-fetcher (reader) |
+| `proxypool` | `pool.go`, `classify.go`, `metrics.go`, `transport.go`, `socks4.go`, `redis_collector.go` | `Pool`, `Acquire`, `Release`, `WithProxy`, `Report`, `MakeTransport`, `NewRedisPoolCollector` | Redis-backed proxy pool (~710 lines). `MakeTransport(proxyStr, timeout)` builds an `*http.Transport` for any scheme: HTTP/HTTPS CONNECT, SOCKS5, SOCKS4 (native dialer). `NewRedisPoolCollector` provides Redis-ground-truth Prometheus metrics. Shared by all services that make HTTP requests through proxies. |
 
 ### proxypool — Redis data structures
 
@@ -293,14 +304,19 @@ dota2:proxies:ratelimit:{hash} STRING — rate-limit tracking
 ### Migration Files
 
 | File | Description |
-|---|---|
+|---|---|---|
 | `001_core.sql` | Core schema: `matches`, `players` (RANGE-partitioned), all child event tables, indexes, `ingestion_checkpoints`, partition management functions + initialization. FKs are `DEFERRABLE INITIALLY DEFERRED` for batch-insert throughput. |
 | `002_constants.sql` | Static reference data: `const_game_mode`, `const_lobby_type`, `const_region`, `const_patch`, `const_hero`, `const_item`, `const_ability` — table definitions + seed data combined. Internal FK constraints within constants schema. |
 | `003_analytics.sql` | Analytics schema: Bayesian shrinkage config, materialized views (`mv_team_hero_profile`, `mv_hero_synergy`, `mv_hero_counter`, `mv_player_team_history`), `feature_snapshots_player_hero`, `featurizer_runs`, `refresh_all_mv()`, `update_feature_snapshots()`, roles. |
 | `004_partition_verify.sql` | Idempotent assertion that the 6 expected `players` partitions exist. Performs no schema changes on a healthy database — safety check for CI/testing. |
-| `005_ml_tables.sql` | 6 patch-aware ML aggregate tables in `ml` schema: `team_hero_agg`, `player_hero_agg`, `hero_synergy_agg`, `hero_counter_agg`, `team_h2h_agg`, `hero_baseline_agg`. All UNLOGGED for write speed. |
+| `005_ml_tables.sql` | 6 initial patch-aware ML aggregate tables in `ml` schema: `team_hero_agg`, `player_hero_agg`, `hero_synergy_agg`, `hero_counter_agg`, `team_h2h_agg`, `hero_baseline_agg`. All UNLOGGED for write speed. |
 | `006_postgres_best_practices_fixes.sql` | Runtime fixes: grants on `ml` schema, `grant_ml_access()` function for new users. |
 | `007_enhanced_features.sql` | Adds 3 behavioral feature columns (`firstblood_rate`, `avg_camps_stacked`, `avg_vision_placed`) to `ml.team_hero_agg` and `ml.player_hero_agg`. |
+| `008_minute_stats_columns.sql` | Adds `gold_t` / `xp_t` JSONB columns to `player_minute_stats` for early-game (minute 0-9) gold/xp computation. |
+| `009_gold_xp_10_features.sql` | Adds `avg_gold_10` / `avg_xp_10` columns to `ml.team_hero_agg`, `ml.player_hero_agg`, `ml.hero_baseline_agg`. |
+| `010_team_id_bigint_indexes.sql` | Fixes `team_id` type from INT→BIGINT in ML tables; adds PIT-focused composite indexes for trainer LATERAL queries. |
+| `011_hero_draft_slot_agg.sql` | Adds 7th ML table `ml.hero_draft_slot_agg` — hero win rate per team-pick ordinal (1st–5th pick). |
+| `012_fix_ml_indexes.sql` | Drops redundant indexes, adds complementary `players(account_id, hero_id, match_id)` index, CHECK constraint on `team_pick_ordinal`. |
 
 ### Table Structure
 
@@ -324,13 +340,14 @@ dota2:proxies:ratelimit:{hash} STRING — rate-limit tracking
 - `featurizer_runs` — Tracking table for snapshot generation runs
 
 **ML schema (`ml`):**
-- 6 UNLOGGED patch-aware aggregate tables populated per-patch by the Trainer
-- `team_hero_agg` — Team+hero historical stats (games, wins, bans, avg GPM/XPM/KDA)
-- `player_hero_agg` — Per-account hero stats (lane role, avg KDA)
+- **7** UNLOGGED patch-aware aggregate tables populated per-patch by the Trainer
+- `team_hero_agg` — Team+hero historical stats (games, wins, bans, avg GPM/XPM/KDA, firstblood_rate, camps_stacked, vision_placed, avg_gold_10, avg_xp_10)
+- `player_hero_agg` — Per-account hero stats (lane role, avg KDA, firstblood_rate, avg_gold_10, avg_xp_10)
 - `hero_synergy_agg` — Pairwise synergy win rate on same team (keyed by `LEAST(hero_a, hero_b)`)
-- `hero_counter_agg` — Pairwise counter win rate vs enemy hero
+- `hero_counter_agg` — Pairwise counter win rate vs enemy hero (incl. avg_kd_diff)
 - `team_h2h_agg` — Head-to-head win rate between team pairs
-- `hero_baseline_agg` — Global hero pick/ban rates, avg stats per patch
+- `hero_baseline_agg` — Global hero pick/ban rates, avg stats per patch (incl. avg_gold_10, avg_xp_10)
+- `hero_draft_slot_agg` — Hero win rate per team-pick ordinal (1st pick through 5th pick)
 - Tables are re-populated on each `make train` run (not incrementally maintained)
 
 **Checkpoint:**
@@ -437,4 +454,5 @@ make downv              # Stop services and remove project volumes
 
 12. **Monitoring-first** — Every service exposes Prometheus metrics. Three pre-configured alerts and a Grafana dashboard ship with the deployment.
 
-13. **ML offline training + online inference** — Training is a batch CLI (Trainer) that computes aggregates and trains models offline; inference is a stateless HTTP service (API) that loads pre-trained models. The contract between them is `feature_schema.json` — a frozen column-order manifest written at training time and loaded at API startup. Models are per-patch to capture meta shifts between Dota 2 balance patches.
+13. **ML offline training + online inference** — Training is a batch CLI (Trainer) that computes 7 aggregate tables and trains models offline; inference is a stateless HTTP service (API) that loads pre-trained models. The contract between them is `feature_schema.json` — a frozen 218-column column-order manifest written at training time and loaded at API startup. Models are per-patch to capture meta shifts between Dota 2 balance patches.
+14. **Checkpoint-based watermarking** — The parser writes `last_parsed_match_id` to `ingestion_checkpoints` in the same transaction as the match batch (via `GREATEST()` upsert for monotonicity). The ID Fetcher reads this watermark on startup to switch from the rolling-window bootstrap path to the incremental watermark path (`match_id > last_parsed_match_id ORDER BY match_id ASC LIMIT N`), preventing re-fetch of already-parsed matches.

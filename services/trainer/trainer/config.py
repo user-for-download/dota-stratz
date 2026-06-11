@@ -68,6 +68,14 @@ class TrainerConfig:
     agg_batch_size: int = int(os.getenv("TRAINER_AGG_BATCH_SIZE", "500"))
     """Rows per chunk when populating aggregate tables via INSERT."""
 
+    # ── Match filtering (pro/league/game-mode) ────────────────────────────
+    league_only: bool = os.getenv("TRAINER_LEAGUE_ONLY", "false").lower() == "true"
+    """If true, only aggregate matches with leagueid > 0 (pro matches)."""
+
+    lobby_types: str = os.getenv("TRAINER_LOBBY_TYPES", "")
+    """Comma-separated lobby_type IDs to whitelist (e.g. '7,8' for ranked).
+    Empty string means no lobby_type filter."""
+
     @property
     def pg_dsn(self) -> str:
         return (

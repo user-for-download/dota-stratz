@@ -40,7 +40,10 @@ CREATE INDEX IF NOT EXISTS idx_players_match_hero_side
   ON players (match_id, hero_id, is_radiant);
 
 -- Player-hero PIT: join on account + hero
-CREATE INDEX IF NOT EXISTS idx_players_account_hero
+-- NOTE: The name idx_players_match_account_hero is intentionally distinct
+-- from idx_players_account_hero (created in 001_core.sql on account_id,
+-- hero_id) because IF NOT EXISTS checks by index name, not column list.
+CREATE INDEX IF NOT EXISTS idx_players_match_account_hero
   ON players (match_id, account_id, hero_id);
 
 -- Synergy/counter PIT: join picks_bans to find heroes in draft state

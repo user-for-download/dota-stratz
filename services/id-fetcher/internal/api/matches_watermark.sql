@@ -16,8 +16,8 @@
 --
 -- The %d placeholders are (in order):
 --   1. lookback window in days (configurable via watermark_lookback_days)
---   2. comma-separated lobby_type list (same as matches.sql)
---   3. match_id watermark (last_parsed_match_id from checkpoints)
+--   2. match_id watermark (last_parsed_match_id from checkpoints)
+--   3. comma-separated lobby_type list (same as matches.sql)
 --   4. LIMIT / max results
 --
 -- Trade-off: OpenDota's public Explorer API does NOT support

@@ -34,7 +34,7 @@ make reload-api PATCH=60                # Hot-reload model (no restart, requires
 make build-ml-images                    # Rebuild after code changes to trainer/api
 ```
 
-**Note**: Models use 198 features (was 196) after adding player-hero `account_id` integration. Training uses `binary` objective (not `lambdarank`) since all draft slots in a match share the same `radiant_win` target.
+**Note**: Models use **218 features** (58 aggregate + 160 one-hot hero ID). Includes avg_gold_10/avg_xp_10, hero draft-slot win rates, low-game missingness flags, delta features, and role interaction features. Training uses `binary` objective (not `lambdarank`) since all draft slots in a match share the same `radiant_win` target.
 
 ## RabbitMQ
 ```bash

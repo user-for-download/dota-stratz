@@ -1,6 +1,11 @@
 """Dataset construction: load raw training data from the DB, build feature
 vectors, and split into train/validation sets.
 
+Uses a **chronological** train/val split (oldest matches → train, newest → val)
+rather than random, because the pre-computed ml.*_agg tables include ALL
+matches in a patch — a random split would leak future information into
+training features (PIT leakage issue #2).
+
 Uses binary classification (not lambdarank) — see config.py for rationale.
 """
 
@@ -12,7 +17,6 @@ from typing import Any
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
 
 from .config import TrainerConfig
 from .features import (
@@ -86,12 +90,17 @@ def load_dataset(
     )
 
     # Train / val split at match level (not row level)
-    match_ids = df["match_id"].unique()
-    train_matches, val_matches = train_test_split(
-        match_ids,
-        test_size=cfg.val_ratio,
-        random_state=42,
-    )
+    # Chronological split: oldest matches → train, newest → val.
+    # This is critical because the ml.*_agg tables contain ALL matches in the
+    # patch (not PIT-filtered), so a random split would let training rows
+    # "see" future matches via aggregate features (PIT leakage issue #2).
+    # A chronological split at least makes the validation metric a more
+    # honest estimate of out-of-time performance.
+    match_start_times = df.groupby("match_id")["start_time"].first().sort_values()
+    match_ids_sorted = match_start_times.index
+    n_train = int(len(match_ids_sorted) * (1 - cfg.val_ratio))
+    train_matches = match_ids_sorted[:n_train]
+    val_matches = match_ids_sorted[n_train:]
 
     train_mask = df["match_id"].isin(train_matches)
     val_mask = df["match_id"].isin(val_matches)

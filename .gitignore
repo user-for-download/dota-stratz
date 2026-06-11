@@ -32,6 +32,7 @@ opencode.json
 .opencode/package.json
 .opencode/package-lock.json
 .agents/
+skills-lock.json
 # OS
 .DS_Store
 Thumbs.db

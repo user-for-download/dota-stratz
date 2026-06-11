@@ -154,6 +154,7 @@ make lint        # Run golangci-lint (requires external install)
 make tidy        # Run go mod tidy across all modules
 make check       # Format + vet + test (one-shot quality gate)
 make deps        # Download dependencies for all modules
+make bake        # Build all Docker images via docker buildx bake
 ```
 
 ### Running Locally
@@ -207,7 +208,7 @@ make proxies-show   # Inspect proxy pool state
 │   ├── compose.yaml       # Docker Compose with profiles
 │   ├── docker-bake.hcl    # Buildx bake config
 │   ├── .env.example       # Environment variable template
-│   ├── migration/         # SQL migration files (001_core–006)
+│   ├── migration/         # SQL migration files (001_core–012)
 │   ├── rabbitmq/          # RabbitMQ definitions + init script
 │   ├── prometheus/        # Prometheus config + alert rules
 │   └── grafana/           # Pre-provisioned dashboards
@@ -262,13 +263,13 @@ Access the management UI at `http://localhost:15672` (default: guest/guest). Key
 
 ## Pipeline Lifecycle
 
-1. **ID Fetcher** cron fires on its configured schedule (default: daily at 03:00 UTC), queries OpenDota Explorer for matches within a rolling N-day window, publishes IDs in batches to RabbitMQ. Optional startup fetch runs on boot before the first cron tick (enabled via `ID_FETCHER_START_RUN=true`)
-2. **Detail Fetcher** consumes match IDs, fetches full match JSON from OpenDota API (via proxy pool), publishes raw data
-3. **Parser** consumes raw JSON, accumulates batches (size 100 or 2s timeout), validates, and bulk-inserts into PostgreSQL
+1. **ID Fetcher** cron fires on its configured schedule (default: every 5 min for continuous ingestion), queries OpenDota Explorer for matches within a rolling N-day window (or uses watermark-based query to skip already-parsed matches), publishes IDs in batches to RabbitMQ. Optional startup fetch runs on boot before the first cron tick (enabled via `ID_FETCHER_START_RUN=true`)
+2. **Detail Fetcher** consumes match IDs, fetches full match JSON from OpenDota API (via proxy pool, rate-limited per proxy at 50 req/min), publishes raw data
+3. **Parser** consumes raw JSON, accumulates batches (size 100 or 2s timeout), validates, and bulk-inserts into 20+ PostgreSQL tables (including gold_t/xp_t JSONB arrays for early-game features)
 4. Failures route to **dead-letter queues** for manual inspection and replay
 5. **Analytics materialized views** refresh periodically for ML feature extraction
-6. **Trainer** computes patch-aware aggregate tables (`team_hero_agg`, `player_hero_agg`, etc.) and trains LightGBM lambdarank models
-7. **Inference API** loads trained models and serves draft predictions via HTTP (`POST /predict`)
+6. **Trainer** computes **7 patch-aware aggregate tables** (`team_hero_agg`, `player_hero_agg`, `hero_synergy_agg`, `hero_counter_agg`, `team_h2h_agg`, `hero_baseline_agg`, `hero_draft_slot_agg`) and trains LightGBM **binary classification** models (218-dim feature vectors: 58 aggregate + 160 one-hot hero ID)
+7. **Inference API** loads trained models and serves draft predictions via HTTP (`POST /predict`), returning top-5 hero recommendations with reasoning
 
 ## License
 

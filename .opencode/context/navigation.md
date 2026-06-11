@@ -8,9 +8,9 @@
 - `core/workflows/task-delegation-basics.md` — Delegation rules and subagent routing
 
 ## Domain (project knowledge)
-- `domain/concepts/pipeline.md` — Event-driven pipeline data flow
-- `domain/concepts/services.md` — Service architecture (ID Fetcher, Detail Fetcher, Parser, Proxy Manager)
-- `domain/concepts/database.md` — Database schema, migrations, tables
+ - `domain/concepts/pipeline.md` — Event-driven pipeline data flow (ML: 7 aggregate tables, 218-dim features, stale-row protection, configurable pro-match filtering)
+- `domain/concepts/services.md` — Service architecture (ID Fetcher, Detail Fetcher, Parser, Proxy Manager, Trainer, API)
+- `domain/concepts/database.md` — Database schema, migrations (001–013), 7 ML aggregate tables + player_time_series_arrays
 - `domain/lookup/services.md` — Service ports, deps, config quick reference
 - `domain/lookup/ports.md` — Port allocation map
 - `domain/lookup/env-vars.md` — Environment variable catalog

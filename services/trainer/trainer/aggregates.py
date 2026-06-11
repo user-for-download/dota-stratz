@@ -5,6 +5,15 @@ team_games, etc.) and writes into the corresponding ml.*_agg table, filtered
 to a single patch_id. These are UNLOGGED tables — fast for batch writes but
 volatile on crash. The inference API reads from them at prediction time.
 
+**Stale row protection**: Every populator ``DELETE``s rows for the current
+patch_id before re-inserting, so rows that disappear from source queries
+(e.g. after data corrections) do not persist in aggregate tables.
+
+**Consistent match filtering**: All seven populators now apply the same
+config-driven match filter (``TRAINER_LEAGUE_ONLY`` / ``TRAINER_LOBBY_TYPES``)
+instead of having a hardcoded ``leagueid > 0`` only in ``populate_h2h``.
+Set these env vars to restrict training to pro/ranked matches only.
+
 **NOTE**: These aggregate tables contain ALL matches in a patch (not
 PIT-filtered). Both training and inference use the same pre-computed tables,
 so feature distributions are consistent. PIT-safe aggregates remain a future
@@ -38,6 +47,40 @@ def _batched(rows: list[tuple], batch_size: int):
         yield rows[i : i + batch_size]
 
 
+def _clean_patch_rows(conn, table: str, patch_id: int) -> None:
+    """Delete stale rows for *patch_id* before re-populating *table*.
+
+    Without this, rows that disappear from the source query (e.g. due to
+    data corrections or filter changes) remain in the aggregate table and
+    are served at inference time as if they are current.
+    """
+    with conn.cursor() as cur:
+        cur.execute(f"DELETE FROM {table} WHERE patch_id = %s", (patch_id,))
+    conn.commit()
+
+
+def _match_extra_where(  # noqa: N802 (matches public SQL function naming)
+    cfg: TrainerConfig, alias: str = "m",
+) -> str:
+    """Return extra ``AND ...`` conditions for match filtering.
+
+    Constructed from ``cfg.league_only`` and ``cfg.lobby_types`` so that
+    all aggregate populators apply the **same** filter — previously only
+    ``populate_h2h`` filtered by ``leagueid > 0``, causing feature
+    distribution mismatch.
+    """
+    parts: list[str] = []
+    if cfg.league_only:
+        parts.append(f"{alias}.leagueid > 0")
+    if cfg.lobby_types:
+        lobby_ids = [int(x.strip()) for x in cfg.lobby_types.split(",") if x.strip()]
+        if lobby_ids:
+            parts.append(f"{alias}.lobby_type IN ({','.join(map(str, lobby_ids))})")
+    if not parts:
+        return ""
+    return " AND " + " AND ".join(parts)
+
+
 # ---------------------------------------------------------------------------
 # 1. ml.team_hero_agg
 # ---------------------------------------------------------------------------
@@ -69,8 +112,10 @@ def populate_team_hero(cfg: TrainerConfig, conn) -> int:
     patch_id = cfg.patch_id
     pg = cfg.prior_games
     pw = cfg.prior_win_rate
+    _clean_patch_rows(conn, "ml.team_hero_agg", patch_id)
+    extra = _match_extra_where(cfg, "m")
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(f"""
             WITH team_hero_picks AS (
                 SELECT
                     CASE WHEN p.is_radiant THEN m.radiant_team_id ELSE m.dire_team_id END AS team_id,
@@ -92,24 +137,22 @@ def populate_team_hero(cfg: TrainerConfig, conn) -> int:
                 INNER JOIN players p ON p.match_id = m.match_id
                 LEFT JOIN LATERAL (
                     SELECT AVG(arr.elem::numeric) AS avg_gold_10
-                    FROM player_minute_stats pms,
-                    LATERAL jsonb_array_elements_text(pms.gold_t) WITH ORDINALITY AS arr(elem, pos)
-                    WHERE pms.match_id = m.match_id
-                      AND pms.player_slot = p.player_slot
-                      AND pms.minute = 0
+                    FROM player_time_series_arrays pta,
+                    LATERAL jsonb_array_elements_text(pta.gold_t) WITH ORDINALITY AS arr(elem, pos)
+                    WHERE pta.match_id = m.match_id
+                      AND pta.player_slot = p.player_slot
                       AND pos <= 10
                 ) gold10 ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT AVG(arr.elem::numeric) AS avg_xp_10
-                    FROM player_minute_stats pms,
-                    LATERAL jsonb_array_elements_text(pms.xp_t) WITH ORDINALITY AS arr(elem, pos)
-                    WHERE pms.match_id = m.match_id
-                      AND pms.player_slot = p.player_slot
-                      AND pms.minute = 0
+                    FROM player_time_series_arrays pta,
+                    LATERAL jsonb_array_elements_text(pta.xp_t) WITH ORDINALITY AS arr(elem, pos)
+                    WHERE pta.match_id = m.match_id
+                      AND pta.player_slot = p.player_slot
                       AND pos <= 10
                 ) xp10 ON TRUE
                 WHERE m.patch = %s
-                  AND m.radiant_win IS NOT NULL
+                  AND m.radiant_win IS NOT NULL{extra}
                   AND CASE WHEN p.is_radiant THEN m.radiant_team_id ELSE m.dire_team_id END IS NOT NULL
                 GROUP BY team_id, p.hero_id
             ),
@@ -121,7 +164,7 @@ def populate_team_hero(cfg: TrainerConfig, conn) -> int:
                 FROM matches m
                 INNER JOIN picks_bans pb ON pb.match_id = m.match_id
                 WHERE m.patch = %s
-                  AND m.radiant_win IS NOT NULL
+                  AND m.radiant_win IS NOT NULL{extra}
                   AND pb.is_pick = FALSE
                   AND pb.team IN (0, 1)
                   AND pb.hero_id IS NOT NULL
@@ -200,8 +243,10 @@ def populate_player_hero(cfg: TrainerConfig, conn) -> int:
     patch_id = cfg.patch_id
     pg = cfg.prior_games
     pw = cfg.prior_win_rate
+    _clean_patch_rows(conn, "ml.player_hero_agg", patch_id)
+    extra = _match_extra_where(cfg, "m")
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(f"""
             SELECT
                 p.account_id,
                 p.hero_id,
@@ -224,24 +269,22 @@ def populate_player_hero(cfg: TrainerConfig, conn) -> int:
             INNER JOIN players p ON p.match_id = m.match_id
             LEFT JOIN LATERAL (
                 SELECT AVG(arr.elem::numeric) AS avg_gold_10
-                FROM player_minute_stats pms,
-                LATERAL jsonb_array_elements_text(pms.gold_t) WITH ORDINALITY AS arr(elem, pos)
-                WHERE pms.match_id = m.match_id
-                  AND pms.player_slot = p.player_slot
-                  AND pms.minute = 0
+                FROM player_time_series_arrays pta,
+                LATERAL jsonb_array_elements_text(pta.gold_t) WITH ORDINALITY AS arr(elem, pos)
+                WHERE pta.match_id = m.match_id
+                  AND pta.player_slot = p.player_slot
                   AND pos <= 10
             ) gold10 ON TRUE
             LEFT JOIN LATERAL (
                 SELECT AVG(arr.elem::numeric) AS avg_xp_10
-                FROM player_minute_stats pms,
-                LATERAL jsonb_array_elements_text(pms.xp_t) WITH ORDINALITY AS arr(elem, pos)
-                WHERE pms.match_id = m.match_id
-                  AND pms.player_slot = p.player_slot
-                  AND pms.minute = 0
+                FROM player_time_series_arrays pta,
+                LATERAL jsonb_array_elements_text(pta.xp_t) WITH ORDINALITY AS arr(elem, pos)
+                WHERE pta.match_id = m.match_id
+                  AND pta.player_slot = p.player_slot
                   AND pos <= 10
             ) xp10 ON TRUE
             WHERE m.patch = %s
-              AND m.radiant_win IS NOT NULL
+              AND m.radiant_win IS NOT NULL{extra}
               AND p.account_id IS NOT NULL
             GROUP BY p.account_id, p.hero_id
             ORDER BY p.account_id, p.hero_id
@@ -282,8 +325,10 @@ def populate_synergy(cfg: TrainerConfig, conn) -> int:
     patch_id = cfg.patch_id
     pg = cfg.prior_games
     pw = cfg.prior_win_rate
+    _clean_patch_rows(conn, "ml.hero_synergy_agg", patch_id)
+    extra = _match_extra_where(cfg, "m")
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(f"""
             SELECT
                 p1.hero_id AS hero_a,
                 p2.hero_id AS hero_b,
@@ -295,7 +340,7 @@ def populate_synergy(cfg: TrainerConfig, conn) -> int:
                 AND p2.is_radiant = p1.is_radiant
                 AND p2.hero_id > p1.hero_id
             WHERE m.patch = %s
-              AND m.radiant_win IS NOT NULL
+              AND m.radiant_win IS NOT NULL{extra}
             GROUP BY p1.hero_id, p2.hero_id
             HAVING COUNT(*) >= 3
             ORDER BY p1.hero_id, p2.hero_id
@@ -334,8 +379,10 @@ def populate_counter(cfg: TrainerConfig, conn) -> int:
     patch_id = cfg.patch_id
     pg = cfg.prior_games
     pw = cfg.prior_win_rate
+    _clean_patch_rows(conn, "ml.hero_counter_agg", patch_id)
+    extra = _match_extra_where(cfg, "m")
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(f"""
             SELECT
                 p1.hero_id,
                 p2.hero_id AS enemy_hero_id,
@@ -347,7 +394,7 @@ def populate_counter(cfg: TrainerConfig, conn) -> int:
             INNER JOIN players p2 ON p2.match_id = m.match_id
                 AND p2.is_radiant != p1.is_radiant
             WHERE m.patch = %s
-              AND m.radiant_win IS NOT NULL
+              AND m.radiant_win IS NOT NULL{extra}
             GROUP BY p1.hero_id, p2.hero_id
             HAVING COUNT(*) >= 3
             ORDER BY p1.hero_id, p2.hero_id
@@ -385,16 +432,20 @@ def populate_h2h(cfg: TrainerConfig, conn) -> int:
     patch_id = cfg.patch_id
     pg = cfg.prior_games
     pw = cfg.prior_win_rate
+    _clean_patch_rows(conn, "ml.team_h2h_agg", patch_id)
+    extra = _match_extra_where(cfg, "m")
     with conn.cursor() as cur:
-        cur.execute("""
+        # NOTE: _match_extra_where builds the league/lobby filter that was
+        # previously a hardcoded ``AND leagueid > 0`` only here — now all
+        # seven populators use the same config-driven filter.
+        cur.execute(f"""
             WITH valid_matches AS (
                 SELECT match_id, radiant_team_id, dire_team_id, radiant_win
                 FROM matches
                 WHERE patch = %s
                   AND radiant_win IS NOT NULL
                   AND radiant_team_id IS NOT NULL
-                  AND dire_team_id IS NOT NULL
-                  AND leagueid > 0
+                  AND dire_team_id IS NOT NULL{extra}
             ),
             h2h AS (
                 -- Radiant perspective
@@ -458,8 +509,10 @@ def populate_baseline(cfg: TrainerConfig, conn) -> int:
     patch_id = cfg.patch_id
     pg = cfg.prior_games
     pw = cfg.prior_win_rate
+    _clean_patch_rows(conn, "ml.hero_baseline_agg", patch_id)
+    extra = _match_extra_where(cfg, "m")
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(f"""
             WITH hero_picks AS (
                 SELECT
                     p.hero_id,
@@ -476,24 +529,22 @@ def populate_baseline(cfg: TrainerConfig, conn) -> int:
                 INNER JOIN players p ON p.match_id = m.match_id
                 LEFT JOIN LATERAL (
                     SELECT AVG(arr.elem::numeric) AS avg_gold_10
-                    FROM player_minute_stats pms,
-                    LATERAL jsonb_array_elements_text(pms.gold_t) WITH ORDINALITY AS arr(elem, pos)
-                    WHERE pms.match_id = m.match_id
-                      AND pms.player_slot = p.player_slot
-                      AND pms.minute = 0
+                    FROM player_time_series_arrays pta,
+                    LATERAL jsonb_array_elements_text(pta.gold_t) WITH ORDINALITY AS arr(elem, pos)
+                    WHERE pta.match_id = m.match_id
+                      AND pta.player_slot = p.player_slot
                       AND pos <= 10
                 ) gold10 ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT AVG(arr.elem::numeric) AS avg_xp_10
-                    FROM player_minute_stats pms,
-                    LATERAL jsonb_array_elements_text(pms.xp_t) WITH ORDINALITY AS arr(elem, pos)
-                    WHERE pms.match_id = m.match_id
-                      AND pms.player_slot = p.player_slot
-                      AND pms.minute = 0
+                    FROM player_time_series_arrays pta,
+                    LATERAL jsonb_array_elements_text(pta.xp_t) WITH ORDINALITY AS arr(elem, pos)
+                    WHERE pta.match_id = m.match_id
+                      AND pta.player_slot = p.player_slot
                       AND pos <= 10
                 ) xp10 ON TRUE
                 WHERE m.patch = %s
-                  AND m.radiant_win IS NOT NULL
+                  AND m.radiant_win IS NOT NULL{extra}
                 GROUP BY p.hero_id
             ),
             hero_bans AS (
@@ -501,11 +552,11 @@ def populate_baseline(cfg: TrainerConfig, conn) -> int:
                 FROM matches m
                 INNER JOIN picks_bans pb ON pb.match_id = m.match_id AND pb.is_pick = FALSE
                 WHERE m.patch = %s
-                  AND m.radiant_win IS NOT NULL
+                  AND m.radiant_win IS NOT NULL{extra}
                 GROUP BY pb.hero_id
             ),
             total_matches AS (
-                SELECT COUNT(DISTINCT match_id) AS total FROM matches WHERE patch = %s AND radiant_win IS NOT NULL
+                SELECT COUNT(DISTINCT match_id) AS total FROM matches WHERE patch = %s AND radiant_win IS NOT NULL{extra}
             )
             SELECT
                 COALESCE(p.hero_id, b.hero_id) AS hero_id,
@@ -564,8 +615,10 @@ def populate_hero_draft_slot(cfg: TrainerConfig, conn) -> int:
     patch_id = cfg.patch_id
     pg = cfg.prior_games
     pw = cfg.prior_win_rate
+    _clean_patch_rows(conn, "ml.hero_draft_slot_agg", patch_id)
+    extra = _match_extra_where(cfg, "m")
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(f"""
             SELECT
                 ds.hero_id,
                 ds.team_pick_ordinal,
@@ -589,7 +642,7 @@ def populate_hero_draft_slot(cfg: TrainerConfig, conn) -> int:
                 FROM picks_bans pb
                 INNER JOIN matches m ON m.match_id = pb.match_id
                 WHERE m.patch = %s
-                  AND m.radiant_win IS NOT NULL
+                  AND m.radiant_win IS NOT NULL{extra}
                   AND pb.is_pick = TRUE
             ) ds
             GROUP BY ds.hero_id, ds.team_pick_ordinal

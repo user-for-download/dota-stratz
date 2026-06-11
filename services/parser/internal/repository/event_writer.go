@@ -154,10 +154,10 @@ func writeObsLeftLog(batch *pgx.Batch, matchID int64, playerSlot int, raw json.R
 // objects (Issue #33). We decode as []int and use the array index as the
 // upgrade order.
 // writeMinuteStats queues an INSERT for the minute-by-minute gold/XP arrays.
-// The JSONB arrays (gold_t, xp_t) are stored with minute=0 as a sentinel
-// because player_minute_stats has a 3-column PK (match_id, player_slot, minute).
-// Each player gets exactly one JSONB row. Uses ON CONFLICT DO UPDATE so
-// backfilled matches patch the missing data in.
+// The JSONB arrays are stored in player_time_series_arrays (PK: match_id,
+// player_slot) instead of player_minute_stats so they don't conflict with
+// real minute-zero stat rows (issue #5 — the old schema used minute=0 as a
+// sentinel which collided with real data).
 func writeMinuteStats(batch *pgx.Batch, matchID int64, playerSlot int, goldT, xpT []float64) {
 	if len(goldT) == 0 && len(xpT) == 0 {
 		return
@@ -165,9 +165,9 @@ func writeMinuteStats(batch *pgx.Batch, matchID int64, playerSlot int, goldT, xp
 	goldJSON, _ := json.Marshal(goldT)
 	xpJSON, _ := json.Marshal(xpT)
 	batch.Queue(`
-		INSERT INTO player_minute_stats (match_id, player_slot, minute, gold_t, xp_t)
-		VALUES ($1, $2, 0, $3, $4)
-		ON CONFLICT (match_id, player_slot, minute) DO UPDATE SET
+		INSERT INTO player_time_series_arrays (match_id, player_slot, gold_t, xp_t)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (match_id, player_slot) DO UPDATE SET
 			gold_t = EXCLUDED.gold_t,
 			xp_t = EXCLUDED.xp_t`,
 		matchID, playerSlot, goldJSON, xpJSON,

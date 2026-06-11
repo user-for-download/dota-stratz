@@ -5,11 +5,13 @@
 
 **Key behaviors**:
 - Self-scheduled via `robfig/cron` (`FETCH_SCHEDULE`, default `*/5 * * * *` — every 5 min)
-- Two query modes: bootstrap (rolling window, all matches in N days) and watermark (`match_id > last_parsed`, for incremental catch-up)
-- Watermark query uses `ORDER BY match_id DESC` with a Go-side break-on-watermark filter — prevents the permanent pipeline stall that occurred with ASC+LIMIT (oldest matches always filled the result, blocking watermark advance)
+- Two query modes: **bootstrap** (rolling window `start_time >= NOW() - N days`) and **watermark** (`match_id > last_parsed_match_id`, for incremental catch-up)
+- Watermark query uses `ORDER BY match_id ASC` with match_id filter pushed into SQL and `LIMIT` to bound result size — prevents data-loss bug where DESC+no-filter caused the watermark to skip past older unprocessed matches
+- Watermark is read on startup from `ingestion_checkpoints.last_parsed_match_id` via the shared `checkpoint` package; if DB is unreachable, falls back to rolling-window path
 - Rate-limit avoidance via Redis-backed proxy pool
-- Opt-in startup run (`ID_FETCHER_START_RUN`) waits for `PoolMinSize` proxies before firing
-- Mutex flag prevents overlapping cron runs
+- Opt-in startup run (`ID_FETCHER_START_RUN`) waits for `PoolMinSize` proxies before firing, shares cron trylock
+- Mutex flag (buffered chan capacity-1) prevents overlapping cron runs
+- Redis-sourced Prometheus metrics via `proxypool.NewRedisPoolCollector` for accurate pool size (replaces per-process gauge that diverged from Redis ground truth)
 
 ## Detail Fetcher
 **Purpose**: Consumes match IDs, fetches full match JSON from OpenDota, publishes to parser queue.
@@ -44,7 +46,8 @@
 
 **Key behaviors**:
 - Threaded connection pool (psycopg2 `ThreadedConnectionPool`) guarded by `threading.Lock`
-- Broken connections are discarded via `putconn(conn, close=True)` on rollback failure — prevents pool poisoning (previously returned dead connections to the pool, causing cascading HTTP 500s)
+- Broken connections are discarded via `putconn(conn, close=True)` on rollback failure — prevents pool poisoning
 - Six pre-fetched batch queries replace hundreds of individual lookups: baselines, team-hero, player-hero, synergy, counter, h2h
-- Hot-reload endpoint (`/reload/:patch_id`) without restart
-- Returns `{"status":"ok","patch_models_loaded":[...]}` on health check
+- **`POST /predict`** accepts `patch_id`, `first_pick_team`, `draft[]`, `radiant_team_id`, `dire_team_id`, `account_id` (optional, enables player-hero features), `num_recommendations`; returns top-5 hero scores + **reasoning** string explaining top picks
+- **`POST /reload/{patch_id}`** — hot-reload a model without restart (requires `STRATZ_ADMIN_TOKEN` in Bearer auth header)
+- `GET /health` — Returns `{"status":"ok","patch_models_loaded":[...]}`

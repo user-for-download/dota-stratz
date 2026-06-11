@@ -18,4 +18,5 @@
 | `db` | pgxpool connection with ping |
 | `mq` | AMQP connection + channel |
 | `logger` | Global zap.Logger from `LOG_LEVEL` |
-| `proxypool` | Redis-backed proxy pool (~710 lines). `MakeTransport` supports HTTP/HTTPS/SOCKS4/SOCKS5 |
+| `proxypool` | Redis-backed proxy pool (~710 lines). `MakeTransport` supports HTTP/HTTPS/SOCKS4/SOCKS5; `NewRedisPoolCollector` for accurate Redis-sourced Prometheus pool metrics |
+| `checkpoint` | Shared constants + `ReadWatermark()` for `ingestion_checkpoints` table — used by both parser (writer) and id-fetcher (reader) with a single source of truth SQL |
