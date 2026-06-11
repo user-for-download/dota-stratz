@@ -2,11 +2,13 @@ package api
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/dota-stratz/services/id-fetcher/internal/metrics"
 	"github.com/dota-stratz/services/id-fetcher/internal/queue"
 	"github.com/dota-stratz/shared/go-common/logger"
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
@@ -29,56 +31,66 @@ type matchIDPublisher interface {
 var _ openDotaSource = (*OpenDotaClient)(nil)
 var _ matchIDPublisher = (*queue.Publisher)(nil)
 
+// lastMaxMatchIDKey is the Redis key where the highest match ID ever seen
+// by the id-fetcher is stored. Used to avoid re-publishing matches that
+// have already been queued.
+const lastMaxMatchIDKey = "dota2:fetcher:last_max_match_id"
+
 // Fetcher fetches match IDs from OpenDota and publishes them to RabbitMQ.
+// Duplicate suppression is three-layered:
 //
-// On boot the caller invokes SetWatermark(w, lookbackDays). When
-// Watermark > 0 the fetcher uses the watermark-based query
-// (matches_watermark.sql + in-Go `match_id > watermark` filter) so
-// the pipeline advances past the parser's high-water mark and does
-// not re-emit already-parsed match IDs. When Watermark == 0 the
-// fetcher falls back to the rolling N-day window so a fresh DB still
-// gets bootstrapped.
+//  1. Watermark (last_parsed_match_id) — matches fully parsed and stored
+//     in the local DB are skipped.
+//  2. Redis lastMaxMatchID — the highest match ID previously returned by
+//     an OpenDota fetch is stored in Redis. Any match at or below this
+//     value on subsequent runs is skipped, preventing re-publication of
+//     already-queued match IDs.
+//  3. Local DB lookup — if the Fetcher has a DB connection (optional),
+//     fetched match IDs are checked against the matches table before
+//     publishing (not yet implemented — the first two layers are
+//     sufficient for production).
 type Fetcher struct {
 	client    openDotaSource
 	publisher matchIDPublisher
 	queueName string
 	batchSize int
 
-	// watermark is the parser's last_parsed_match_id. When > 0, the
-	// fetcher uses the watermark-based path instead of the rolling
-	// window. Read-only after construction — use SetWatermark.
+	// watermark is the parser's last_parsed_match_id. When > 0, matches
+	// at or below this value are skipped in the Run loop.
 	watermark int64
 
-	// watermarkLookbackDays is the rolling window (in days) used by
-	// the watermark query. Must be >= the rolling-window lookback
-	// used by the bootstrap path; enforced in config.Load.
-	watermarkLookbackDays int
+	// rdb is the shared Redis client used by the proxy pool. It is also
+	// used to persist the highest match ID seen across fetcher runs so
+	// that already-queued match IDs are not re-published on restart or
+	// cron tick. Nil is allowed (tests / disabled) — the Redis-based
+	// filter is skipped when rdb is nil.
+	rdb redis.Cmdable
+
+	// lastMaxMatchID is the highest match ID seen in the previous fetch.
+	// Loaded from Redis at the start of each Run call.
+	lastMaxMatchID int64
 }
 
-func NewFetcher(client openDotaSource, pub matchIDPublisher, qName string, bSize int) *Fetcher {
+func NewFetcher(client openDotaSource, pub matchIDPublisher, qName string, bSize int, rdb redis.Cmdable) *Fetcher {
 	return &Fetcher{
 		client:    client,
 		publisher: pub,
 		queueName: qName,
 		batchSize: bSize,
+		rdb:       rdb,
 	}
 }
 
 // SetWatermark configures the parser high-water mark this Fetcher
-// should use to filter OpenDota responses. A watermark of 0 (the
-// default) selects the rolling-window path; any positive value
-// selects the watermark-based path. Safe to call once before the
-// first Run; the field is read without locking in Run, so callers
-// must not call SetWatermark concurrently with Run.
+// should use to filter OpenDota responses. Safe to call once before the
+// first Run; the field is read without locking in Run, so callers must
+// not call SetWatermark concurrently with Run.
 func (f *Fetcher) SetWatermark(w int64, lookbackDays int) {
 	if w < 0 {
 		w = 0
 	}
-	if lookbackDays < 0 {
-		lookbackDays = 0
-	}
 	f.watermark = w
-	f.watermarkLookbackDays = lookbackDays
+	_ = lookbackDays // retained for API compatibility with existing callers
 }
 
 // Watermark returns the current watermark value (0 if unset). Useful
@@ -87,16 +99,66 @@ func (f *Fetcher) Watermark() int64 {
 	return f.watermark
 }
 
+// loadLastMaxMatchID reads the highest previously-fetched match ID from
+// Redis. On first run (key absent) the value stays 0 so no additional
+// filtering is applied.
+func (f *Fetcher) loadLastMaxMatchID(ctx context.Context) {
+	if f.rdb == nil {
+		return
+	}
+	val, err := f.rdb.Get(ctx, lastMaxMatchIDKey).Result()
+	if err != nil {
+		if err == redis.Nil {
+			logger.Log.Info("No lastMaxMatchID in Redis, fetching full window")
+		} else {
+			logger.Log.Warn("Failed to read lastMaxMatchID from Redis, fetching full window",
+				zap.Error(err))
+		}
+		f.lastMaxMatchID = 0
+		return
+	}
+	id, err := strconv.ParseInt(val, 10, 64)
+	if err != nil {
+		logger.Log.Warn("Invalid lastMaxMatchID in Redis, fetching full window",
+			zap.String("raw", val), zap.Error(err))
+		f.lastMaxMatchID = 0
+		return
+	}
+	f.lastMaxMatchID = id
+	logger.Log.Info("Loaded lastMaxMatchID from Redis",
+		zap.Int64("last_max_match_id", id))
+}
+
+// saveLastMaxMatchID persists the highest match ID from this fetch run
+// into Redis so subsequent runs can skip already-queued matches.
+// Errors are logged but not returned — the fetcher should never fail
+// a publish run over a Redis SET failure.
+func (f *Fetcher) saveLastMaxMatchID(ctx context.Context, maxID int64) {
+	if f.rdb == nil || maxID <= f.lastMaxMatchID {
+		return
+	}
+	if err := f.rdb.Set(ctx, lastMaxMatchIDKey, strconv.FormatInt(maxID, 10), 0).Err(); err != nil {
+		logger.Log.Error("Failed to persist lastMaxMatchID to Redis",
+			zap.Int64("max_id", maxID),
+			zap.Error(err))
+		return
+	}
+	f.lastMaxMatchID = maxID
+	logger.Log.Info("Persisted lastMaxMatchID to Redis",
+		zap.Int64("max_id", maxID))
+}
+
 // Run fetches matches via the rolling-window query (matches.sql) and
-// publishes their IDs to RabbitMQ in batchSize-sized messages. When a
-// watermark is configured, already-parsed match IDs (<= watermark) are
-// skipped in Go code so the pipeline does not re-queue committed work.
+// publishes their IDs to RabbitMQ in batchSize-sized messages.
 //
-// Previously this method toggled between matches.sql (rolling window)
-// and matches_watermark.sql (watermark filter pushed into SQL), but the
-// watermark SQL's small LIMIT (batchSize × 5) caused a 2+ day catch-up
-// lag behind the 360-day window. Using matches.sql (LIMIT 50000) in a
-// single round-trip and filtering in Go is both simpler and faster.
+// Deduplication is applied in this order:
+//  1. Watermark filter — skips matches at or below last_parsed_match_id.
+//  2. Redis filter — skips matches at or below the highest match ID seen
+//     in any previous fetch run, preventing re-publication of
+//     already-queued IDs.
+//
+// After a successful publish cycle the highest match ID from this batch
+// is persisted to Redis.
 //
 // On context cancellation (graceful shutdown) Run stops after the
 // current in-flight batch finishes — any partial batch is flushed
@@ -112,15 +174,23 @@ func (f *Fetcher) Run(ctx context.Context) error {
 		zap.Int("count", len(matches)),
 		zap.Int64("watermark", f.watermark))
 
-	totalPublished := 0
-	var batch []int64
+	// Load the highest match ID previously seen so we can skip
+	// already-queued matches.
+	f.loadLastMaxMatchID(ctx)
+
+	var (
+		totalPublished int
+		thisRunMaxID   int64
+		batch          []int64
+	)
 
 	for _, m := range matches {
-		// Skip already-parsed matches when a watermark is set.
-		// The rolling-window query returns everything in the time
-		// window; we filter in Go so we don't re-queue IDs the
-		// parser has already committed.
+		// Layer 1: skip already-parsed matches (watermark).
 		if f.watermark > 0 && m.MatchID <= f.watermark {
+			continue
+		}
+		// Layer 2: skip already-queued matches (Redis).
+		if f.lastMaxMatchID > 0 && m.MatchID <= f.lastMaxMatchID {
 			continue
 		}
 
@@ -163,9 +233,20 @@ func (f *Fetcher) Run(ctx context.Context) error {
 		metrics.MatchIDsPublishedTotal.Add(float64(len(batch)))
 	}
 
+	// Compute the max match ID of this run for Redis persistence.
+	for _, m := range matches {
+		if m.MatchID > thisRunMaxID {
+			thisRunMaxID = m.MatchID
+		}
+	}
+	if thisRunMaxID > f.lastMaxMatchID {
+		f.saveLastMaxMatchID(ctx, thisRunMaxID)
+	}
+
 	logger.Log.Info("Fetch run complete",
 		zap.Int("total_published", totalPublished),
-		zap.Int64("watermark", f.watermark))
+		zap.Int64("watermark", f.watermark),
+		zap.Int64("last_max_match_id", f.lastMaxMatchID))
 
 	metrics.PaginationRunsTotal.WithLabelValues("success").Inc()
 	return nil
@@ -174,14 +255,8 @@ func (f *Fetcher) Run(ctx context.Context) error {
 // fetch always uses the rolling-window query (matches.sql) which returns
 // all match IDs in the configured time window with a generous LIMIT 50000.
 //
-// The watermark filter is applied in Go inside Run() so a single
-// round-trip covers the entire window — no more 2500-row limit that
-// takes multiple cron ticks to drain.
-//
-// Previously this method dispatched to FetchMatchesSince when a watermark
-// was set, but the small overscan window (batchSize × 5) caused a
-// multi-day catch-up lag. The rolling query is a single call regardless
-// of watermark state.
+// The watermark and Redis filters are applied in Go inside Run() so a
+// single round-trip covers the entire window.
 func (f *Fetcher) fetch(ctx context.Context) ([]MatchNode, error) {
 	return f.client.FetchMatches(ctx)
 }

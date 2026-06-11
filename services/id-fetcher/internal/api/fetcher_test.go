@@ -75,12 +75,7 @@ func (f *fakePublisher) publishedItems() []int64 {
 // Watermark/lookback are left at zero (rolling-window path) unless the
 // caller calls SetWatermark.
 func newTestFetcher(src *fakeSource, pub *fakePublisher, batchSize int) *Fetcher {
-	return &Fetcher{
-		client:    src,
-		publisher: pub,
-		queueName: "queue.match_ids",
-		batchSize: batchSize,
-	}
+	return NewFetcher(src, pub, "queue.match_ids", batchSize, nil)
 }
 
 // ---------------------------------------------------------------------------

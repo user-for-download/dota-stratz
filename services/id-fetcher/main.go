@@ -80,7 +80,7 @@ func main() {
 		cfg.OpenDota.FetchLastCountDay,
 		cfg.OpenDota.FetchLobbyTypes,
 	)
-	fetcher := api.NewFetcher(odClient, mqPub, cfg.RabbitMQ.Queues.MatchIDs, cfg.OpenDota.BatchSize)
+	fetcher := api.NewFetcher(odClient, mqPub, cfg.RabbitMQ.Queues.MatchIDs, cfg.OpenDota.BatchSize, rdb)
 
 	// 3b. Postgres bootstrap — read the parser's last_parsed_match_id
 	// from ingestion_checkpoints. If the row exists and is > 0, switch
