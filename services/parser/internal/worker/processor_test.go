@@ -152,7 +152,10 @@ func Test_consecutiveBatchFailuresResetAfterFKFallback_BUG010(t *testing.T) {
 		consecutiveBatchFailures: 2, // pre-set to test the reset
 	}
 
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		proc.Run(ctx)
 	}()
 
@@ -161,8 +164,7 @@ func Test_consecutiveBatchFailuresResetAfterFKFallback_BUG010(t *testing.T) {
 
 	// Cancel so Run exits cleanly.
 	cancel()
-	// Give Run a moment to see the cancellation.
-	time.Sleep(20 * time.Millisecond)
+	wg.Wait()
 
 	// consecutiveBatchFailures must be 0 after FK fallback.
 	if proc.consecutiveBatchFailures != 0 {
@@ -232,7 +234,10 @@ func Test_BatchEscalatesToDLQ(t *testing.T) {
 		consecutiveBatchFailures: maxConsecutiveBatchFailures - 1, // start at 2
 	}
 
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		proc.Run(ctx)
 	}()
 
@@ -241,7 +246,7 @@ func Test_BatchEscalatesToDLQ(t *testing.T) {
 	// Give the processor a moment to execute the DLQ Nack.
 	time.Sleep(20 * time.Millisecond)
 	cancel()
-	time.Sleep(20 * time.Millisecond)
+	wg.Wait()
 
 	// All deliveries should be Nack'd without requeue (→ DLQ).
 	for i, a := range acknowledgers {

@@ -662,7 +662,7 @@ func TestWithProxy_BodyReadFail(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	// Body that errors on read → path 5
+	// Body that errors on read → path 5 (now treated as ReasonTimeout per Bug #6)
 	failBody := io.NopCloser(&errReader{err: fmt.Errorf("connection reset")})
 	_, err := pool.WithProxy(ctx, func(proxy string) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Body: failBody}, nil
@@ -671,10 +671,11 @@ func TestWithProxy_BodyReadFail(t *testing.T) {
 		t.Fatal("expected body read error, got nil")
 	}
 
-	// Proxy should have been removed (hard failure on body read)
+	// Proxy should still exist (body read failure = ReasonTimeout = soft fail,
+	// just increments the failure counter instead of removing — Bug #6).
 	exists, _ := pool.Exists(ctx, "http://proxy-a:8080")
-	if exists {
-		t.Fatal("expected proxy to be removed after body read failure")
+	if !exists {
+		t.Fatal("expected proxy to remain after body read failure (soft fail)")
 	}
 }
 
