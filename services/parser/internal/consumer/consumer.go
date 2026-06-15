@@ -95,6 +95,7 @@ func (c *Consumer) ConsumeWithReconnect(done <-chan struct{}) <-chan amqp.Delive
 		// allows the processor to drain any buffered messages during the
 		// shutdown window. The channel is GC'd after all goroutines exit.
 		backoff := 1 * time.Second
+		var cons *Consumer
 
 		for {
 			select {
@@ -103,7 +104,15 @@ func (c *Consumer) ConsumeWithReconnect(done <-chan struct{}) <-chan amqp.Delive
 			default:
 			}
 
-			cons, err := NewConsumer(c.url, c.queue, c.dlqName, c.prefetch)
+			// Close the previous consumer before creating a new one to
+			// prevent connection/channel leaks on reconnect (BUG-004).
+			if cons != nil {
+				cons.Close()
+				cons = nil
+			}
+
+			var err error
+			cons, err = NewConsumer(c.url, c.queue, c.dlqName, c.prefetch)
 			if err != nil {
 				logger.Log.Warn("Consumer init failed, retrying",
 					zap.Error(err),

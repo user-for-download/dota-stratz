@@ -67,6 +67,7 @@ func (c *Client) FetchRaw(ctx context.Context, matchID int64) ([]byte, error) {
 		_ = c.pool.Report(ctx, proxy, proxypool.ReasonHardFailure)
 		return nil, transportErr
 	}
+	defer transport.CloseIdleConnections()
 
 	client := &http.Client{
 		Transport: transport,

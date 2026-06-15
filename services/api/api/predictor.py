@@ -62,7 +62,7 @@ class Predictor:
 
         try:
             model = lgb.Booster(model_file=str(model_path))
-            schema = load_schema(self._model_dir)
+            schema = load_schema(self._model_dir, patch_id)
             with self._lock:
                 self._models[patch_id] = model
                 self._schemas[patch_id] = schema
@@ -102,11 +102,12 @@ class Predictor:
                 if not model_path.exists():
                     continue
                 model = lgb.Booster(model_file=str(model_path))
-                schema = load_schema(self._model_dir)
+                schema = load_schema(self._model_dir, pid)
                 new_models[pid] = model
                 new_schemas[pid] = schema
                 count += 1
             except (ValueError, IndexError, Exception):
+                logger.exception("Failed to load model during reload_all for patch")
                 continue
         with self._lock:
             self._models = new_models
@@ -259,21 +260,23 @@ class Predictor:
         """
         if batch is not None:
             # Read from pre-fetched batch — zero extra queries (BUG-002).
+            # Convert DB values (Decimal from psycopg2) to float for
+            # format-string safety in generate_reasoning (BUG-003).
             bl = batch.baselines.get(hero_id)
-            bl_wr = bl["win_rate"] if bl else None
+            bl_wr = float(bl["win_rate"]) if bl else None
 
             th = batch.team_hero_agg.get(hero_id)
-            th_wr = th["win_rate"] if th else None
+            th_wr = float(th["win_rate"]) if th else None
 
             sy = batch.synergy.get(hero_id)
-            sy_wr = sy[0] if sy else None
+            sy_wr = float(sy[0]) if sy else None
 
             co = batch.counter.get(hero_id)
-            co_wr = co[0] if co else None
+            co_wr = float(co[0]) if co else None
 
             # BUG-003: h2h_row was fetched in pre_fetch_batch but never read.
             h2h = batch.h2h_row
-            h2h_wr = h2h["win_rate"] if h2h else None
+            h2h_wr = float(h2h["win_rate"]) if h2h else None
         else:
             # Fallback (should not happen in production).
             team_id = radiant_team_id if ctx.recommending_team == 0 else dire_team_id

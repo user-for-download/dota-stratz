@@ -93,7 +93,8 @@ def train_model(
     meta_path.write_text(json.dumps(meta, indent=2))
     logger.info("Metadata saved to %s", meta_path)
 
-    # Write the authoritative column-order schema
-    write_schema(model_dir, max_hero_id=cfg.max_hero_id)
+    # Write the authoritative column-order schema (patch-specific filename
+    # to prevent overwrites across multiple patch training runs — Bug #5).
+    write_schema(model_dir, patch_id=cfg.patch_id, max_hero_id=cfg.max_hero_id)
 
     return model, best_loss

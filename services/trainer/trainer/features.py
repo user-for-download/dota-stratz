@@ -80,6 +80,7 @@ TRAINING_FEATURES_SQL = """
         ds.is_pick::INT AS is_pick,
         ds.team,
         ds."order" AS "order",
+        ds.start_time,
         ds.radiant_team_id,
         ds.dire_team_id,
         ds.radiant_win,
@@ -335,11 +336,13 @@ def extract_features(
     return np.concatenate([numeric, onehot], axis=1)
 
 
-def write_schema(model_dir: str | Path, max_hero_id: int = 160) -> None:
-    """Write ``feature_schema.json`` — the authoritative column-order contract.
+def write_schema(model_dir: str | Path, patch_id: int, max_hero_id: int = 160) -> None:
+    """Write ``feature_schema_patch_{patch_id}.json`` — the authoritative
+    column-order contract for a specific patch.
 
     The inference API loads this file to build its feature vectors in
-    *exactly* the same order as training.
+    *exactly* the same order as training. Making the filename patch-specific
+    prevents multiple training runs from overwriting each other's schema (Bug #5).
     """
     cols = feature_column_names(include_onehot=True, max_hero_id=max_hero_id)
     schema = {
@@ -349,6 +352,6 @@ def write_schema(model_dir: str | Path, max_hero_id: int = 160) -> None:
         "aggregate_columns": feature_column_names(include_onehot=False),
         "onehot_prefix": "oh_hero_",
     }
-    path = Path(model_dir) / "feature_schema.json"
+    path = Path(model_dir) / f"feature_schema_patch_{patch_id}.json"
     path.write_text(json.dumps(schema, indent=2))
     logger.info("Wrote feature schema to %s (%d columns)", path, len(cols))

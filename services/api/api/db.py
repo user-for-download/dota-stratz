@@ -19,17 +19,20 @@ logger = logging.getLogger(__name__)
 
 _pool: pg_pool.ThreadedConnectionPool | None = None
 _pool_lock = threading.Lock()
+_semaphore: threading.BoundedSemaphore | None = None
+_GETCONN_TIMEOUT = 10.0  # seconds — fail-fast instead of blocking forever (Bug #9)
 
 
 def init_pool(cfg: APIConfig):
     """Create the global connection pool."""
-    global _pool
+    global _pool, _semaphore
     with _pool_lock:
         _pool = pg_pool.ThreadedConnectionPool(
             minconn=cfg.pool_min,
             maxconn=cfg.pool_max,
             dsn=cfg.pg_dsn,
         )
+        _semaphore = threading.BoundedSemaphore(cfg.pool_max)
     logger.info(
         "DB pool initialised (min=%d, max=%d)", cfg.pool_min, cfg.pool_max,
     )
@@ -37,28 +40,45 @@ def init_pool(cfg: APIConfig):
 
 def close_pool():
     """Close all connections in the pool."""
-    global _pool
+    global _pool, _semaphore
     with _pool_lock:
         if _pool is not None:
             _pool.closeall()
             _pool = None
+        _semaphore = None
     logger.info("DB pool closed")
 
 
 def get_conn() -> Any:
-    """Get a connection from the pool.
+    """Get a connection from the pool with a timeout.
 
     The lock is only held for the pool reference read, NOT during
     ``getconn()`` (which may block if all connections are in use).
     Holding the lock during a blocking call would prevent any other
     thread from returning a connection via ``put_conn``, causing a
     deadlock when the pool is exhausted (BUG-004).
+
+    A ``BoundedSemaphore`` (initialized to ``pool_max``) prevents
+    ``getconn()`` from blocking indefinitely: if all connections are
+    in use, ``acquire()`` times out after ``_GETCONN_TIMEOUT`` seconds
+    and raises ``TimeoutError`` (Bug #9).
     """
     if _pool is None:
         raise RuntimeError("DB pool not initialised")
     with _pool_lock:
         pool = _pool
-    return pool.getconn()
+    if _semaphore is not None:
+        if not _semaphore.acquire(timeout=_GETCONN_TIMEOUT):
+            raise TimeoutError(
+                f"Timed out after {_GETCONN_TIMEOUT}s waiting "
+                "for a DB connection from the pool"
+            )
+    try:
+        return pool.getconn()
+    except Exception:
+        if _semaphore is not None:
+            _semaphore.release()
+        raise
 
 
 def put_conn(conn):
@@ -75,7 +95,11 @@ def put_conn(conn):
     Without this, dead connections accumulate in the pool and every future
     ``/predict`` request that draws one gets an HTTP 500 until the API is
     restarted (issue #34).
+
+    Releases the semaphore acquired by ``get_conn()`` so other threads
+    can proceed (Bug #9).
     """
+    global _semaphore
     if _pool is not None:
         try:
             conn.rollback()
@@ -83,9 +107,13 @@ def put_conn(conn):
             # Connection is broken — discard it instead of poisoning the pool.
             with _pool_lock:
                 _pool.putconn(conn, close=True)
+            if _semaphore is not None:
+                _semaphore.release()
             return
         with _pool_lock:
             _pool.putconn(conn)
+        if _semaphore is not None:
+            _semaphore.release()
 
 
 # ---------------------------------------------------------------------------

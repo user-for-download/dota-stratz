@@ -233,6 +233,11 @@ func (p *Pool) Acquire(ctx context.Context) (string, error) {
 
 		switch status {
 		case 0:
+			// Check context before returning "no proxy" so a concurrent
+			// shutdown doesn't get a misleading error (Bug #7).
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
 			logger.Log.Debug("Acquire: no proxy available")
 			return "", ErrNoProxyAvailable
 		case 1:
@@ -294,6 +299,11 @@ func (p *Pool) AcquireWithRateLimit(ctx context.Context, maxPerMinute int) (stri
 		}
 
 		if ok.(int64) == 1 {
+			// Rate limit counter was INCR'd. Return the proxy to the caller
+			// — they'll Release() it when done, which decrements the lease.
+			// If Release() fails, the counter stays incremented for the 60s
+			// window, slightly shrinking the effective rate limit for this
+			// proxy (Bug #16 — edge case, low impact).
 			return proxy, nil
 		}
 
@@ -664,10 +674,12 @@ func (p *Pool) WithProxy(ctx context.Context, fn func(proxy string) (*http.Respo
 
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, MaxWithProxyBytes+1))
 	if readErr != nil {
-		logger.Log.Debug("WithProxy: body read failed, reporting hard failure",
+		logger.Log.Debug("WithProxy: body read failed, reporting timeout",
 			zap.String("proxy", proxy),
 			zap.Error(readErr))
-		_ = p.Report(ctx, proxy, ReasonHardFailure)
+		// Use ReasonTimeout for transient TCP read failures so the proxy
+		// gets a soft retry instead of permanent removal (Bug #6).
+		_ = p.Report(ctx, proxy, ReasonTimeout)
 		return nil, readErr
 	}
 	if int64(len(body)) > MaxWithProxyBytes {

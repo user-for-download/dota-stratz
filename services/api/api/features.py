@@ -89,15 +89,17 @@ def _int(val: Any, key: str = "") -> int:
 # ---------------------------------------------------------------------------
 
 
-def load_schema(model_dir: str | Path) -> dict[str, Any]:
-    """Load the feature schema written by the trainer.
+def load_schema(model_dir: str | Path, patch_id: int) -> dict[str, Any]:
+    """Load the patch-specific feature schema written by the trainer.
 
-    Returns the parsed JSON dict, or raises FileNotFoundError.
+    Uses ``feature_schema_patch_{patch_id}.json`` so that each patch has
+    its own schema, preventing dimension mismatches when multiple patches
+    are trained independently (Bug #5).
     """
-    path = Path(model_dir) / "feature_schema.json"
+    path = Path(model_dir) / f"feature_schema_patch_{patch_id}.json"
     if not path.exists():
         raise FileNotFoundError(
-            f"feature_schema.json not found at {path}. "
+            f"Feature schema not found at {path}. "
             "Has the trainer been run for this deployment?"
         )
     with open(path) as f:

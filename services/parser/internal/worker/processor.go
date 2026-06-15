@@ -169,7 +169,11 @@ func (p *Processor) Run(ctx context.Context) {
 			validDeliveries = append(validDeliveries, d)
 		}
 
-		currentBatch = validDeliveries // switch tracking to unfinalized deliveries
+		// Switch tracking to only the un-Nack'd (still in-flight) deliveries.
+		// Nil currentBatch first to avoid the deferred panic handler Nacking
+		// deliveries that were already Nack'd to DLQ (Bug #11).
+		currentBatch = nil
+		currentBatch = validDeliveries
 
 		if len(validMatches) == 0 {
 			logger.Log.Debug("No valid matches in batch, skipping")
