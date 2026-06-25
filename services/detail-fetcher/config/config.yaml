@@ -25,6 +25,13 @@ rabbitmq:
     match_ids_dlq: "queue.match_ids.dlq"
     raw_matches_dlq: "queue.raw_matches.dlq"
 
+# Postgres is consulted before fetching to skip match IDs already committed
+# to the matches table. The connection is OPTIONAL: if DSN is empty or the
+# DB is unreachable, the detail-fetcher logs a warning and proceeds with
+# normal fetch for every queued match_id.
+postgres:
+    dsn: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?sslmode=disable"
+
 worker:
   # Worker tuning is env-overridable; default values are the historical
   # baked-in values. Override via env (e.g.

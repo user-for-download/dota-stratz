@@ -49,6 +49,9 @@ type Config struct {
 			RawMatchesDLQ string `yaml:"raw_matches_dlq"`
 		} `yaml:"queues"`
 	} `yaml:"rabbitmq"`
+	Postgres struct {
+		DSN string `yaml:"dsn"`
+	} `yaml:"postgres"`
 	Worker struct {
 		Concurrency   int `yaml:"concurrency"`
 		Prefetch      int `yaml:"prefetch"`

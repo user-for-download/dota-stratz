@@ -18,6 +18,7 @@ import (
 	"github.com/dota-stratz/shared/go-common/db"
 	"github.com/dota-stratz/shared/go-common/logger"
 	"github.com/dota-stratz/shared/go-common/proxypool"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/robfig/cron/v3"
@@ -82,24 +83,40 @@ func main() {
 	)
 	fetcher := api.NewFetcher(odClient, mqPub, cfg.RabbitMQ.Queues.MatchIDs, cfg.OpenDota.BatchSize, rdb)
 
-	// 3b. Postgres bootstrap — read the parser's last_parsed_match_id
-	// from ingestion_checkpoints. If the row exists and is > 0, switch
-	// the fetcher into watermark mode so we don't re-fetch matches the
-	// parser has already committed.
-	//
-	// Failure mode: if the DB is unreachable or the DSN is empty, we
-	// log a warning and keep the watermark at 0 (rolling-window path).
-	// This matches the spec: "If you can't connect to the DB, log a
-	// warning and fall back to watermark=0 (rolling window)." A
-	// transient DB outage at startup is recoverable — the next cron
-	// tick still uses the rolling window, and once the DB is back the
-	// service must be restarted to re-read the checkpoint. (Restarting
-	// is acceptable here because the cron schedule is daily, so a
-	// delay of minutes vs. days is insignificant.)
-	if err := bootstrapCheckpoint(ctx, cfg, fetcher); err != nil {
-		logger.Log.Warn("Checkpoint bootstrap failed, using rolling-window path",
-			zap.String("pipeline", checkpoint.CheckpointPipelineIDFetcher),
-			zap.Error(err))
+	// 3b. Postgres bootstrap — keep a persistent pool for the full
+	// lifecycle so the fetcher can query existing match IDs (Layer 3
+	// filter) on every Run() call.
+	var dbPool *pgxpool.Pool
+	if cfg.Postgres.DSN != "" {
+		var err error
+		dbPool, err = db.Connect(ctx, cfg.Postgres.DSN, 4) // small pool: 4 conns
+		if err != nil {
+			logger.Log.Warn("Postgres connection failed, watermark + DB filter disabled",
+				zap.String("pipeline", checkpoint.CheckpointPipelineIDFetcher),
+				zap.Error(err))
+		}
+	}
+	if dbPool != nil {
+		defer dbPool.Close()
+
+		// Watermark bootstrap — read the parser's last_parsed_match_id
+		// from ingestion_checkpoints. If the row exists and is > 0, switch
+		// the fetcher into watermark mode so we don't re-fetch matches the
+		// parser has already committed.
+		if err := bootstrapCheckpoint(ctx, cfg, fetcher, dbPool); err != nil {
+			logger.Log.Warn("Checkpoint bootstrap failed, using rolling-window path",
+				zap.String("pipeline", checkpoint.CheckpointPipelineIDFetcher),
+				zap.Error(err))
+		}
+
+		// Layer 3 filter: skip match IDs already committed to the matches
+		// table. Controlled by FORCE_DOWNLOAD_REWRITE env var.
+		ec := api.NewPostgresExistenceChecker(dbPool)
+		fetcher.SetExistenceChecker(ec, cfg.Postgres.ForceDownloadRewrite)
+		logger.Log.Info("DB existence filter configured",
+			zap.Bool("force_download_rewrite", cfg.Postgres.ForceDownloadRewrite))
+	} else {
+		logger.Log.Warn("No Postgres connection — Layer 3 DB filter disabled")
 	}
 
 	// 4. Metrics server.
@@ -294,6 +311,10 @@ func waitForPool(ctx context.Context, pool *proxypool.Pool, minPoolSize int, max
 // from Postgres and configures the fetcher's watermark if the value is
 // > 0.
 //
+// The caller provides a persistent dbPool that stays alive for the
+// entire id-fetcher lifecycle so the Layer 3 existence filter can query
+// the matches table on every Run() call.
+//
 // Returns nil on the happy paths (watermark applied OR row missing →
 // rolling window) and a non-nil error only when something genuinely
 // went wrong that the caller should log as a warning. The id-fetcher
@@ -301,30 +322,11 @@ func waitForPool(ctx context.Context, pool *proxypool.Pool, minPoolSize int, max
 // DB outage at startup does not block fetches — a service restart is
 // required to re-read the checkpoint, which is acceptable for a
 // daily-schedule pipeline.
-//
-// The function closes the connection pool before returning so a
-// long-lived id-fetcher does not hold an idle DB connection between
-// the bootstrap read and the first cron tick. The parser never reads
-// from the id-fetcher's pool, so holding the connection is wasteful.
-func bootstrapCheckpoint(ctx context.Context, cfg *config.Config, fetcher *api.Fetcher) error {
-	if cfg.Postgres.DSN == "" {
-		// Operator opted out of Postgres for the id-fetcher (e.g. local
-		// dev with no DB). Not an error — just inform.
-		logger.Log.Info("Checkpoint bootstrap skipped: postgres.dsn is empty, using rolling window",
-			zap.String("pipeline", checkpoint.CheckpointPipelineIDFetcher))
-		return nil
-	}
-
+func bootstrapCheckpoint(ctx context.Context, cfg *config.Config, fetcher *api.Fetcher, pool *pgxpool.Pool) error {
 	// Use a short timeout so a slow or unreachable DB does not block
 	// service startup. 5s is plenty for a single indexed PK lookup.
 	bootCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-
-	pool, err := db.Connect(bootCtx, cfg.Postgres.DSN, 0) // 0 = use pgx default (4×GOMAXPROCS)
-	if err != nil {
-		return fmt.Errorf("postgres connect: %w", err)
-	}
-	defer pool.Close()
 
 	watermark, ok, err := checkpoint.ReadWatermark(bootCtx, pool)
 	if err != nil {

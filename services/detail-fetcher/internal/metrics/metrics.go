@@ -21,6 +21,11 @@ var (
 		Help: "Total publishes to raw_matches queue by result.",
 	}, []string{"result"}) // "success", "error"
 
+	SkippedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "detail_fetcher_skipped_total",
+		Help: "Total messages skipped because match already exists in DB.",
+	})
+
 	DLQRoutedTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "detail_fetcher_dlq_routed_total",
 		Help: "Total messages sent to DLQ after exhausted retries.",

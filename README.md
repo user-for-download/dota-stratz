@@ -117,7 +117,8 @@ cp deploy/.env.example deploy/.env
 | `PROXY_FILE_PATH` | `deploy/proxy.txt` | Yes | Static proxy list (bootstrap) |
 | `PROXY_REFRESH_SOURCE_URL` | *(scrape URL)* | No | Remote proxy source (empty to disable) |
 | `RABBITMQ_DEFAULT_PASS` | `guest` | No | RabbitMQ password |
-| `FETCH_LAST_COUNT_DAY` | `30` | Yes | Rolling window (days) for ID Fetcher queries |
+| `FETCH_LAST_COUNT_DAY` | `360` | Yes | Rolling window (days) for ID Fetcher queries |
+| `DETAIL_FETCHER_WORKER_CONCURRENCY` | `5` | No | Concurrent workers for detail fetcher |
 | `FETCH_LOBBY_TYPES` | `1,2,6` | Yes | Comma-separated lobby types to fetch |
 | `LOG_LEVEL` | `info` | No | Log level (debug, info, warn, error) |
 
@@ -263,12 +264,12 @@ Access the management UI at `http://localhost:15672` (default: guest/guest). Key
 
 ## Pipeline Lifecycle
 
-1. **ID Fetcher** cron fires on its configured schedule (default: every 5 min for continuous ingestion), queries OpenDota Explorer for matches within a rolling N-day window (or uses watermark-based query to skip already-parsed matches), publishes IDs in batches to RabbitMQ. Optional startup fetch runs on boot before the first cron tick (enabled via `ID_FETCHER_START_RUN=true`)
-2. **Detail Fetcher** consumes match IDs, fetches full match JSON from OpenDota API (via proxy pool, rate-limited per proxy at 50 req/min), publishes raw data
-3. **Parser** consumes raw JSON, accumulates batches (size 100 or 2s timeout), validates, and bulk-inserts into 20+ PostgreSQL tables (including gold_t/xp_t JSONB arrays for early-game features)
+1. **ID Fetcher** cron fires on its configured schedule (default: daily at midnight for incremental, or every 5 min for continuous), queries OpenDota Explorer for matches within a rolling N-day window (or uses watermark-based query to skip already-parsed matches), publishes IDs in batches to RabbitMQ. Includes DB existence check (Layer 3) to prevent re-publishing match IDs already in the database. Optional startup fetch runs on boot before the first cron tick (enabled via `ID_FETCHER_START_RUN=true`)
+2. **Detail Fetcher** consumes match IDs, fetches full match JSON from OpenDota API (via proxy pool with 5 retries + direct connection fallback before DLQ), publishes raw data. Includes DB existence check (`postgresMatchChecker`) to skip matches already committed — acts as a safety net for DLQ replays and race conditions. Configurable concurrency (default 50 workers). Exposes `detail_fetcher_skipped_total` metric.
+3. **Parser** consumes raw JSON, accumulates batches (size 100 or 2s timeout), validates, and bulk-inserts into 20+ PostgreSQL tables (including gold_t/xp_t JSONB arrays for early-game features). Memory: 1G.
 4. Failures route to **dead-letter queues** for manual inspection and replay
 5. **Analytics materialized views** refresh periodically for ML feature extraction
-6. **Trainer** computes **7 patch-aware aggregate tables** (`team_hero_agg`, `player_hero_agg`, `hero_synergy_agg`, `hero_counter_agg`, `team_h2h_agg`, `hero_baseline_agg`, `hero_draft_slot_agg`) and trains LightGBM **binary classification** models (218-dim feature vectors: 58 aggregate + 160 one-hot hero ID)
+6. **Trainer** computes **7 patch-aware aggregate tables** (`team_hero_agg`, `player_hero_agg`, `hero_synergy_agg`, `hero_counter_agg`, `team_h2h_agg`, `hero_baseline_agg`, `hero_draft_slot_agg`) and trains LightGBM **binary classification** models (218-dim feature vectors: 58 aggregate + 160 one-hot hero ID). Validated performance: **AUC-ROC 0.85**, accuracy **74.6%** (patch 60). The `hero_draft_slot_agg` populator filters `team_pick_ordinal <= 5` to handle All Draft (game_mode=22) matches with extra picks.
 7. **Inference API** loads trained models and serves draft predictions via HTTP (`POST /predict`), returning top-5 hero recommendations with reasoning
 
 ## License

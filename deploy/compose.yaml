@@ -74,8 +74,8 @@ services:
         deploy:
             resources:
                 limits:
-                    memory: 256M
-                    cpus: "0.5"
+                    memory: 512M
+                    cpus: "1.0"
     redis:
         profiles:
             - all
@@ -299,8 +299,8 @@ services:
         deploy:
             resources:
                 limits:
-                    memory: 256M
-                    cpus: "0.5"
+                    memory: 1G
+                    cpus: "1.0"
     trainer:
         profiles:
             - train

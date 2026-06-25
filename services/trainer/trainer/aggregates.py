@@ -645,6 +645,7 @@ def populate_hero_draft_slot(cfg: TrainerConfig, conn) -> int:
                   AND m.radiant_win IS NOT NULL{extra}
                   AND pb.is_pick = TRUE
             ) ds
+            WHERE ds.team_pick_ordinal <= 5
             GROUP BY ds.hero_id, ds.team_pick_ordinal
             ORDER BY ds.hero_id, ds.team_pick_ordinal
         """, (patch_id,))

@@ -68,12 +68,14 @@ type Config struct {
 		} `yaml:"queues"`
 	} `yaml:"rabbitmq"`
 	// Postgres is used to read ingestion_checkpoints.last_parsed_match_id
-	// on startup so the watermark-based fetch path can be used. The
-	// connection is optional: if DSN is empty or the ping fails, the
+	// on startup so the watermark-based fetch path can be used. It is also
+	// used to skip match IDs already in the matches table (Layer 3 filter).
+	// The connection is optional: if DSN is empty or the ping fails, the
 	// id-fetcher logs a warning and falls back to the rolling-window
 	// path (watermark=0).
 	Postgres struct {
-		DSN string `yaml:"dsn"`
+		DSN                  string `yaml:"dsn"`
+		ForceDownloadRewrite bool   `yaml:"force_download_rewrite"`
 	} `yaml:"postgres"`
 	Worker struct {
 		MetricsPort int `yaml:"metrics_port"`

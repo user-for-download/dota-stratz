@@ -4,15 +4,52 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/dota-stratz/services/detail-fetcher/internal/api"
 	"github.com/dota-stratz/services/detail-fetcher/internal/metrics"
 	"github.com/dota-stratz/services/detail-fetcher/internal/publisher"
 	"github.com/dota-stratz/shared/go-common/logger"
+	"github.com/jackc/pgx/v5/pgxpool"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"go.uber.org/zap"
 )
+
+// matchExistenceChecker checks whether a match_id already exists in the
+// Postgres matches table. When available, the Worker skips the download
+// entirely and Acks the message immediately, avoiding 5+ minutes of
+// futile proxy + direct retries for matches that are already committed.
+type matchExistenceChecker interface {
+	// MatchExists returns true when the given match_id exists in the
+	// matches table. Errors are logged but treated as "don't know" —
+	// the worker proceeds with the normal fetch flow when the DB is
+	// unreachable, so a transient DB outage cannot drop messages.
+	MatchExists(ctx context.Context, matchID int64) (bool, error)
+}
+
+// postgresMatchChecker is the production implementation backed by the
+// dota-stratz Postgres matches table.
+type postgresMatchChecker struct {
+	pool *pgxpool.Pool
+}
+
+func NewPostgresMatchChecker(pool *pgxpool.Pool) *postgresMatchChecker {
+	return &postgresMatchChecker{pool: pool}
+}
+
+func (c *postgresMatchChecker) MatchExists(ctx context.Context, matchID int64) (bool, error) {
+	var exists bool
+	err := c.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM matches WHERE match_id = $1)`, matchID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check match existence: %w", err)
+	}
+	return exists, nil
+}
+
+// Compile-time check that *postgresMatchChecker satisfies the interface.
+var _ matchExistenceChecker = (*postgresMatchChecker)(nil)
 
 // MatchIDMessage is the payload consumed from the match_ids queue (produced
 // by the id-fetcher service).
@@ -25,6 +62,9 @@ type MatchIDMessage struct {
 // or proxy pool.
 type matchFetcher interface {
 	FetchRaw(ctx context.Context, matchID int64) ([]byte, error)
+	// FetchRawDirect fetches from OpenDota without a proxy. Used as a
+	// last-resort fallback when all proxy-based retries are exhausted.
+	FetchRawDirect(ctx context.Context, matchID int64) ([]byte, error)
 }
 
 // matchPublisher is the subset of *publisher.Publisher used by Worker.
@@ -41,9 +81,20 @@ var _ matchPublisher = (*publisher.Publisher)(nil)
 type Worker struct {
 	client     matchFetcher
 	publisher  matchPublisher
+	dbChecker  matchExistenceChecker
 	queueName  string
 	maxRetries int
 	retryDelay time.Duration
+}
+
+// SetDBExistenceChecker attaches a Postgres-backed existence checker so the
+// worker can skip matches that have already been committed to the database.
+// This avoids 5+ minutes of futile proxy retries + direct fallback for
+// matches that are already parsed. The checker is nil-safe — when nil
+// (default) the worker always fetches. Safe to call at any time before
+// Process; not guarded by a mutex (set once at startup).
+func (w *Worker) SetDBExistenceChecker(c matchExistenceChecker) {
+	w.dbChecker = c
 }
 
 func NewWorker(client matchFetcher, pub matchPublisher, queueName string, maxRetries, retryDelaySec int) *Worker {
@@ -98,6 +149,25 @@ func (w *Worker) Process(ctx context.Context, d amqp.Delivery) (result ProcessRe
 		metrics.DLQRoutedTotal.Inc()
 		result = NackDLQ
 		return
+	}
+
+	// Skip fetch if the match already exists in the database. This avoids
+	// 5+ minutes of futile proxy retries + direct fallback for matches
+	// that are already committed. The checker is nil-safe (default nil
+	// for backward compatibility and tests).
+	if w.dbChecker != nil {
+		exists, dbErr := w.dbChecker.MatchExists(ctx, msg.MatchID)
+		if dbErr != nil {
+			logger.Log.Warn("DB existence check failed, proceeding with fetch",
+				zap.Int64("match_id", msg.MatchID),
+				zap.Error(dbErr))
+		} else if exists {
+			logger.Log.Debug("Match already exists in DB, skipping",
+				zap.Int64("match_id", msg.MatchID))
+			metrics.SkippedTotal.Inc()
+			result = Ack
+			return
+		}
 	}
 
 	var lastErr error
@@ -181,6 +251,69 @@ func (w *Worker) Process(ctx context.Context, d amqp.Delivery) (result ProcessRe
 			continue
 		}
 
+		metrics.PublishesTotal.WithLabelValues("success").Inc()
+		result = Ack
+		return
+	}
+
+	// Proxy retries exhausted — try direct connection as last resort.
+	// Free proxies are often too slow for the full match download JSON
+	// even though they pass the lightweight validation ping. A direct
+	// connection bypasses the proxy bottleneck entirely.
+	if rawJSON == nil && ctx.Err() == nil {
+		logger.Log.Warn("Proxies exhausted, trying direct connection",
+			zap.Int64("match_id", msg.MatchID),
+			zap.Int("attempts_fetch", fetchAttempts),
+			zap.Error(lastErr))
+
+		fetchAttempts++
+		var directErr error
+		rawJSON, directErr = w.client.FetchRawDirect(ctx, msg.MatchID)
+		if directErr != nil {
+			if errors.Is(directErr, api.ErrMatchNotFound) {
+				logger.Log.Warn("Match not found via direct connection, discarding",
+					zap.Int64("match_id", msg.MatchID))
+				metrics.FetchesTotal.WithLabelValues("not_found").Inc()
+				result = Ack
+				return
+			}
+			lastErr = directErr
+			metrics.FetchesTotal.WithLabelValues("error").Inc()
+
+			logger.Log.Error("All attempts (proxies + direct) failed, sending to DLQ",
+				zap.Int64("match_id", msg.MatchID),
+				zap.Int("attempts_fetch", fetchAttempts),
+				zap.Error(lastErr))
+			metrics.DLQRoutedTotal.Inc()
+			result = NackDLQ
+			return
+		}
+		metrics.FetchesTotal.WithLabelValues("success").Inc()
+		logger.Log.Info("Direct connection succeeded after proxy retries exhausted",
+			zap.Int64("match_id", msg.MatchID),
+			zap.Int("attempts_fetch", fetchAttempts))
+
+		// Publish the directly-fetched match.
+		pubMsg := publisher.RawMatchMessage{
+			MatchID:   msg.MatchID,
+			RawJSON:   json.RawMessage(rawJSON),
+			FetchedAt: time.Now(),
+		}
+		if err := w.publisher.Publish(ctx, w.queueName, pubMsg); err != nil {
+			logger.Log.Error("Failed to publish after direct fallback",
+				zap.Int64("match_id", msg.MatchID),
+				zap.Error(err))
+			metrics.PublishesTotal.WithLabelValues("error").Inc()
+			lastErr = err
+
+			logger.Log.Error("Publish failed after direct fallback, sending to DLQ",
+				zap.Int64("match_id", msg.MatchID),
+				zap.Int("attempts_fetch", fetchAttempts),
+				zap.Error(lastErr))
+			metrics.DLQRoutedTotal.Inc()
+			result = NackDLQ
+			return
+		}
 		metrics.PublishesTotal.WithLabelValues("success").Inc()
 		result = Ack
 		return

@@ -150,3 +150,70 @@ func (c *Client) FetchRaw(ctx context.Context, matchID int64) ([]byte, error) {
 	_ = c.pool.Release(ctx, proxy)
 	return body, nil
 }
+
+// FetchRawDirect fetches match data from OpenDota directly (no proxy).
+// Used as a fallback when all proxy-based retries are exhausted.
+func (c *Client) FetchRawDirect(ctx context.Context, matchID int64) ([]byte, error) {
+	start := time.Now()
+	defer func() {
+		metrics.FetchDuration.Observe(time.Since(start).Seconds())
+	}()
+
+	reqURL := fmt.Sprintf("%s/%d", c.baseURL, matchID)
+	const maxBodyBytes = 16 * 1024 * 1024
+
+	client := &http.Client{
+		Timeout: c.timeout,
+	}
+
+	req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if reqErr != nil {
+		return nil, reqErr
+	}
+	req.Header.Set("User-Agent", c.userAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("direct fetch failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, fmt.Errorf("rate limited on direct connection")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("non-200 status on direct: %d", resp.StatusCode)
+	}
+
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
+	if readErr != nil {
+		return nil, fmt.Errorf("direct body read failed: %w", readErr)
+	}
+	if len(body) > maxBodyBytes {
+		return nil, fmt.Errorf("response body exceeds %d bytes (direct)", maxBodyBytes)
+	}
+
+	var rawCheck json.RawMessage
+	if err := json.Unmarshal(body, &rawCheck); err != nil {
+		logger.Log.Warn("OpenDota returned invalid JSON (direct)",
+			zap.Int64("match_id", matchID),
+			zap.Error(err))
+		return nil, fmt.Errorf("invalid JSON response (direct): %w", err)
+	}
+
+	var errResp struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
+		logger.Log.Debug("OpenDota returned API error (direct)",
+			zap.Int64("match_id", matchID),
+			zap.String("error", errResp.Error))
+		if errResp.Error == "Match ID not found" || errResp.Error == "private match" {
+			return nil, ErrMatchNotFound
+		}
+		return nil, fmt.Errorf("opendota error (direct): %s", errResp.Error)
+	}
+
+	return body, nil
+}

@@ -31,11 +31,17 @@ rabbitmq:
     queues:
         match_ids: "queue.match_ids"
 
-# Postgres is consulted on boot to read ingestion_checkpoints.last_parsed_match_id.
+# Postgres is consulted on boot to read ingestion_checkpoints.last_parsed_match_id
+# and to skip match IDs already committed to the matches table (Layer 3 filter).
 # The connection is OPTIONAL: if DSN is empty or the DB is unreachable, the
 # id-fetcher logs a warning and uses the rolling-window path (watermark=0).
+#
+# When force_download_rewrite is true the DB existence check is bypassed and
+# ALL match IDs returned by OpenDota are published to the queue, regardless
+# of whether they already exist in the database.
 postgres:
     dsn: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?sslmode=disable"
+    force_download_rewrite: ${FORCE_DOWNLOAD_REWRITE:-false}
 
 worker:
     metrics_port: ${ID_FETCHER_METRICS_PORT}

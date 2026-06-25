@@ -83,6 +83,7 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 - Self-scheduled: no external trigger required, no coordinator dependency
 - Two query modes: **bootstrap** (rolling window `start_time >= NOW() - N days`) and **watermark** (`match_id > last_parsed_match_id ORDER BY match_id ASC LIMIT N`). Watermark pushed into SQL to guarantee correctness regardless of backlog depth
 - Watermark is read on startup from `ingestion_checkpoints.last_parsed_match_id` via the shared `checkpoint` package. If DB is unreachable during bootstrap, falls back to rolling-window path (transient DB outage does not block fetches)
+- **DB existence check** (Layer 3): Before publishing match IDs to the queue, checks the `matches` table for existing match IDs to prevent re-publishing already-parsed matches. Uses `matchExistsInDB` with array-based query (`SELECT match_id FROM matches WHERE match_id = ANY($1)`) for batch checking.
 - Only fetches ranked (lobby_type 1,2) and normal (6) matches
 - Rate-limit avoidance via proxy pool integration; infinite retry until success, pool exhaustion, or shutdown
 - Redis-sourced Prometheus metrics via `NewRedisPoolCollector` for accurate pool size (replaces per-process gauge that diverged across services)
@@ -101,18 +102,19 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 | Config | `config/config.yaml` |
 
 **Packages:**
-- `internal/api/client.go` — HTTP client for `https://api.opendota.com/api/matches/{id}` with proxy pool integration: `AcquireWithRateLimit`, JSON validation, error classification. Uses `proxypool.MakeTransport` for the HTTP transport (HTTP/HTTPS proxy support only; SOCKS5 not needed for outbound API calls).
+- `internal/api/client.go` — HTTP client for `https://api.opendota.com/api/matches/{id}` with proxy pool integration: `AcquireWithRateLimit`, JSON validation, error classification. Uses `proxypool.MakeTransport` for the HTTP transport (HTTP/HTTPS proxy support only; SOCKS5 not needed for outbound API calls). Includes **direct connection fallback** as last resort before DLQ (attempts a direct HTTP request without proxy when all proxy-based retries fail). This prevents pipeline stalls when the free proxy pool has low validation rates (~3.4%).
 - `internal/consumer/` — RabbitMQ consumer for `queue.match_ids` with DLQ binding and QoS. Auto-reconnection loop (1s → 30s exponential backoff).
-- `internal/worker/` — Match processing: exponential backoff retries (max 3), handles `ErrMatchNotFound` (ack + drop), publishes to `queue.raw_matches` on success
+- `internal/worker/` — Match processing: exponential backoff retries (max 5 — increased from 3 for better proxy rotation), handles `ErrMatchNotFound` (ack + drop), publishes to `queue.raw_matches` on success. Includes `matchExistenceChecker` interface + `postgresMatchChecker` implementation that checks the `matches` table via `SELECT EXISTS(...)` before fetching — skips (Acks) matches already committed to reduce redundant API calls. Logs at `Debug` level on skip, `Warn` on DB error (proceeds with fetch on error to avoid data loss). Configurable concurrency via `DETAIL_FETCHER_WORKER_CONCURRENCY` (default 50).
 - `internal/publisher/` — RabbitMQ publisher for `queue.raw_matches` with publisher confirms, mutex-serialized to prevent concurrency trap. Uses `reconnectMu` to serialize reconnection attempts (prevents exchange re-declaration race during concurrent reconnect), and `shutdown` channel to prevent goroutine leaks on close (releases `closeMu` before `Close()` to avoid deadlock).
-- `internal/metrics/` — `detail_fetcher_messages_received_total`, `detail_fetcher_fetches_total{result}`, `detail_fetcher_publishes_total{result}`, `detail_fetcher_dlq_routed_total`
+- `internal/metrics/` — `detail_fetcher_messages_received_total`, `detail_fetcher_fetches_total{result}`, `detail_fetcher_publishes_total{result}`, `detail_fetcher_dlq_routed_total`, `detail_fetcher_skipped_total`
 
 **Key behaviors:**
 - **`consumeWithReconnect`**: permanent output channel (never closed on reconnect), workers exit only via `<-ctx.Done()`. Prevents channel-close panics and in-flight message loss.
 - Rate-limited proxy acquisition: `max_req_per_min` (default 50) per proxy
-- Concurrency: configurable worker pool (default 5)
-- All retries exhausted → routes to DLQ `queue.raw_matches.dlq`
+- Concurrency: configurable worker pool (default 50, increased from 5 for backfill throughput)
+- All retries exhausted → direct connection fallback → routes to DLQ `queue.match_ids.dlq` (only if direct fallback also fails)
 - Messages that produce `ErrMatchNotFound` (404) are acknowledged and dropped immediately
+- DB existence check (`postgresMatchChecker`): checks `matches` table before fetching; skips and Acks matches already committed. Uses a 4-connection pgx pool separate from the parser's pool.
 
 ---
 
@@ -215,10 +217,11 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 | Config | Environment variables (`TRAINER_*`) |
 
 **Pipeline stages:**
-1. **Aggregate population** — **7** populator functions compute `ml.*_agg` tables per patch via bulk INSERT (ON CONFLICT DO UPDATE). Queries aggregate match data grouped by team/hero/player/patch, filtering `WHERE radiant_win IS NOT NULL`. Includes hero_draft_slot_agg (pick-position win rates) and avg_gold_10/avg_xp_10 from gold_t/xp_t JSONB arrays.
+1. **Aggregate population** — **7** populator functions compute `ml.*_agg` tables per patch via bulk INSERT (ON CONFLICT DO UPDATE). Queries aggregate match data grouped by team/hero/player/patch, filtering `WHERE radiant_win IS NOT NULL`. Includes `hero_draft_slot_agg` (pick-position win rates with `WHERE team_pick_ordinal <= 5` filter to handle All Draft game_mode=22 matches with extra picks), and `avg_gold_10`/`avg_xp_10` from gold_t/xp_t JSONB arrays.
 2. **Feature extraction** — `TRAINING_FEATURES_SQL` computes **58 aggregate + 160 one-hot hero ID = 218-dim feature vectors** via a single query with `LATERAL` subqueries for PIT synergy/counter lookups, `LEAST`/`GREATEST` index-friendly joins on synergy aggregates, and `COALESCE` for NULL safety (~11s for 108k draft slots). Includes low-game missingness flags, delta features, and role interaction features.
-3. **Training** — LightGBM **binary classification** (`binary` objective, not `lambdarank`) with NDCG evaluation, 80/15 train/val split at match level. Uses `binary` because all draft slots in a match share the same `radiant_win` target. Writes model, metadata JSON, and `feature_schema.json` (218-column column-order contract with API).
-4. **Output** — Model per patch (`model_patch_N.txt`), metadata (`model_patch_N_meta.json`), and shared `feature_schema.json` to `/models` volume.
+3. **Training** — LightGBM **binary classification** (`binary` objective, not `lambdarank`) with early stopping (50 rounds), 85/15 chronological train/val split at match level (not random — prevents PIT leakage from aggregate features). Uses `binary` because all draft slots in a match share the same `radiant_win` target. Writes model, metadata JSON, and `feature_schema_patch_N.json` (218-column column-order contract with API — patch-specific filename prevents overwrites).
+4. **Output** — Model per patch (`model_patch_N.txt`), metadata (`model_patch_N_meta.json`), and `feature_schema_patch_N.json` to `/models` volume.
+5. **Validation** — Models evaluated on held-out chronological validation set. Patch 60 achieves: AUC-ROC **0.85**, accuracy **74.6%**, Brier score **0.155**. Feature importance dominated by head-to-head win rate (51–57%), player-hero win rate (14–22%), and team-hero aggregates (5%). One-hot hero encoding contributes ~0.1% (redundant with aggregate context).
 
 **Key behaviors:**
 - Idempotent: aggregates use INSERT ON CONFLICT DO UPDATE (no longer TRUNCATE + insert)
@@ -376,6 +379,8 @@ ML targets that need PostgreSQL use `--profile db --profile api` or `--profile d
 | Service | Memory | CPUs | Notes |
 |---------|--------|------|-------|
 | postgres | 512M | 1.0 | |
+| rabbitmq | 512M | 1.0 | Increased from 256M to handle burst load from 200 concurrent workers |
+| parser | **1G** | 1.0 | Increased from 256M to accommodate 100-match JSON batch processing (prevents OOM kills) |
 | trainer | **2G** | 2.0 | Patch 58 (372k draft slots) requires ~1.6G |
 | api | 512M | 0.5 | |
 | Most others | 128-256M | 0.5 | |

@@ -16,8 +16,10 @@ import (
 	"github.com/dota-stratz/services/detail-fetcher/internal/publisher"
 	"github.com/dota-stratz/services/detail-fetcher/internal/worker"
 	"github.com/dota-stratz/shared/go-common/cache"
+	"github.com/dota-stratz/shared/go-common/db"
 	"github.com/dota-stratz/shared/go-common/logger"
 	"github.com/dota-stratz/shared/go-common/proxypool"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -79,14 +81,29 @@ func main() {
 	}
 	defer pub.Close()
 
-	// 4. Metrics & Health HTTP Server
+	// 4. Postgres (optional — skips matches already committed)
+	var dbPool *pgxpool.Pool
+	if cfg.Postgres.DSN != "" {
+		dbPool, err = db.Connect(ctx, cfg.Postgres.DSN, 4) // small pool: 4 conns
+		if err != nil {
+			logger.Log.Warn("Postgres unreachable, DB existence check disabled",
+				zap.Error(err))
+		} else {
+			logger.Log.Info("Postgres connected, DB existence check enabled")
+		}
+	}
+
+	// 5. Metrics & Health HTTP Server
 	go startMetricsServer(ctx, cfg.Worker.MetricsPort)
 
-	// 5. RabbitMQ Consumer with reconnection loop (survives broker restarts)
+	// 6. RabbitMQ Consumer with reconnection loop (survives broker restarts)
 	msgs, closeConsumer := consumeWithReconnect(ctx, cfg)
 
-	// 6. Worker Pool
+	// 7. Worker Pool
 	w := worker.NewWorker(odClient, pub, cfg.RabbitMQ.Queues.RawMatches, cfg.Worker.MaxRetries, cfg.Worker.RetryDelaySec)
+	if dbPool != nil {
+		w.SetDBExistenceChecker(worker.NewPostgresMatchChecker(dbPool))
+	}
 	var wg sync.WaitGroup
 
 	quit := make(chan os.Signal, 1)

@@ -21,11 +21,19 @@ func init() {
 // --- fakes ---
 
 type fakeFetcher struct {
-	fetchRawFn func(ctx context.Context, matchID int64) ([]byte, error)
+	fetchRawFn      func(ctx context.Context, matchID int64) ([]byte, error)
+	fetchRawDirectFn func(ctx context.Context, matchID int64) ([]byte, error)
 }
 
 func (f *fakeFetcher) FetchRaw(ctx context.Context, matchID int64) ([]byte, error) {
 	return f.fetchRawFn(ctx, matchID)
+}
+
+func (f *fakeFetcher) FetchRawDirect(ctx context.Context, matchID int64) ([]byte, error) {
+	if f.fetchRawDirectFn != nil {
+		return f.fetchRawDirectFn(ctx, matchID)
+	}
+	return nil, errors.New("direct fallback not wired in test")
 }
 
 type fakePublisher struct {
@@ -34,6 +42,15 @@ type fakePublisher struct {
 
 func (f *fakePublisher) Publish(ctx context.Context, queueName string, msg publisher.RawMatchMessage) error {
 	return f.publishFn(ctx, queueName, msg)
+}
+
+// fakeExistenceChecker implements matchExistenceChecker for tests.
+type fakeExistenceChecker struct {
+	matchExistsFn func(ctx context.Context, matchID int64) (bool, error)
+}
+
+func (f *fakeExistenceChecker) MatchExists(ctx context.Context, matchID int64) (bool, error) {
+	return f.matchExistsFn(ctx, matchID)
 }
 
 // --- tests ---
@@ -66,6 +83,71 @@ func TestProcess_Success(t *testing.T) {
 	assert.Equal(t, Ack, result)
 	assert.True(t, fetchCalled, "FetchRaw should have been called")
 	assert.True(t, publishCalled, "Publish should have been called")
+}
+
+func TestProcess_SkipWhenExistsInDB(t *testing.T) {
+	var fetchCalled bool
+	var publishCalled bool
+
+	fetcher := &fakeFetcher{
+		fetchRawFn: func(ctx context.Context, matchID int64) ([]byte, error) {
+			fetchCalled = true
+			t.Error("FetchRaw should NOT be called when match already exists in DB")
+			return nil, nil
+		},
+	}
+
+	pub := &fakePublisher{
+		publishFn: func(ctx context.Context, queueName string, msg publisher.RawMatchMessage) error {
+			publishCalled = true
+			t.Error("Publish should NOT be called when match already exists in DB")
+			return nil
+		},
+	}
+
+	w := NewWorker(fetcher, pub, "raw_matches", 3, 0)
+	w.SetDBExistenceChecker(&fakeExistenceChecker{
+		matchExistsFn: func(ctx context.Context, matchID int64) (bool, error) {
+			return true, nil
+		},
+	})
+
+	d := amqp.Delivery{Body: []byte(`{"match_id":123}`)}
+	result := w.Process(context.Background(), d)
+	assert.Equal(t, Ack, result)
+	assert.False(t, fetchCalled, "FetchRaw should NOT have been called")
+	assert.False(t, publishCalled, "Publish should NOT have been called")
+}
+
+func TestProcess_DBCheckErrorProceedsWithFetch(t *testing.T) {
+	var fetchCalled, publishCalled bool
+
+	fetcher := &fakeFetcher{
+		fetchRawFn: func(ctx context.Context, matchID int64) ([]byte, error) {
+			fetchCalled = true
+			return []byte(`{"match_id":123}`), nil
+		},
+	}
+
+	pub := &fakePublisher{
+		publishFn: func(ctx context.Context, queueName string, msg publisher.RawMatchMessage) error {
+			publishCalled = true
+			return nil
+		},
+	}
+
+	w := NewWorker(fetcher, pub, "raw_matches", 3, 0)
+	w.SetDBExistenceChecker(&fakeExistenceChecker{
+		matchExistsFn: func(ctx context.Context, matchID int64) (bool, error) {
+			return false, errors.New("simulated DB error")
+		},
+	})
+
+	d := amqp.Delivery{Body: []byte(`{"match_id":123}`)}
+	result := w.Process(context.Background(), d)
+	assert.Equal(t, Ack, result)
+	assert.True(t, fetchCalled, "FetchRaw should still be called when DB check errors")
+	assert.True(t, publishCalled, "Publish should still be called when DB check errors")
 }
 
 func TestProcess_MatchNotFound(t *testing.T) {

@@ -2,15 +2,60 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"time"
 
 	"github.com/dota-stratz/services/id-fetcher/internal/metrics"
 	"github.com/dota-stratz/services/id-fetcher/internal/queue"
 	"github.com/dota-stratz/shared/go-common/logger"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
+
+// existenceChecker queries which match IDs already exist in the database
+// so the fetcher can skip publishing them. Implementations must be safe
+// for concurrent use (the fetcher calls ExistingMatchIDs from Run).
+type existenceChecker interface {
+	// ExistingMatchIDs returns the set of match_id values in the DB whose
+	// match_id falls within [minID, maxID] (inclusive). An empty map or
+	// nil are both valid results meaning "no matches exist in this range".
+	ExistingMatchIDs(ctx context.Context, minID, maxID int64) (map[int64]struct{}, error)
+}
+
+// postgresExistenceChecker is the production implementation backed by
+// the matches table in Postgres.
+type postgresExistenceChecker struct {
+	pool *pgxpool.Pool
+}
+
+func NewPostgresExistenceChecker(pool *pgxpool.Pool) *postgresExistenceChecker {
+	return &postgresExistenceChecker{pool: pool}
+}
+
+func (c *postgresExistenceChecker) ExistingMatchIDs(ctx context.Context, minID, maxID int64) (map[int64]struct{}, error) {
+	rows, err := c.pool.Query(ctx,
+		`SELECT match_id FROM matches WHERE match_id >= $1 AND match_id <= $2`,
+		minID, maxID)
+	if err != nil {
+		return nil, fmt.Errorf("query existing matches: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[int64]struct{})
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan match_id: %w", err)
+		}
+		result[id] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration: %w", err)
+	}
+	return result, nil
+}
 
 // openDotaSource is the subset of *OpenDotaClient used by Fetcher. It
 // is defined as an interface so tests can inject deterministic fakes
@@ -69,6 +114,17 @@ type Fetcher struct {
 	// lastMaxMatchID is the highest match ID seen in the previous fetch.
 	// Loaded from Redis at the start of each Run call.
 	lastMaxMatchID int64
+
+	// existsChecker queries the Postgres matches table for match IDs
+	// that have already been committed. When non-nil and forceDownload
+	// is false, matches found in the DB are skipped (Layer 3 filter).
+	existsChecker existenceChecker
+
+	// forceDownload bypasses the DB existence check so ALL match IDs
+	// returned by OpenDota are published to the queue, regardless of
+	// whether they already exist in the database. Controlled by the
+	// FORCE_DOWNLOAD_REWRITE env var.
+	forceDownload bool
 }
 
 func NewFetcher(client openDotaSource, pub matchIDPublisher, qName string, bSize int, rdb redis.Cmdable) *Fetcher {
@@ -79,6 +135,14 @@ func NewFetcher(client openDotaSource, pub matchIDPublisher, qName string, bSize
 		batchSize: bSize,
 		rdb:       rdb,
 	}
+}
+
+// SetExistenceChecker configures an optional DB-backed filter that
+// skips match IDs already committed to the matches table. Pass
+// forceDownload=true to bypass the filter and publish everything.
+func (f *Fetcher) SetExistenceChecker(ec existenceChecker, forceDownload bool) {
+	f.existsChecker = ec
+	f.forceDownload = forceDownload
 }
 
 // SetWatermark configures the parser high-water mark this Fetcher
@@ -178,6 +242,29 @@ func (f *Fetcher) Run(ctx context.Context) error {
 	// already-queued matches.
 	f.loadLastMaxMatchID(ctx)
 
+	// Layer 3: pre-load the set of match IDs already committed to the
+	// Postgres matches table. Only needed when there is a DB connection
+	// and forceDownload is false.
+	var dbExisting map[int64]struct{}
+	if f.existsChecker != nil && !f.forceDownload && len(matches) > 0 {
+		minID := matches[0].MatchID
+		maxID := matches[len(matches)-1].MatchID
+		existing, err := f.existsChecker.ExistingMatchIDs(ctx, minID, maxID)
+		if err != nil {
+			logger.Log.Warn("Failed to query existing matches from DB, "+
+				"proceeding without DB filter",
+				zap.Error(err),
+				zap.Int64("range_min", minID),
+				zap.Int64("range_max", maxID))
+		} else {
+			dbExisting = existing
+			logger.Log.Info("DB existence filter active",
+				zap.Int("skip_count", len(dbExisting)),
+				zap.Int64("range_min", minID),
+				zap.Int64("range_max", maxID))
+		}
+	}
+
 	var (
 		totalPublished int
 		thisRunMaxID   int64
@@ -192,6 +279,12 @@ func (f *Fetcher) Run(ctx context.Context) error {
 		// Layer 2: skip already-queued matches (Redis).
 		if f.lastMaxMatchID > 0 && m.MatchID <= f.lastMaxMatchID {
 			continue
+		}
+		// Layer 3: skip matches already committed to the database.
+		if dbExisting != nil {
+			if _, exists := dbExisting[m.MatchID]; exists {
+				continue
+			}
 		}
 
 		if ctx.Err() != nil {
