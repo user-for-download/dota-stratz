@@ -153,12 +153,12 @@ func writeObsLeftLog(batch *pgx.Batch, matchID int64, playerSlot int, raw json.R
 // order (e.g. [5625, 5625, 5108]) — NOT as a list of {time, ability}
 // objects (Issue #33). We decode as []int and use the array index as the
 // upgrade order.
-// writeMinuteStats queues an INSERT for the minute-by-minute gold/XP arrays.
+// writeTimeSeriesArrays queues an INSERT for the minute-by-minute gold/XP arrays.
 // The JSONB arrays are stored in player_time_series_arrays (PK: match_id,
 // player_slot) instead of player_minute_stats so they don't conflict with
 // real minute-zero stat rows (issue #5 — the old schema used minute=0 as a
 // sentinel which collided with real data).
-func writeMinuteStats(batch *pgx.Batch, matchID int64, playerSlot int, goldT, xpT []float64) {
+func writeTimeSeriesArrays(batch *pgx.Batch, matchID int64, playerSlot int, goldT, xpT []float64) {
 	if len(goldT) == 0 && len(xpT) == 0 {
 		return
 	}
