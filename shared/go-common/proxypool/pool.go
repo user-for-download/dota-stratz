@@ -28,20 +28,22 @@ var ErrNoProxyAvailable = errors.New("no proxy available")
 type FailureReason string
 
 const (
-	ReasonHardFailure FailureReason = "hard"
-	ReasonTimeout     FailureReason = "timeout"
-	ReasonBadStatus   FailureReason = "bad_status"
-	ReasonRateLimited FailureReason = "rate_limit"
+	ReasonHardFailure     FailureReason = "hard"
+	ReasonTimeout         FailureReason = "timeout"
+	ReasonBadStatus       FailureReason = "bad_status"
+	ReasonRateLimited     FailureReason = "rate_limit"
+	ReasonSoftThreshold   FailureReason = "soft_threshold_exceeded"
 )
 
 // knownReasons is the allowlist of valid failure reasons used for metrics
 // label sanitization. Any reason not in this set is collapsed to "other"
 // to prevent Prometheus cardinality explosion.
 var knownReasons = map[FailureReason]bool{
-	ReasonHardFailure: true,
-	ReasonTimeout:     true,
-	ReasonBadStatus:   true,
-	ReasonRateLimited: true,
+	ReasonHardFailure:   true,
+	ReasonTimeout:       true,
+	ReasonBadStatus:     true,
+	ReasonRateLimited:   true,
+	ReasonSoftThreshold: true,
 }
 
 // sanitizeReason collapses unknown failure reasons to "other" for safe use
@@ -424,7 +426,7 @@ func (p *Pool) incrementAndMaybeRemove(ctx context.Context, proxy string, wasLea
 	if int(count) >= p.softFailThreshold {
 		// Soft-threshold exceeded — remove the proxy permanently.
 		// Report() already cleared the lease, so pass wasLeased through.
-		return p.remove(ctx, proxy, "soft_threshold_exceeded", wasLeased)
+		return p.remove(ctx, proxy, string(ReasonSoftThreshold), wasLeased)
 	}
 
 	// Return to pool with delayed score so it's deprioritized briefly.

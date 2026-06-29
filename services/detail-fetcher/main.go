@@ -231,8 +231,7 @@ func startMetricsServer(ctx context.Context, port int) {
 }
 
 // consumeWithReconnect wraps RabbitMQ consumption with automatic reconnection.
-// If the broker restarts or the channel dies, it reconnects with exponential
-// backoff (1s → 30s max) and resumes delivery on the returned channel.
+// Uses mq.Consumer under the hood for queue declaration and connection setup.
 //
 // On shutdown (ctx cancelled), the forward loop stops but the consumer
 // connection is NOT closed — the caller must invoke the returned close
@@ -242,10 +241,6 @@ func startMetricsServer(ctx context.Context, port int) {
 func consumeWithReconnect(ctx context.Context, cfg *config.Config) (<-chan amqp.Delivery, func()) {
 	outCh := make(chan amqp.Delivery, 100)
 
-	// Track the current consumer so the close func can close it.
-	// Protected by consMu because the reconnect goroutine writes it
-	// (setConsumer) and the main goroutine reads it (closeConsumer)
-	// concurrently during the shutdown window (Bug #5).
 	var (
 		currentCons *consumer.Consumer
 		consMu      sync.Mutex
@@ -257,11 +252,6 @@ func consumeWithReconnect(ctx context.Context, cfg *config.Config) (<-chan amqp.
 	}
 
 	go func() {
-		// NOTE: outCh is intentionally NOT closed on exit. Workers
-		// exit via <-ctx.Done(), not via channel close. Keeping outCh
-		// open allows workers to drain any buffered messages during
-		// the shutdown window. The channel is GC'd after all
-		// goroutines exit.
 		backoff := 1 * time.Second
 
 		for {
@@ -286,7 +276,7 @@ func consumeWithReconnect(ctx context.Context, cfg *config.Config) (<-chan amqp.
 				continue
 			}
 
-			msgs, err := cons.Consume(cfg.RabbitMQ.Queues.MatchIDs)
+			msgs, err := cons.Consume("detail-fetcher")
 			if err != nil {
 				logger.Log.Error("Failed to start consuming, retrying",
 					zap.Error(err))
@@ -297,14 +287,15 @@ func consumeWithReconnect(ctx context.Context, cfg *config.Config) (<-chan amqp.
 			}
 
 			logger.Log.Info("Consumer connected successfully")
-			backoff = 1 * time.Second // reset on success
-			setConsumer(cons)         // save for deferred close by caller
+			backoff = 1 * time.Second
+			setConsumer(cons)
 
-			// Forward messages until channel closes.
-			// NOTE: we do NOT close outCh when this loop exits because
-			// ctx.Done() is the worker exit signal. Closing outCh early
-			// would drop buffered messages. The channel is GC'd after
-			// all goroutines exit during shutdown.
+			// Track reconnect so we can distinguish reconnect from shutdown.
+			// We intentionally don't check ctx.Done() in the inner forward
+			// loop — we break on msgs channel close (reconnect) which sends
+			// us back to the outer retry loop where ctx.Done() IS checked.
+			// When ctx is cancelled, the outer loop returns immediately,
+			// leaving the consumer open for closeConsumer().
 		forward:
 			for d := range msgs {
 				select {
@@ -314,20 +305,14 @@ func consumeWithReconnect(ctx context.Context, cfg *config.Config) (<-chan amqp.
 				}
 			}
 
-			// On the shutdown path (ctx cancelled), return without
-			// closing the consumer. The caller's closeConsumer() func
-			// will close it after all workers have finished their
-			// in-flight Ack/Nack operations.
+			// On the shutdown path, return without closing the consumer.
+			// closeConsumer() will close it after all workers drain.
 			if ctx.Err() != nil {
 				logger.Log.Debug("Consumer disconnected during shutdown")
 				return
 			}
 
-			// Normal reconnect (consumer channel died, not shutdown):
-			// close the old consumer and retry.
 			cons.Close()
-			// Nil currentCons so closeConsumer() cannot double-close
-			// this consumer later (Bug #6).
 			consMu.Lock()
 			currentCons = nil
 			consMu.Unlock()
@@ -342,7 +327,6 @@ func consumeWithReconnect(ctx context.Context, cfg *config.Config) (<-chan amqp.
 		c := currentCons
 		currentCons = nil
 		consMu.Unlock()
-
 		if c != nil {
 			c.Close()
 		}

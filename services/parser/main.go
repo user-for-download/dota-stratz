@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -93,13 +94,28 @@ func main() {
 
 	var processorWG sync.WaitGroup
 	processorWG.Add(1)
+	procErr := make(chan error, 1)
 	go func() {
 		defer processorWG.Done()
-		processor.Run(ctx)
+		procErr <- processor.Run(ctx)
 	}()
 
-	<-quit
-	logger.Log.Info("Shutting down Parser...")
+	// Wait for either a shutdown signal or the processor to exit with an error.
+	// If the processor panics and returns ErrFatalPanic, terminate the process
+	// immediately so the container supervisor restarts it fresh. Without this,
+	// the panic-recovered goroutine returns silently but the healthcheck
+	// (Postgres ping) still passes — creating a zombie service. See CRITICAL BUG C-3.
+	select {
+	case err := <-procErr:
+		if errors.Is(err, worker.ErrFatalPanic) {
+			logger.Log.Error("Processor returned fatal error, terminating process",
+				zap.Error(err))
+			os.Exit(1)
+		}
+	case <-quit:
+		logger.Log.Info("Shutting down Parser...")
+	}
+
 	cancel()
 
 	// Wait for the processor to drain its current batch. The batch

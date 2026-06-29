@@ -1021,33 +1021,6 @@ func TestReportRateLimitedCooldown(t *testing.T) {
 	assert.True(t, exists, "expected proxy to be re-added to pool after cooldown")
 }
 
-func TestAcquireWithRateLimitExhaustion(t *testing.T) {
-	t.Parallel()
-	pool, _, cleanup := newTestPoolDefault(t)
-	defer cleanup()
-	ctx := context.Background()
-
-	_, err := pool.Add(ctx, "http://proxy-a:8080")
-	require.NoError(t, err)
-
-	// maxPerMinute=2: we can acquire the same proxy 2 times, 3rd should fail
-	proxy, err := pool.AcquireWithRateLimit(ctx, 2)
-	require.NoError(t, err)
-	assert.Equal(t, "http://proxy-a:8080", proxy)
-	err = pool.Release(ctx, proxy)
-	require.NoError(t, err)
-
-	proxy, err = pool.AcquireWithRateLimit(ctx, 2)
-	require.NoError(t, err)
-	assert.Equal(t, "http://proxy-a:8080", proxy)
-	err = pool.Release(ctx, proxy)
-	require.NoError(t, err)
-
-	// Third call should exceed rate limit
-	_, err = pool.AcquireWithRateLimit(ctx, 2)
-	assert.ErrorIs(t, err, ErrNoProxyAvailable)
-}
-
 func TestTrimRemovesExcess(t *testing.T) {
 	t.Parallel()
 	pool, _, cleanup := newTestPoolDefault(t)

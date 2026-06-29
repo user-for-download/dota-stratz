@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"time"
 
 	"github.com/dota-stratz/services/parser/internal/metrics"
@@ -14,6 +13,12 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"go.uber.org/zap"
 )
+
+// ErrFatalPanic is returned by Run() when a panic is recovered during batch
+// processing. The caller (main.go) should terminate the process so the
+// container supervisor restarts it fresh — this prevents a zombie service
+// that passes healthchecks but never consumes messages.
+var ErrFatalPanic = errors.New("processor: recovered panic, terminating")
 
 // maxConsecutiveBatchFailures is the number of sequential batch write
 // failures before the processor escalates to DLQ (poison-pill guard).
@@ -57,7 +62,9 @@ func NewProcessor(
 
 // Run starts the processing loop. It accumulates messages into batches,
 // unmarshals and validates them, writes to Postgres, and ACKs on success.
-func (p *Processor) Run(ctx context.Context) {
+// Returns ErrFatalPanic if a panic is recovered, indicating the caller should
+// terminate the process to avoid a zombie service.
+func (p *Processor) Run(ctx context.Context) (err error) {
 	// currentBatch tracks the deliveries that are still in-flight (not yet
 	// Ack'd or Nack'd) during the current batch iteration. Used by the
 	// panic recovery below to Nack them before process exit.
@@ -66,16 +73,15 @@ func (p *Processor) Run(ctx context.Context) {
 	// Recover from any panic during the batch loop. When a panic occurs,
 	// Nack any in-flight deliveries so they are requeued by RabbitMQ
 	// immediately rather than stuck unacked until the heartbeat timeout.
-	// Then exit the process so the container supervisor (docker-compose
-	// restart: unless-stopped) restarts it fresh. Without this explicit
-	// exit, the panic-recovered goroutine returns silently, the processor
-	// never consumes another message, but the healthcheck (Postgres ping)
-	// still passes — creating a zombie service. See CRITICAL BUG C-3.
-	//
-	// H-8 fix: we Nack the pending deliveries here before os.Exit(1) so the
-	// requeue is immediate rather than waiting for the TCP heartbeat timeout.
+	// Then return ErrFatalPanic so the caller (main.go) can terminate the
+	// process. The container supervisor (docker-compose restart:
+	// unless-stopped) restarts it fresh. Without process exit, the
+	// panic-recovered goroutine returns silently, the processor never
+	// consumes another message, but the healthcheck (Postgres ping) still
+	// passes — creating a zombie service. See CRITICAL BUG C-3.
 	defer func() {
 		if r := recover(); r != nil {
+			err = ErrFatalPanic
 			logger.Log.Error("Processor panic, terminating process",
 				zap.Any("panic", r))
 			// Nack all currently in-flight deliveries so they requeue
@@ -89,7 +95,6 @@ func (p *Processor) Run(ctx context.Context) {
 						zap.Error(err))
 				}
 			}
-			os.Exit(1)
 		}
 	}()
 
@@ -100,7 +105,7 @@ func (p *Processor) Run(ctx context.Context) {
 	for {
 		if ctx.Err() != nil {
 			logger.Log.Info("Context cancelled, stopping processor")
-			return
+			return nil
 		}
 
 		batch := p.fetchBatch(ctx)
@@ -244,7 +249,7 @@ func (p *Processor) Run(ctx context.Context) {
 			select {
 			case <-time.After(2 * time.Second):
 			case <-ctx.Done():
-				return
+				return nil
 			}
 			continue
 		}
