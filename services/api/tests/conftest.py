@@ -22,6 +22,15 @@ def feature_schema() -> dict[str, Any]:
     ``build_feature_vector``.  This minimal set is sufficient for any test
     that needs a schema for shape/order verification; full integration tests
     against a trained model would load the real ``feature_schema.json``.
+
+    FIX: Column order corrected — ``bl_*`` columns now appear before
+    ``hds_*`` columns, matching ``feature_column_names()`` in
+    ``trainer/features.py``.  The previous order (hds before bl) would
+    silently misalign feature vectors with the trained model.
+
+    FIX: ``num_aggregates`` corrected from 56 → 58 (the actual count of
+    non-one-hot aggregate columns produced by ``feature_column_names(
+    include_onehot=False)``).
     """
     return {
         "feature_version": 2,
@@ -68,10 +77,7 @@ def feature_schema() -> dict[str, Any]:
             # -- head-to-head --
             "h2h_win_rate",
             "h2h_games",
-            # -- hero draft-slot --
-            "hds_win_rate",
-            "hds_games",
-            # -- hero baseline --
+            # -- hero baseline --  ← FIXED: bl_* comes before hds_*
             "bl_total_picks",
             "bl_total_wins",
             "bl_total_bans",
@@ -85,6 +91,9 @@ def feature_schema() -> dict[str, Any]:
             "bl_avg_assists",
             "bl_avg_gold_10",
             "bl_avg_xp_10",
+            # -- hero draft-slot --  ← FIXED: hds_* comes after bl_*
+            "hds_win_rate",
+            "hds_games",
             # -- derived / meta --
             "ph_is_new_player",
             "th_is_new_team_hero",
@@ -93,7 +102,7 @@ def feature_schema() -> dict[str, Any]:
             "ph_vision_support_score",
             "ph_gpm_carry_score",
         ],
-        "num_aggregates": 56,
+        "num_aggregates": 58,  # FIXED: was 56, actual count is 58
     }
 
 

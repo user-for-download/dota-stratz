@@ -155,7 +155,8 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 | `player_benchmarks` | Hero-specific benchmark percentiles |
 | `player_permanent_buffs` | Permanent modifier events (e.g., Aghanim's Shard) |
 | `player_neutral_item_history` | Neutral item acquisitions |
-| `player_minute_stats` | Per-minute gold/xp stats + gold_t/xp_t JSONB arrays (minute=0 sentinel row) |
+| `player_minute_stats` | Per-minute gold/xp stats (gold, xp, last_hits, denies per minute) |
+| `player_time_series_arrays` | Minute-by-minute gold/XP arrays (gold_t, xp_t JSONB; PK: match_id, player_slot) |
 
 **Key behaviors:**
 - **FK violation fallback**: On SQLSTATE 23503, falls back to per-match inserts. The offending match goes to DLQ; healthy matches commit. Prevents pipeline deadlock on unseeded reference data (e.g., new Valve heroes).
@@ -163,7 +164,7 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 - **`context.WithoutCancel`**: All batch I/O (`SendBatch`, `Commit`) uses orphaned context with a 30s deadline to prevent connection pool corruption during graceful shutdown.
 - **Idempotent inserts**: `ON CONFLICT DO NOTHING` on all tables enables safe retry.
 - **Checkpoint watermark**: The checkpoint upsert is queued in the SAME `pgx.Batch` as the match inserts — it runs inside the same transaction, so the watermark only advances when the entire batch commits. Uses `GREATEST(...)` to guarantee monotonicity: a late-arriving batch with a smaller match_id can never rewind the watermark.
-- **gold_t/xp_t JSONB arrays**: The parser writes minute-by-minute gold/XP arrays to `player_minute_stats` (minute=0 sentinel row) for early-game feature computation (avg_gold_10, avg_xp_10).
+- **gold_t/xp_t JSONB arrays**: The parser writes minute-by-minute gold/XP arrays to `player_time_series_arrays` (PK: match_id, player_slot) for early-game feature computation (avg_gold_10, avg_xp_10).  Migration 013 moved these from the `player_minute_stats` minute=0 sentinel to avoid PK collision with real minute-0 rows.
 
 ---
 
@@ -340,7 +341,7 @@ shared/go-common/mq/
 | `005_ml_tables.sql` | 6 initial patch-aware ML aggregate tables in `ml` schema: `team_hero_agg`, `player_hero_agg`, `hero_synergy_agg`, `hero_counter_agg`, `team_h2h_agg`, `hero_baseline_agg`. All UNLOGGED for write speed. |
 | `006_postgres_best_practices_fixes.sql` | Runtime fixes: grants on `ml` schema, `grant_ml_access()` function for new users. |
 | `007_enhanced_features.sql` | Adds 3 behavioral feature columns (`firstblood_rate`, `avg_camps_stacked`, `avg_vision_placed`) to `ml.team_hero_agg` and `ml.player_hero_agg`. |
-| `008_minute_stats_columns.sql` | Adds `gold_t` / `xp_t` JSONB columns to `player_minute_stats` for early-game (minute 0-9) gold/xp computation. |
+| `008_minute_stats_columns.sql` | Adds `gold_t` / `xp_t` JSONB columns to `player_minute_stats` for early-game (minute 0-9) gold/xp computation (superseded by migration 013 which moves these to `player_time_series_arrays`). |
 | `009_gold_xp_10_features.sql` | Adds `avg_gold_10` / `avg_xp_10` columns to `ml.team_hero_agg`, `ml.player_hero_agg`, `ml.hero_baseline_agg`. |
 | `010_team_id_bigint_indexes.sql` | Fixes `team_id` type from INT→BIGINT in ML tables; adds PIT-focused composite indexes for trainer LATERAL queries. |
 | `011_hero_draft_slot_agg.sql` | Adds 7th ML table `ml.hero_draft_slot_agg` — hero win rate per team-pick ordinal (1st–5th pick). |

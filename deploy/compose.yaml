@@ -205,6 +205,7 @@ services:
             - RABBITMQ_HOST=rabbitmq
             - REDIS_HOST=redis
             - REDIS_PORT=6379
+            - POSTGRES_HOST=postgres   # FIX: added — required by postgresMatchChecker
         ports:
             - "${DETAIL_FETCHER_METRICS_PORT:-9091}:${DETAIL_FETCHER_METRICS_PORT:-9091}"
         depends_on:
@@ -213,6 +214,8 @@ services:
             redis:
                 condition: service_healthy
             proxy-manager:
+                condition: service_healthy
+            postgres:                  # FIX: added — postgresMatchChecker needs DB on startup
                 condition: service_healthy
         networks:
             - dota2-net
