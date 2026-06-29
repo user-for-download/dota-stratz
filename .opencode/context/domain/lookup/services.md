@@ -16,7 +16,7 @@
 |---------|-------------|
 | `cache` | Redis connection with 3-retry ping |
 | `db` | pgxpool connection with ping |
-| `mq` | AMQP connection + channel |
+| `mq` | AMQP connection + channel (`Connect`). Extended with `QueueConfig`, `DeclareQueueWithDLQ` (single-source queue/DLQ declaration), `Consumer` (auto-reconnecting with `ConsumeWithReconnect`), `Publisher` (with confirms + reconnect). Previously duplicated across 4 service files; now centralized. |
 | `logger` | Global zap.Logger from `LOG_LEVEL` |
 | `proxypool` | Redis-backed proxy pool (~710 lines). `MakeTransport` supports HTTP/HTTPS/SOCKS4/SOCKS5; `NewRedisPoolCollector` for accurate Redis-sourced Prometheus pool metrics |
 | `checkpoint` | Shared constants + `ReadWatermark()` for `ingestion_checkpoints` table — used by both parser (writer) and id-fetcher (reader) with a single source of truth SQL |

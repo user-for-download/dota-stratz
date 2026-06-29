@@ -202,7 +202,7 @@ make proxies-show   # Inspect proxy pool state
 │       ├── cache/         # Redis connection helper
 │       ├── db/            # PostgreSQL connection helper
 │       ├── logger/        # Structured logging (zap)
-│       ├── mq/            # RabbitMQ connection helper
+│       ├── mq/            # RabbitMQ connection + queue declaration + reconnecting consumer/publisher
 │       └── proxypool/     # Redis-backed proxy pool (Lua + Prometheus)
 │           └── transport.go  # HTTP transport builder (HTTP + SOCKS5 proxy)
 ├── deploy/

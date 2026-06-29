@@ -277,7 +277,7 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 |---|---|---|---|
 | `cache` | `redis.go` | `Connect(addr, password, db)` | Redis connection with 3-retry ping |
 | `db` | `postgres.go` | `Connect(ctx, dsn)` | pgxpool connection with ping |
-| `mq` | `rabbitmq.go` | `Connect(url)` | AMQP connection + channel |
+| `mq` | `rabbitmq.go`, `queue.go`, `consumer.go`, `publisher.go` | `Connect(url)`, `QueueConfig`, `DeclareQueueWithDLQ(ch, cfg)`, `Consumer`, `Publisher` | AMQP connection + channel. Extended with shared queue declaration (`DeclareQueueWithDLQ`), auto-reconnecting `Consumer` with `ConsumeWithReconnect`, and `Publisher` with publisher confirms + automatic reconnect. Previously each service duplicated reconnection logic and queue declaration; these are now centralized in the shared package. |
 | `logger` | `logger.go` | `InitLogger()`, `Sync()`, `Log` | Global zap.Logger from `LOG_LEVEL` |
 | `checkpoint` | `checkpoint.go` | `ReadWatermark(ctx, pool)`, `CheckpointPipelineParser`, `CheckpointPipelineIDFetcher` | Shared constants + SQL for `ingestion_checkpoints` table — single source of truth for `last_parsed_match_id` column, used by parser (writer) and id-fetcher (reader) |
 | `proxypool` | `pool.go`, `classify.go`, `metrics.go`, `transport.go`, `socks4.go`, `redis_collector.go` | `Pool`, `Acquire`, `Release`, `WithProxy`, `Report`, `MakeTransport`, `NewRedisPoolCollector` | Redis-backed proxy pool (~710 lines). `MakeTransport(proxyStr, timeout)` builds an `*http.Transport` for any scheme: HTTP/HTTPS CONNECT, SOCKS5, SOCKS4 (native dialer). `NewRedisPoolCollector` provides Redis-ground-truth Prometheus metrics. Shared by all services that make HTTP requests through proxies. |
@@ -299,6 +299,31 @@ dota2:proxies:ratelimit:{hash} STRING — rate-limit tracking
 - Prometheus metrics: pool size gauges, removed/cooldown/reap counters, validation latency histograms
 - `crc64.Checksum` + `base36` for proxy hash keys (~10× faster than SHA256+hex)
 - `UnixMicro()` for ZSET scores (avoids float64 precision loss from UnixNano)
+
+### mq — RabbitMQ shared patterns
+
+```
+shared/go-common/mq/
+├── rabbitmq.go    — Connect(url) — basic AMQP connection + channel
+├── queue.go       — QueueConfig, DeclareQueueWithDLQ(ch, cfg) — queue + DLQ declaration
+├── consumer.go    — Consumer with ConsumeWithReconnect — auto-reconnecting consumer
+└── publisher.go   — Publisher with confirms + reconnect — reconnecting publisher
+```
+
+**Key features:**
+- **`QueueConfig`** — Single struct holding queue name, DLQ name, and message TTL. Provides a single source of truth for queue topology configuration.
+- **`DeclareQueueWithDLQ(ch, cfg)`** — Idempotent queue + DLQ declaration with dead-letter exchange binding and 24h TTL on the DLQ. Replaces duplicated declarations across 4 service files.
+- **`Consumer`** — Wraps a RabbitMQ connection with automatic reconnection. `ConsumeWithReconnect(done, tag)` returns a channel that survives broker restarts (exponential backoff 1s → 30s). The channel is never closed on reconnect — only on permanent shutdown via the `done` channel.
+- **`Publisher`** — Wraps a RabbitMQ connection with publisher confirms and automatic reconnection. Thread-safe `Publish(ctx, queue, body)` with 5s confirm timeout. Handles connection loss transparently via background `NotifyClose` listener. Mutex-layered reconnection (`closeMu`, `publishMu`, `reconnectMu`) prevents deadlocks and exchange races during concurrent reconnect.
+
+**Refactored services** — Previously each service duplicated queue declaration, reconnection logic, and publisher confirm setup. These are now thin wrappers around the shared mq primitives:
+
+| Service | File | Wraps |
+|---------|------|-------|
+| Parser | `consumer/consumer.go` | `mq.Consumer` with `ConsumeWithReconnect` |
+| Detail Fetcher | `consumer/consumer.go` | `mq.Consumer` (manual reconnect loop preserves shutdown ordering) |
+| Detail Fetcher | `publisher/publisher.go` | `mq.Publisher` with `RawMatchMessage` marshaling |
+| ID Fetcher | `queue/rabbitmq_publisher.go` | `mq.DeclareQueueWithDLQ` + `mq.Connect` (keeps own per-batch channel pattern for `NotifyPublish` cleanup) |
 
 ---
 
