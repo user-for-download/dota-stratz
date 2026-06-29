@@ -135,8 +135,8 @@ class BatchContext:
     synergy: dict[int, tuple[float, int]]
     """hero_id → (avg_synergy_win_rate, count) — batch pre-fetched."""
 
-    counter: dict[int, tuple[float, int]]
-    """hero_id → (avg_counter_win_rate, count) — batch pre-fetched."""
+    counter: dict[int, tuple[float, int, float]]
+    """hero_id → (avg_counter_win_rate, count, avg_kd_diff) — batch pre-fetched."""
 
     h2h_row: dict | None
     """Single head-to-head row for the team pair (same for all heroes)."""
@@ -294,6 +294,7 @@ def build_feature_vector(
     co = batch.counter.get(hero_id)
     vec["co_avg_win_rate"] = _float(co[0] if co else None, "win_rate")
     vec["co_n_enemies"] = float(co[1] if co else 0)
+    vec["co_avg_kd_diff"] = _float(co[2] if co else None, "avg_kd_diff")
 
     # -- Head-to-head (from pre-fetched batch — same for all heroes) --
     h2h = batch.h2h_row

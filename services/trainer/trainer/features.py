@@ -125,6 +125,7 @@ TRAINING_FEATURES_SQL = """
         -- Counter vs already-picked enemies (from ml.hero_counter_agg)
         COALESCE(co.win_rate, 0.5)  AS co_avg_win_rate,
         COALESCE(co.games, 0)       AS co_n_enemies,
+        COALESCE(co.avg_kd_diff, 0) AS co_avg_kd_diff,
 
         -- Team head-to-head (from ml.team_h2h_agg)
         COALESCE(h2h.win_rate, 0.5) AS h2h_win_rate,
@@ -195,7 +196,8 @@ TRAINING_FEATURES_SQL = """
     LEFT JOIN LATERAL (
         SELECT
             COALESCE(AVG(hc.win_rate), 0.5) AS win_rate,
-            COUNT(*)::INT AS games
+            COUNT(*)::INT AS games,
+            COALESCE(AVG(hc.avg_kd_diff), 0.0) AS avg_kd_diff  -- FIX: co_avg_kd_diff was computed but never used
         FROM picks_bans pb2
         LEFT JOIN ml.hero_counter_agg hc
             ON hc.hero_id = ds.hero_id
@@ -251,7 +253,7 @@ def feature_column_names(include_onehot: bool = True, max_hero_id: int = 160) ->
         # Synergy
         "sy_avg_win_rate", "sy_n_teammates",
         # Counter
-        "co_avg_win_rate", "co_n_enemies",
+        "co_avg_win_rate", "co_n_enemies", "co_avg_kd_diff",
         # Team head-to-head
         "h2h_win_rate", "h2h_games",
         # Hero baseline

@@ -141,7 +141,7 @@ def populate_team_hero(cfg: TrainerConfig, conn) -> int:
                     LATERAL jsonb_array_elements_text(pta.gold_t) WITH ORDINALITY AS arr(elem, pos)
                     WHERE pta.match_id = m.match_id
                       AND pta.player_slot = p.player_slot
-                      AND pos <= 10
+                      AND pos = 11  -- FIX: gold/xp *at* minute 10, not average of minutes 0-9
                 ) gold10 ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT AVG(arr.elem::numeric) AS avg_xp_10
@@ -149,7 +149,7 @@ def populate_team_hero(cfg: TrainerConfig, conn) -> int:
                     LATERAL jsonb_array_elements_text(pta.xp_t) WITH ORDINALITY AS arr(elem, pos)
                     WHERE pta.match_id = m.match_id
                       AND pta.player_slot = p.player_slot
-                      AND pos <= 10
+                      AND pos = 11  -- FIX: gold/xp *at* minute 10, not average of minutes 0-9
                 ) xp10 ON TRUE
                 WHERE m.patch = %s
                   AND m.radiant_win IS NOT NULL{extra}
@@ -273,7 +273,7 @@ def populate_player_hero(cfg: TrainerConfig, conn) -> int:
                 LATERAL jsonb_array_elements_text(pta.gold_t) WITH ORDINALITY AS arr(elem, pos)
                 WHERE pta.match_id = m.match_id
                   AND pta.player_slot = p.player_slot
-                  AND pos <= 10
+                  AND pos = 11  -- FIX: gold/xp *at* minute 10, not average of minutes 0-9
             ) gold10 ON TRUE
             LEFT JOIN LATERAL (
                 SELECT AVG(arr.elem::numeric) AS avg_xp_10
@@ -281,7 +281,7 @@ def populate_player_hero(cfg: TrainerConfig, conn) -> int:
                 LATERAL jsonb_array_elements_text(pta.xp_t) WITH ORDINALITY AS arr(elem, pos)
                 WHERE pta.match_id = m.match_id
                   AND pta.player_slot = p.player_slot
-                  AND pos <= 10
+                  AND pos = 11  -- FIX: gold/xp *at* minute 10, not average of minutes 0-9
             ) xp10 ON TRUE
             WHERE m.patch = %s
               AND m.radiant_win IS NOT NULL{extra}
@@ -533,7 +533,7 @@ def populate_baseline(cfg: TrainerConfig, conn) -> int:
                     LATERAL jsonb_array_elements_text(pta.gold_t) WITH ORDINALITY AS arr(elem, pos)
                     WHERE pta.match_id = m.match_id
                       AND pta.player_slot = p.player_slot
-                      AND pos <= 10
+                      AND pos = 11  -- FIX: gold/xp *at* minute 10, not average of minutes 0-9
                 ) gold10 ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT AVG(arr.elem::numeric) AS avg_xp_10
@@ -541,7 +541,7 @@ def populate_baseline(cfg: TrainerConfig, conn) -> int:
                     LATERAL jsonb_array_elements_text(pta.xp_t) WITH ORDINALITY AS arr(elem, pos)
                     WHERE pta.match_id = m.match_id
                       AND pta.player_slot = p.player_slot
-                      AND pos <= 10
+                      AND pos = 11  -- FIX: gold/xp *at* minute 10, not average of minutes 0-9
                 ) xp10 ON TRUE
                 WHERE m.patch = %s
                   AND m.radiant_win IS NOT NULL{extra}
@@ -647,6 +647,7 @@ def populate_hero_draft_slot(cfg: TrainerConfig, conn) -> int:
             ) ds
             WHERE ds.team_pick_ordinal <= 5
             GROUP BY ds.hero_id, ds.team_pick_ordinal
+            HAVING COUNT(*) >= 3  -- FIX: minimum games filter (matches synergy/counter)
             ORDER BY ds.hero_id, ds.team_pick_ordinal
         """, (patch_id,))
         rows = []

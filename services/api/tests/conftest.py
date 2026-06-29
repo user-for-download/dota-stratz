@@ -28,9 +28,10 @@ def feature_schema() -> dict[str, Any]:
     ``trainer/features.py``.  The previous order (hds before bl) would
     silently misalign feature vectors with the trained model.
 
-    FIX: ``num_aggregates`` corrected from 56 → 58 (the actual count of
+    FIX: ``num_aggregates`` corrected from 56 → 59 (the actual count of
     non-one-hot aggregate columns produced by ``feature_column_names(
-    include_onehot=False)``).
+    include_onehot=False)``). Includes ``co_avg_kd_diff`` which was
+    previously computed in the database but never surfaced as a feature.
     """
     return {
         "feature_version": 2,
@@ -74,6 +75,7 @@ def feature_schema() -> dict[str, Any]:
             # -- counter --
             "co_avg_win_rate",
             "co_n_enemies",
+            "co_avg_kd_diff",
             # -- head-to-head --
             "h2h_win_rate",
             "h2h_games",
@@ -102,7 +104,7 @@ def feature_schema() -> dict[str, Any]:
             "ph_vision_support_score",
             "ph_gpm_carry_score",
         ],
-        "num_aggregates": 58,  # FIXED: was 56, actual count is 58
+        "num_aggregates": 59,  # FIXED: was 56, actual count is 59 (added co_avg_kd_diff)
     }
 
 

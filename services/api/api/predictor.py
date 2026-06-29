@@ -285,7 +285,7 @@ class Predictor:
             th = db_.fetch_team_hero_agg(patch_id, team_id, hero_id) if team_id else None
             th_wr = th["win_rate"] if th else None
             sy_wr, _ = db_.fetch_synergy_avg(patch_id, hero_id, ctx.ally_picks)
-            co_wr, _ = db_.fetch_counter_avg(patch_id, hero_id, ctx.enemy_picks)
+            co_wr, _, _ = db_.fetch_counter_avg(patch_id, hero_id, ctx.enemy_picks)
             h2h_wr = None
 
         return generate_reasoning(

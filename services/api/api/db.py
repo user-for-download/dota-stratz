@@ -264,21 +264,24 @@ def fetch_synergy_avg(patch_id: int, hero_id: int, teammate_hero_ids: list[int])
             )
             row = cur.fetchone()
             if row is None or row[0] is None:
-                return 0.5, 0
-            return float(row[0]), int(row[1])
+                return 0.5, len(teammate_hero_ids)  # FIX: count = number of allies (matches training)
+            return float(row[0]), len(teammate_hero_ids)  # FIX: count = number of allies (matches training)
     finally:
         put_conn(conn)
 
 
-def fetch_counter_avg(patch_id: int, hero_id: int, enemy_hero_ids: list[int]) -> tuple[float, int]:
-    """Average counter win_rate for *hero_id* vs a list of enemy heroes."""
+def fetch_counter_avg(patch_id: int, hero_id: int, enemy_hero_ids: list[int]) -> tuple[float, int, float]:
+    """Average counter win_rate and kd_diff for *hero_id* vs a list of enemy heroes.
+
+    Returns ``(avg_win_rate, count, avg_kd_diff)``.
+    """
     if not enemy_hero_ids:
-        return 0.5, 0
+        return 0.5, 0, 0.0
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT AVG(c.win_rate)::FLOAT, COUNT(*)::INT
+                """SELECT AVG(c.win_rate)::FLOAT, AVG(c.avg_kd_diff)::FLOAT
                    FROM ml.hero_counter_agg c
                    WHERE c.patch_id = %s
                      AND c.hero_id = %s
@@ -287,8 +290,8 @@ def fetch_counter_avg(patch_id: int, hero_id: int, enemy_hero_ids: list[int]) ->
             )
             row = cur.fetchone()
             if row is None or row[0] is None:
-                return 0.5, 0
-            return float(row[0]), int(row[1])
+                return 0.5, len(enemy_hero_ids), 0.0  # FIX: count = number of enemies (matches training)
+            return float(row[0]), len(enemy_hero_ids), float(row[1] if row[1] is not None else 0.0)
     finally:
         put_conn(conn)
 
@@ -411,7 +414,7 @@ def fetch_synergy_batch(
                 wr = row[1]
                 agg.setdefault(hid, []).append(wr)
             return {
-                hid: (float(sum(wrs)) / len(wrs), len(wrs))
+                hid: (float(sum(wrs)) / len(wrs), len(ally_picks))  # FIX: count = ally_picks (matches training COUNT(*))
                 for hid, wrs in agg.items()
             }
     finally:
@@ -422,11 +425,11 @@ def fetch_counter_batch(
     patch_id: int,
     hero_ids: list[int],
     enemy_picks: list[int],
-) -> dict[int, tuple[float, int]]:
+) -> dict[int, tuple[float, int, float]]:
     """Batch fetch counter win_rate for *hero_ids* vs *enemy_picks* in one query.
 
-    Returns ``{hero_id: (avg_win_rate, count)}`` — missing heroes get a
-    default of ``(0.5, 0)`` from the caller.
+    Returns ``{hero_id: (avg_win_rate, count, avg_kd_diff)}`` — missing heroes
+    get defaults of ``(0.5, 0, 0.0)`` from the caller.
     """
     if not hero_ids or not enemy_picks:
         return {}
@@ -436,7 +439,8 @@ def fetch_counter_batch(
             cur.execute(
                 """SELECT
                        c.hero_id,
-                       c.win_rate
+                       c.win_rate,
+                       c.avg_kd_diff
                    FROM ml.hero_counter_agg c
                    WHERE c.patch_id = %s
                      AND c.hero_id = ANY(%s)
@@ -444,12 +448,19 @@ def fetch_counter_batch(
                 (patch_id, hero_ids, enemy_picks),
             )
             agg: dict[int, list[float]] = {}
+            agg_kd: dict[int, list[float]] = {}
             for row in cur.fetchall():
                 hid = row[0]
                 wr = row[1]
+                kd = row[2]
                 agg.setdefault(hid, []).append(wr)
+                agg_kd.setdefault(hid, []).append(kd)
             return {
-                hid: (float(sum(wrs)) / len(wrs), len(wrs))
+                hid: (
+                    float(sum(wrs)) / len(wrs),       # avg_win_rate
+                    len(enemy_picks),                  # count (matches training COUNT(*))
+                    float(sum(agg_kd[hid])) / len(agg_kd[hid]),  # avg_kd_diff
+                )
                 for hid, wrs in agg.items()
             }
     finally:
