@@ -2,9 +2,11 @@
 vectors, and split into train/validation sets.
 
 Uses a **chronological** train/val split (oldest matches → train, newest → val)
-rather than random, because the pre-computed ml.*_agg tables include ALL
-matches in a patch — a random split would leak future information into
-training features (PIT leakage issue #2).
+rather than random, as an additional safety measure against PIT leakage
+(although the ``ml.*_snapshot`` tables now prevent look-ahead bias in
+aggregate features). The chronological split ensures the validation metric
+is an honest estimate of out-of-time performance even if any residual
+leakage exists.
 
 Uses binary classification (not lambdarank) — see config.py for rationale.
 """

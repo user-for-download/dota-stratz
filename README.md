@@ -209,7 +209,7 @@ make proxies-show   # Inspect proxy pool state
 │   ├── compose.yaml       # Docker Compose with profiles
 │   ├── docker-bake.hcl    # Buildx bake config
 │   ├── .env.example       # Environment variable template
-│   ├── migration/         # SQL migration files (001_core–012)
+│   ├── migration/         # SQL migration files (001__init, 002_ml, 003_static)
 │   ├── rabbitmq/          # RabbitMQ definitions + init script
 │   ├── prometheus/        # Prometheus config + alert rules
 │   └── grafana/           # Pre-provisioned dashboards
@@ -269,7 +269,7 @@ Access the management UI at `http://localhost:15672` (default: guest/guest). Key
 3. **Parser** consumes raw JSON, accumulates batches (size 100 or 2s timeout), validates, and bulk-inserts into 20+ PostgreSQL tables (including gold_t/xp_t JSONB arrays for early-game features). Memory: 1G.
 4. Failures route to **dead-letter queues** for manual inspection and replay
 5. **Analytics materialized views** refresh periodically for ML feature extraction
-6. **Trainer** computes **7 patch-aware aggregate tables** (`team_hero_agg`, `player_hero_agg`, `hero_synergy_agg`, `hero_counter_agg`, `team_h2h_agg`, `hero_baseline_agg`, `hero_draft_slot_agg`) and trains LightGBM **binary classification** models (218-dim feature vectors: 58 aggregate + 160 one-hot hero ID). Validated performance: **AUC-ROC 0.85**, accuracy **74.6%** (patch 60). The `hero_draft_slot_agg` populator filters `team_pick_ordinal <= 5` to handle All Draft (game_mode=22) matches with extra picks.
+6. **Trainer** computes **7 patch-aware aggregate tables** + **7 PIT-safe snapshot tables** (`team_hero_snapshot`, `player_hero_snapshot`, `hero_synergy_snapshot`, `hero_counter_snapshot`, `team_h2h_snapshot`, `hero_baseline_snapshot`, `hero_draft_slot_snapshot`) and trains LightGBM **binary classification** models. Snapshots use point-in-time cutoff (`start_time < as_of_date`) to prevent label leakage. The 4 sparse combo-keyed snapshot tables (`team_hero`, `player_hero`, `synergy`, `counter`) include cross-patch lookback (`lookback_patches=2`, `prior_patch_weight=0.5`) to combat hero-combo sparsity. Each training feature is a LATERAL "most recent snapshot AS OF match start" lookup. Feature dim: **219** (58 snapshot aggregate + 1 playing-side indicator + 160 one-hot hero ID). Validated performance: **binary_logloss 0.6883** (patch 60, cross-patch enabled). The `hero_draft_slot_agg` populator filters `team_pick_ordinal <= 5` to handle All Draft (game_mode=22) matches with extra picks.
 7. **Inference API** loads trained models and serves draft predictions via HTTP (`POST /predict`), returning top-5 hero recommendations with reasoning
 
 ## License

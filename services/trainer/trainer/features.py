@@ -8,6 +8,12 @@ team and player historical aggregates, synergy/counter stats, etc.
 Column names and their order are written to ``feature_schema.json`` alongside
 the trained model file. The inference API loads this JSON at startup to
 guarantee column-order agreement between training and inference.
+
+**PIT-safe snapshots**: ``TRAINING_FEATURES_SQL`` now uses LATERAL subqueries
+against the ``ml.*_snapshot`` tables (migration 014), looking up the most
+recent snapshot ``AS OF`` the match start time. This eliminates look-ahead
+bias where aggregate features could \"see\" future match outcomes within the
+same patch.
 """
 
 from __future__ import annotations
@@ -169,68 +175,104 @@ TRAINING_FEATURES_SQL = """
 
     FROM draft_slots ds
 
-    -- Team-hero aggregate
-    LEFT JOIN ml.team_hero_agg th
-        ON th.team_id = CASE ds.team WHEN 0 THEN ds.radiant_team_id ELSE ds.dire_team_id END
-       AND th.hero_id = ds.hero_id
-       AND th.patch_id = ds.patch_id
+    -- Team-hero aggregate (PIT-safe: most recent daily snapshot as of match start)
+    LEFT JOIN LATERAL (
+        SELECT * FROM ml.team_hero_snapshot ths
+        WHERE ths.team_id = CASE ds.team WHEN 0 THEN ds.radiant_team_id ELSE ds.dire_team_id END
+          AND ths.hero_id = ds.hero_id
+          AND ths.patch_id = ds.patch_id
+          AND ths.as_of_date <= to_timestamp(ds.start_time)::DATE
+        ORDER BY ths.as_of_date DESC
+        LIMIT 1
+    ) th ON TRUE
 
-    -- Player-hero aggregate (NULL for bans where account_id is NULL)
-    LEFT JOIN ml.player_hero_agg ph
-        ON ph.account_id = ds.account_id
-       AND ph.hero_id = ds.hero_id
-       AND ph.patch_id = ds.patch_id
+    -- Player-hero aggregate (PIT-safe: most recent weekly snapshot as of match start)
+    -- NULL for bans where account_id is NULL
+    LEFT JOIN LATERAL (
+        SELECT * FROM ml.player_hero_snapshot phs
+        WHERE phs.account_id = ds.account_id
+          AND phs.hero_id = ds.hero_id
+          AND phs.patch_id = ds.patch_id
+          AND phs.as_of_date <= to_timestamp(ds.start_time)::DATE
+        ORDER BY phs.as_of_date DESC
+        LIMIT 1
+    ) ph ON TRUE
 
-    -- Synergy: look up each already-picked ally's hero pair from ml.hero_synergy_agg
+    -- Synergy: look up each already-picked ally's hero pair from ml.hero_synergy_snapshot
     LEFT JOIN LATERAL (
         SELECT
-            COALESCE(AVG(hs.win_rate), 0.5) AS win_rate,
+            COALESCE(AVG(snap.win_rate), 0.5) AS win_rate,
             COUNT(*)::INT AS games
         FROM picks_bans pb2
-        LEFT JOIN ml.hero_synergy_agg hs
-            ON hs.hero_a = LEAST(ds.hero_id, pb2.hero_id)
-           AND hs.hero_b = GREATEST(ds.hero_id, pb2.hero_id)
-           AND hs.patch_id = ds.patch_id
+        LEFT JOIN LATERAL (
+            SELECT win_rate, games FROM ml.hero_synergy_snapshot hss
+            WHERE hss.hero_a = LEAST(ds.hero_id, pb2.hero_id)
+              AND hss.hero_b = GREATEST(ds.hero_id, pb2.hero_id)
+              AND hss.patch_id = ds.patch_id
+              AND hss.as_of_date <= to_timestamp(ds.start_time)::DATE
+            ORDER BY hss.as_of_date DESC
+            LIMIT 1
+        ) snap ON TRUE
         WHERE pb2.match_id = ds.match_id
           AND pb2."order"  < ds."order"
           AND pb2.is_pick  = TRUE
           AND pb2.team     = ds.team
     ) sy ON TRUE
 
-    -- Counter: look up each enemy pick's hero pair from ml.hero_counter_agg
+    -- Counter: look up each enemy pick's hero pair from ml.hero_counter_snapshot
     LEFT JOIN LATERAL (
         SELECT
-            COALESCE(AVG(hc.win_rate), 0.5) AS win_rate,
+            COALESCE(AVG(snap.win_rate), 0.5) AS win_rate,
             COUNT(*)::INT AS games,
-            COALESCE(AVG(hc.avg_kd_diff), 0.0) AS avg_kd_diff  -- FIX: co_avg_kd_diff was computed but never used
+            COALESCE(AVG(snap.avg_kd_diff), 0.0) AS avg_kd_diff
         FROM picks_bans pb2
-        LEFT JOIN ml.hero_counter_agg hc
-            ON hc.hero_id = ds.hero_id
-           AND hc.enemy_hero_id = pb2.hero_id
-           AND hc.patch_id = ds.patch_id
+        LEFT JOIN LATERAL (
+            SELECT win_rate, avg_kd_diff FROM ml.hero_counter_snapshot hcs
+            WHERE hcs.hero_id = ds.hero_id
+              AND hcs.enemy_hero_id = pb2.hero_id
+              AND hcs.patch_id = ds.patch_id
+              AND hcs.as_of_date <= to_timestamp(ds.start_time)::DATE
+            ORDER BY hcs.as_of_date DESC
+            LIMIT 1
+        ) snap ON TRUE
         WHERE pb2.match_id = ds.match_id
           AND pb2."order"  < ds."order"
           AND pb2.is_pick  = TRUE
           AND pb2.team    != ds.team
     ) co ON TRUE
 
-    -- Team head-to-head
-    LEFT JOIN ml.team_h2h_agg h2h
-        ON h2h.team_id = CASE ds.team WHEN 0 THEN ds.radiant_team_id ELSE ds.dire_team_id END
-       AND h2h.enemy_team_id = CASE ds.team WHEN 0 THEN ds.dire_team_id ELSE ds.radiant_team_id END
-       AND h2h.patch_id = ds.patch_id
+    -- Team head-to-head (PIT-safe: most recent daily snapshot as of match start)
+    LEFT JOIN LATERAL (
+        SELECT * FROM ml.team_h2h_snapshot ths
+        WHERE ths.team_id = CASE ds.team WHEN 0 THEN ds.radiant_team_id ELSE ds.dire_team_id END
+          AND ths.enemy_team_id = CASE ds.team WHEN 0 THEN ds.dire_team_id ELSE ds.radiant_team_id END
+          AND ths.patch_id = ds.patch_id
+          AND ths.as_of_date <= to_timestamp(ds.start_time)::DATE
+        ORDER BY ths.as_of_date DESC
+        LIMIT 1
+    ) h2h ON TRUE
 
-    -- Hero baseline
-    LEFT JOIN ml.hero_baseline_agg bl
-        ON bl.hero_id = ds.hero_id
-       AND bl.patch_id = ds.patch_id
+    -- Hero baseline (PIT-safe: most recent daily snapshot as of match start)
+    LEFT JOIN LATERAL (
+        SELECT * FROM ml.hero_baseline_snapshot hbs
+        WHERE hbs.hero_id = ds.hero_id
+          AND hbs.patch_id = ds.patch_id
+          AND hbs.as_of_date <= to_timestamp(ds.start_time)::DATE
+        ORDER BY hbs.as_of_date DESC
+        LIMIT 1
+    ) bl ON TRUE
 
-    -- Hero draft-slot (pick-position) aggregate
+    -- Hero draft-slot aggregate (PIT-safe: most recent daily snapshot as of match start)
     -- NULL team_pick_ordinal for bans → join misses → COALESCE gives defaults.
-    LEFT JOIN ml.hero_draft_slot_agg hds
-        ON hds.hero_id = ds.hero_id
-       AND hds.team_pick_ordinal = ds.team_pick_ordinal
-       AND hds.patch_id = ds.patch_id
+    LEFT JOIN LATERAL (
+        SELECT * FROM ml.hero_draft_slot_snapshot hdss
+        WHERE hdss.hero_id = ds.hero_id
+          AND hdss.team_pick_ordinal = ds.team_pick_ordinal
+          AND hdss.patch_id = ds.patch_id
+          AND hdss.as_of_date <= to_timestamp(ds.start_time)::DATE
+        ORDER BY hdss.as_of_date DESC
+        LIMIT 1
+    ) hds ON TRUE
 
     ORDER BY ds.match_id, ds."order"
 """

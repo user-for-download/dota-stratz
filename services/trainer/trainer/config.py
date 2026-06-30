@@ -68,6 +68,17 @@ class TrainerConfig:
     agg_batch_size: int = int(os.getenv("TRAINER_AGG_BATCH_SIZE", "500"))
     """Rows per chunk when populating aggregate tables via INSERT."""
 
+    # ── Cross-patch lookback (sparse snapshot tables) ─────────────────────
+    lookback_patches: int = int(os.getenv("TRAINER_LOOKBACK_PATCHES", "2"))
+    """Number of prior patches to include when computing sparse combo-keyed
+    snapshot tables (team_hero, player_hero, synergy, counter). 0 = single-patch
+    (original behavior)."""
+
+    prior_patch_weight: float = float(os.getenv("TRAINER_PRIOR_PATCH_WEIGHT", "0.5"))
+    """Relative weight (0.0–1.0) for games from prior patches vs. the current
+    patch. 1.0 = treat equally to current-patch data; 0.5 = prior-patch
+    games count half as much toward sample size and win-rate estimates."""
+
     # ── Match filtering (pro/league/game-mode) ────────────────────────────
     league_only: bool = os.getenv("TRAINER_LEAGUE_ONLY", "false").lower() == "true"
     """If true, only aggregate matches with leagueid > 0 (pro matches)."""

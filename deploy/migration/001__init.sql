@@ -1,16 +1,8 @@
--- 001_core.sql
--- Core schema for Dota 2 Match Analysis System.
--- Tables, indexes, partition management, ingestion checkpoints.
---
--- Design decisions baked in (previously applied as patch migrations):
---   - FKs are DEFERRABLE INITIALLY DEFERRED (allows batch writes in any order)
---   - No CHECK constraints on duration/kda (parser validates; avoids batch-kill loops)
---   - No dead GIN indexes (never queried, removed write overhead)
---   - No idx_matches_radiant_win (boolean B-tree index is useless)
+-- 001__init.sql
+-- Core schema, partition management, ingestion checkpoints.
+-- Merges and optimizes: 001_core, 004_partition_verify, 006_postgres_best_practices_fixes (partition part), 
+-- 008_minute_stats_columns (superseded), 010_team_id_bigint_indexes (core part), 013_separate_time_series_arrays.
 
--- ============================================================================
--- 0. EXTENSIONS
--- ============================================================================
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 
@@ -60,13 +52,12 @@ CREATE TABLE IF NOT EXISTS matches (
     metadata JSONB
 );
 
--- BRIN for range scans (append-only, monotonically increasing, ~100x smaller).
--- The B-tree idx_matches_start_time was removed (LOW-15): it duplicated the BRIN
--- but was ~100x larger and added write overhead with no query benefit.
 CREATE INDEX IF NOT EXISTS idx_matches_start_time_brin ON matches USING BRIN (start_time) WITH (pages_per_range = 32);
 CREATE INDEX IF NOT EXISTS idx_matches_leagueid ON matches(leagueid) WHERE leagueid > 0;
 CREATE INDEX IF NOT EXISTS idx_matches_pro_filter ON matches(leagueid, lobby_type, start_time) WHERE leagueid > 0 AND lobby_type IN (1, 2);
 CREATE INDEX IF NOT EXISTS idx_matches_start_time_date ON matches(((TIMESTAMP 'epoch' + start_time * INTERVAL '1 second')::date));
+CREATE INDEX IF NOT EXISTS idx_matches_patch_result ON matches (patch, match_id) WHERE radiant_win IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_matches_patch_start ON matches (patch, start_time, match_id) WHERE radiant_win IS NOT NULL;
 
 -- ============================================================================
 -- 2. PLAYERS (RANGE-partitioned by match_id)
@@ -180,8 +171,6 @@ CREATE TABLE IF NOT EXISTS players (
     CONSTRAINT chk_player_slot_range CHECK (player_slot BETWEEN 0 AND 255)
 ) PARTITION BY RANGE (match_id);
 
--- players FK to matches: DEFERRABLE so batch inserts work in any order
--- (added inline instead of a separate patch migration)
 ALTER TABLE players
     DROP CONSTRAINT IF EXISTS players_match_id_fkey;
 ALTER TABLE players
@@ -198,13 +187,12 @@ CREATE INDEX IF NOT EXISTS idx_players_account_hero ON players(account_id, hero_
 CREATE INDEX IF NOT EXISTS idx_players_item_uses_gin ON players USING GIN (item_uses);
 CREATE INDEX IF NOT EXISTS idx_players_damage_gin ON players USING GIN (damage);
 CREATE INDEX IF NOT EXISTS idx_players_purchase_time_gin ON players USING GIN (purchase_time);
+CREATE INDEX IF NOT EXISTS idx_players_match_hero_side ON players (match_id, hero_id, is_radiant);
+CREATE INDEX IF NOT EXISTS idx_players_match_account_hero ON players (match_id, account_id, hero_id);
 
 -- ============================================================================
 -- 3. PLAYER EVENT & TIME-SERIES TABLES
---    No FKs to players (intentional — keeps partition pruning fast and avoids
---    cross-partition FK overhead). FKs to matches are DEFERRABLE.
 -- ============================================================================
-
 CREATE TABLE IF NOT EXISTS player_minute_stats (
     match_id BIGINT,
     player_slot INT,
@@ -214,6 +202,14 @@ CREATE TABLE IF NOT EXISTS player_minute_stats (
     denies INT,
     xp INT,
     PRIMARY KEY (match_id, player_slot, minute)
+);
+
+CREATE TABLE IF NOT EXISTS player_time_series_arrays (
+    match_id    BIGINT NOT NULL,
+    player_slot INT    NOT NULL,
+    gold_t      JSONB,
+    xp_t        JSONB,
+    PRIMARY KEY (match_id, player_slot)
 );
 
 CREATE TABLE IF NOT EXISTS player_abilities (
@@ -372,10 +368,8 @@ CREATE TABLE IF NOT EXISTS player_permanent_buffs (
 );
 
 -- ============================================================================
--- 4. MATCH EVENTS (Objectives, Chat, Picks/Bans, Gold/XP Advantage)
---    All FKs to matches are DEFERRABLE INITIALLY DEFERRED.
+-- 4. MATCH EVENTS
 -- ============================================================================
-
 CREATE TABLE IF NOT EXISTS objectives (
     match_id BIGINT,
     time INT,
@@ -426,6 +420,9 @@ ALTER TABLE picks_bans
     FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
     DEFERRABLE INITIALLY DEFERRED;
 
+CREATE INDEX IF NOT EXISTS idx_picks_bans_match_order_pick_team ON picks_bans (match_id, "order", is_pick, team, hero_id);
+CREATE INDEX IF NOT EXISTS idx_picks_bans_match_team_order_picks ON picks_bans (match_id, team, "order", hero_id) WHERE is_pick = TRUE;
+
 CREATE TABLE IF NOT EXISTS match_gold_adv (
     match_id BIGINT,
     minute INT,
@@ -453,12 +450,7 @@ ALTER TABLE match_xp_adv
     DEFERRABLE INITIALLY DEFERRED;
 
 -- ============================================================================
--- 5. ANALYTICS INDEXES
--- ============================================================================
-CREATE INDEX IF NOT EXISTS idx_minute_stats_match_player ON player_minute_stats(match_id, player_slot, minute);
-
--- ============================================================================
--- 6. INGESTION CHECKPOINTS
+-- 5. INGESTION CHECKPOINTS
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS public.ingestion_checkpoints (
     id INT PRIMARY KEY DEFAULT 1,
@@ -475,7 +467,7 @@ INSERT INTO public.ingestion_checkpoints (id, last_fetched_datetime)
 VALUES (1, NOW() - INTERVAL '7 days') ON CONFLICT (id) DO NOTHING;
 
 -- ============================================================================
--- 7. PARTITION MANAGEMENT
+-- 6. PARTITION MANAGEMENT (Optimized from 006 fix)
 -- ============================================================================
 CREATE OR REPLACE FUNCTION public.create_player_partition(
     partition_name TEXT, from_val BIGINT, to_val BIGINT
@@ -510,16 +502,5 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Initialize bounded partitions up to 30B + catchall
 SELECT public.ensure_player_partitions(30000000000, 5000000000);
 CREATE TABLE IF NOT EXISTS players_p_catchall PARTITION OF players DEFAULT;
-
--- MEDIUM-10: Scheduled partition maintenance
--- When match IDs exceed 30B, all inserts go to the players_p_catchall DEFAULT
--- partition which grows unboundedly. A scheduled task (cron, pg_cron, etc.)
--- should periodically call ensure_player_partitions() with a higher max_match_id
--- before catchall becomes too large. Recommended query:
---
---   SELECT public.ensure_player_partitions(60000000000, 5000000000);
---
--- Raise 60B → 90B → etc. as matches are ingested. Run weekly or monthly.

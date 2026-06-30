@@ -27,11 +27,11 @@ An event-driven microservice pipeline that ingests Dota 2 match data from the [O
                                                                 ▼
                                                           [PostgreSQL]
                                                                 │
-                                                    (materialized views)
-                                                                │
-                                                                ▼
-                                                    [Analytics Schema]
-                                                    (ML aggregate tables)
+                                                     (materialized views)
+                                                                 │
+                                                                 ▼
+                                                     [Analytics Schema]
+                                               (7 agg + 7 PIT snapshot tables)
                                                                 │
                                                                 ▼
                                                           [Trainer]
@@ -211,22 +211,23 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 **Purpose:** Batch CLI service. Computes patch-aware aggregate tables from PostgreSQL and trains LightGBM lambdarank models for draft prediction.
 
 | Aspect | Detail |
-|---|---|
+|---|---|---|
 | Package | `services/trainer/` |
 | Dependencies | PostgreSQL (psycopg2 + SQLAlchemy) |
-| Memory | ~2G (patch 58 with 372k draft slots) |
+| Memory | **8G** (patch 60 with 154k draft slots + 14 tables + cross-patch lookback) |
 | Config | Environment variables (`TRAINER_*`) |
 
 **Pipeline stages:**
 1. **Aggregate population** — **7** populator functions compute `ml.*_agg` tables per patch via bulk INSERT (ON CONFLICT DO UPDATE). Queries aggregate match data grouped by team/hero/player/patch, filtering `WHERE radiant_win IS NOT NULL`. Includes `hero_draft_slot_agg` (pick-position win rates with `WHERE team_pick_ordinal <= 5` filter to handle All Draft game_mode=22 matches with extra picks), and `avg_gold_10`/`avg_xp_10` from gold_t/xp_t JSONB arrays.
-2. **Feature extraction** — `TRAINING_FEATURES_SQL` computes **58 aggregate + 160 one-hot hero ID = 218-dim feature vectors** via a single query with `LATERAL` subqueries for PIT synergy/counter lookups, `LEAST`/`GREATEST` index-friendly joins on synergy aggregates, and `COALESCE` for NULL safety (~11s for 108k draft slots). Includes low-game missingness flags, delta features, and role interaction features.
-3. **Training** — LightGBM **binary classification** (`binary` objective, not `lambdarank`) with early stopping (50 rounds), 85/15 chronological train/val split at match level (not random — prevents PIT leakage from aggregate features). Uses `binary` because all draft slots in a match share the same `radiant_win` target. Writes model, metadata JSON, and `feature_schema_patch_N.json` (218-column column-order contract with API — patch-specific filename prevents overwrites).
-4. **Output** — Model per patch (`model_patch_N.txt`), metadata (`model_patch_N_meta.json`), and `feature_schema_patch_N.json` to `/models` volume.
-5. **Validation** — Models evaluated on held-out chronological validation set. Patch 60 achieves: AUC-ROC **0.85**, accuracy **74.6%**, Brier score **0.155**. Feature importance dominated by head-to-head win rate (51–57%), player-hero win rate (14–22%), and team-hero aggregates (5%). One-hot hero encoding contributes ~0.1% (redundant with aggregate context).
+2. **Snapshot population** — **7** additional populator functions compute `ml.*_snapshot` tables at point-in-time granularity. Daily-precision tables (`team_hero`, `hero_baseline`, `hero_draft_slot`, `team_h2h`) use per-snapshot-date buckets; weekly tables (`player_hero`, `synergy`, `counter`) use 7-day buckets for row-count management. The 4 sparse combo-keyed snapshot tables (`team_hero`, `player_hero`, `synergy`, `counter`) include **cross-patch lookback** (`lookback_patches=2`, `prior_patch_weight=0.5`) that reweights prior-patch games to combat hero-combo sparsity. `team_hero_snapshot` uses a two-phase query (pre-computed prior-patch aggregate + per-date current-patch PIT LATERAL) to avoid a 5M-row cross-product. The 3 dense tables (`hero_baseline`, `hero_draft_slot`, `team_h2h`) stay single-patch. `games`/`wins` are FLOAT on the 4 lookback tables (fractional from weighted counts); INT on the 3 dense tables.
+3. **Feature extraction** — `TRAINING_FEATURES_SQL` computes **58 snapshot aggregate + 1 playing-side indicator + 160 one-hot hero ID = 219-dim feature vectors** via a single query with `LATERAL` "most recent snapshot AS OF match start" lookups for all 7 snapshot tables (`WHERE as_of_date <= draft_start_date ORDER BY as_of_date DESC LIMIT 1`), `LEAST`/`GREATEST` index-friendly joins on synergy snapshots, and `COALESCE` for NULL safety (~11s for 108k draft slots). Includes low-game missingness flags, delta features, and role interaction features.
+4. **Training** — LightGBM **binary classification** (`binary` objective, not `lambdarank`) with early stopping (50 rounds), 85/15 chronological train/val split at match level (not random — prevents PIT leakage from snapshot features). Uses `binary` because all draft slots in a match share the same `radiant_win` target. Writes model, metadata JSON, and `feature_schema_patch_N.json` (219-column column-order contract with API — patch-specific filename prevents overwrites).
+5. **Output** — Model per patch (`model_patch_N.txt`), metadata (`model_patch_N_meta.json`), and `feature_schema_patch_N.json` to `/models` volume.
+6. **Validation** — Models evaluated on held-out chronological validation set. Patch 60 achieves: **binary_logloss 0.6883** (with cross-patch lookback; vs 0.6897 single-patch). Cross-patch lookback provides marginal gain (−0.0014) because Bayesian shrinkage (`prior_games=3`, `prior_win_rate=0.5`) already regularizes sparse combos well. Feature importance dominated by head-to-head win rate (51–57%), player-hero win rate (14–22%), and team-hero snapshots (5%). One-hot hero encoding contributes ~0.1% (redundant with snapshot context).
 
 **Key behaviors:**
 - Idempotent: aggregates use INSERT ON CONFLICT DO UPDATE (no longer TRUNCATE + insert)
-- Feature column order is frozen in `feature_schema.json` at training time (218 columns); API loads this to guarantee agreement
+- Feature column order is frozen in `feature_schema.json` at training time (219 columns); API loads this to guarantee agreement
 - Draft phase reconstruction uses per-patch patterns from `DRAFT_PATTERNS` dict with a normalizer that ensures 0 = first-pick team
 - Bayesian shrinkage applied to win rates (`prior_games` / `prior_win_rate` config)
 - Target is relative to the picking team: `(df["radiant_win"] == (df["team"] == 0)).astype(int)` — previously returned bare `radiant_win` which inverted the target for Dire training rows
@@ -255,12 +256,12 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 1. Client sends current draft state (picks/bans, teams, patch) with optional `account_id` for personalized player-hero features
 2. API validates draft order against per-patch pattern, reconstructs `DraftContext`
 3. Pre-fetches batch aggregate data (baselines, team-hero, H2H) per request using six batch queries
-4. For each candidate hero not yet picked/banned, builds **218-dim feature vector** (58 aggregate + 160 one-hot hero ID, matching trainer's schema) and scores via LightGBM
+4. For each candidate hero not yet picked/banned, builds **219-dim feature vector** (58 snapshot aggregate + 1 playing-side indicator + 160 one-hot hero ID, matching trainer's schema) and scores via LightGBM
 5. Returns top-N recommendations sorted by score + reasoning explanation
 
 **Key behaviors:**
 - Thread-safe: uses `psycopg2.pool.ThreadedConnectionPool` guarded by `threading.Lock`; broken connections discarded via `putconn(conn, close=True)` on rollback failure
-- Feature computation mirrors trainer logic exactly (same 218-column order via `feature_schema.json`)
+- Feature computation mirrors trainer logic exactly (same 219-column order via `feature_schema.json`)
 - Six pre-fetched batch queries replace hundreds of individual lookups: baselines, team-hero, player-hero, synergy, counter, h2h
 - NULL-safe: all aggregate lookups guarded by `_float()`/`_int()` helpers with sensible defaults
 - Draft patterns dynamically selected by `patch_id` from per-patch dict (supports patches 8–60 with fallback)
@@ -334,18 +335,9 @@ shared/go-common/mq/
 
 | File | Description |
 |---|---|---|
-| `001_core.sql` | Core schema: `matches`, `players` (RANGE-partitioned), all child event tables, indexes, `ingestion_checkpoints`, partition management functions + initialization. FKs are `DEFERRABLE INITIALLY DEFERRED` for batch-insert throughput. |
-| `002_constants.sql` | Static reference data: `const_game_mode`, `const_lobby_type`, `const_region`, `const_patch`, `const_hero`, `const_item`, `const_ability` — table definitions + seed data combined. Internal FK constraints within constants schema. |
-| `003_analytics.sql` | Analytics schema: Bayesian shrinkage config, materialized views (`mv_team_hero_profile`, `mv_hero_synergy`, `mv_hero_counter`, `mv_player_team_history`), `feature_snapshots_player_hero`, `featurizer_runs`, `refresh_all_mv()`, `update_feature_snapshots()`, roles. |
-| `004_partition_verify.sql` | Idempotent assertion that the 6 expected `players` partitions exist. Performs no schema changes on a healthy database — safety check for CI/testing. |
-| `005_ml_tables.sql` | 6 initial patch-aware ML aggregate tables in `ml` schema: `team_hero_agg`, `player_hero_agg`, `hero_synergy_agg`, `hero_counter_agg`, `team_h2h_agg`, `hero_baseline_agg`. All UNLOGGED for write speed. |
-| `006_postgres_best_practices_fixes.sql` | Runtime fixes: grants on `ml` schema, `grant_ml_access()` function for new users. |
-| `007_enhanced_features.sql` | Adds 3 behavioral feature columns (`firstblood_rate`, `avg_camps_stacked`, `avg_vision_placed`) to `ml.team_hero_agg` and `ml.player_hero_agg`. |
-| `008_minute_stats_columns.sql` | Adds `gold_t` / `xp_t` JSONB columns to `player_minute_stats` for early-game (minute 0-9) gold/xp computation (superseded by migration 013 which moves these to `player_time_series_arrays`). |
-| `009_gold_xp_10_features.sql` | Adds `avg_gold_10` / `avg_xp_10` columns to `ml.team_hero_agg`, `ml.player_hero_agg`, `ml.hero_baseline_agg`. |
-| `010_team_id_bigint_indexes.sql` | Fixes `team_id` type from INT→BIGINT in ML tables; adds PIT-focused composite indexes for trainer LATERAL queries. |
-| `011_hero_draft_slot_agg.sql` | Adds 7th ML table `ml.hero_draft_slot_agg` — hero win rate per team-pick ordinal (1st–5th pick). |
-| `012_fix_ml_indexes.sql` | Drops redundant indexes, adds complementary `players(account_id, hero_id, match_id)` index, CHECK constraint on `team_pick_ordinal`. |
+| `001__init.sql` | **Core schema**: `matches`, `players` (RANGE-partitioned, 5B per partition, up to 30B + catchall), all child event tables, indexes, `ingestion_checkpoints`, partition management functions + initialization. FKs are `DEFERRABLE INITIALLY DEFERRED` for batch-insert throughput. |
+| `002_ml.sql` | **Analytics + ML schema**: Bayesian shrinkage config, materialized views (`mv_team_hero_profile`, `mv_hero_synergy`, `mv_hero_counter`, `mv_player_team_history`), roles/grants, 7 aggregate tables (`*_agg`), 7 PIT-safe snapshot tables (`*_snapshot` with BIGINT team_ids, FLOAT games/wins on sparse tables), 8 DESC lookup indexes, partition verification, feature schema functions. |
+| `003_static.sql` | **Static reference data**: `const_game_mode`, `const_lobby_type`, `const_region`, `const_patch` (up to 7.41), `const_hero`, `const_item`, `const_ability` — table definitions + seed data combined. Internal FK constraints within constants schema. |
 
 ### Table Structure
 
@@ -369,7 +361,12 @@ shared/go-common/mq/
 - `featurizer_runs` — Tracking table for snapshot generation runs
 
 **ML schema (`ml`):**
-- **7** UNLOGGED patch-aware aggregate tables populated per-patch by the Trainer
+- **7** UNLOGGED patch-aware **aggregate tables** (`team_hero_agg`, `player_hero_agg`, `hero_synergy_agg`, `hero_counter_agg`, `team_h2h_agg`, `hero_baseline_agg`, `hero_draft_slot_agg`) — population-wide aggregates, all columns INT, no PIT awareness. Tables are re-populated on each `make train` run (not incrementally maintained).
+- **7** LOGGED **PIT-safe snapshot tables** (`team_hero_snapshot`, `player_hero_snapshot`, `hero_synergy_snapshot`, `hero_counter_snapshot`, `team_h2h_snapshot`, `hero_baseline_snapshot`, `hero_draft_slot_snapshot`) — per-date-bucket materializations with `as_of_date` column. Training features use LATERAL "most recent snapshot AS OF match start" lookups for PIT safety. Populated on each `make train` run.
+- **Snapshot table design:**
+  - **Two-tier resolution** — Tier 1 (daily): `team_hero`, `hero_baseline`, `hero_draft_slot`, `team_h2h`. Tier 2 (weekly): `player_hero`, `synergy`, `counter` — weekly keeps player_hero row count manageable (avoids hero×account×date combinatorics).
+  - **Cross-patch lookback** — 4 sparse tables (`team_hero`, `player_hero`, `synergy`, `counter`) aggregate prior-patch matches with `patch_weight = 0.5` to fill NULL combos. 3 dense tables stay single-patch.
+  - **Column types** — `games`/`wins` are `FLOAT` on lookback tables (fractional from prior_weight), `INT` on dense tables.
 - `team_hero_agg` — Team+hero historical stats (games, wins, bans, avg GPM/XPM/KDA, firstblood_rate, camps_stacked, vision_placed, avg_gold_10, avg_xp_10)
 - `player_hero_agg` — Per-account hero stats (lane role, avg KDA, firstblood_rate, avg_gold_10, avg_xp_10)
 - `hero_synergy_agg` — Pairwise synergy win rate on same team (keyed by `LEAST(hero_a, hero_b)`)
@@ -377,7 +374,6 @@ shared/go-common/mq/
 - `team_h2h_agg` — Head-to-head win rate between team pairs
 - `hero_baseline_agg` — Global hero pick/ban rates, avg stats per patch (incl. avg_gold_10, avg_xp_10)
 - `hero_draft_slot_agg` — Hero win rate per team-pick ordinal (1st pick through 5th pick)
-- Tables are re-populated on each `make train` run (not incrementally maintained)
 
 **Checkpoint:**
 - `ingestion_checkpoints` — Singleton row (id=1) tracking `fetch_status`, `checkpoint_timestamp`, `last_completed_match_id`, `fetch_progress`, `parse_progress`
@@ -404,10 +400,10 @@ ML targets that need PostgreSQL use `--profile db --profile api` or `--profile d
 ### Resource Limits
 | Service | Memory | CPUs | Notes |
 |---------|--------|------|-------|
-| postgres | 512M | 1.0 | |
+| postgres | **6G** | **4.0** | shared_buffers=2GB, work_mem=128MB, maintenance_work_mem=512MB |
 | rabbitmq | 512M | 1.0 | Increased from 256M to handle burst load from 200 concurrent workers |
 | parser | **1G** | 1.0 | Increased from 256M to accommodate 100-match JSON batch processing (prevents OOM kills) |
-| trainer | **2G** | 2.0 | Patch 58 (372k draft slots) requires ~1.6G |
+| trainer | **8G** | **4.0** | Patch 60 (154k draft slots + 14 tables + cross-patch lookback) |
 | api | 512M | 0.5 | |
 | Most others | 128-256M | 0.5 | |
 
@@ -481,9 +477,11 @@ make downv              # Stop services and remove project volumes
 
 10. **FK violation isolation** — Parser detects SQLSTATE 23503 and falls back to per-match inserts, routing only the offending match to DLQ rather than requeueing the entire batch.
 
-11. **Analytics layering** — Separate `analytics` schema provides Bayesian-shrunk win rates, hero synergies/counters, and point-in-time feature snapshots to avoid look-ahead bias in ML training.
+11. **Analytics layering** — Separate `analytics` schema provides Bayesian-shrunk win rates, hero synergies/counters, and feature snapshots. ML features now use **PIT-safe snapshot tables** (7 `ml.*_snapshot` tables with `as_of_date` buckets) queried via LATERAL "most recent AS OF match start" lookups, replacing the old flat joins that leaked future information.
 
 12. **Monitoring-first** — Every service exposes Prometheus metrics. Three pre-configured alerts and a Grafana dashboard ship with the deployment.
 
-13. **ML offline training + online inference** — Training is a batch CLI (Trainer) that computes 7 aggregate tables and trains models offline; inference is a stateless HTTP service (API) that loads pre-trained models. The contract between them is `feature_schema.json` — a frozen 218-column column-order manifest written at training time and loaded at API startup. Models are per-patch to capture meta shifts between Dota 2 balance patches.
+13. **ML offline training + online inference** — Training is a batch CLI (Trainer) that computes 7 aggregate tables + 7 PIT snapshot tables and trains models offline; inference is a stateless HTTP service (API) that loads pre-trained models. The contract between them is `feature_schema.json` — a frozen **219-column** column-order manifest (58 snapshot aggregate + 1 playing-side indicator + 160 one-hot hero ID) written at training time and loaded at API startup. Models are per-patch to capture meta shifts between Dota 2 balance patches.
 14. **Checkpoint-based watermarking** — The parser writes `last_parsed_match_id` to `ingestion_checkpoints` in the same transaction as the match batch (via `GREATEST()` upsert for monotonicity). The ID Fetcher reads this watermark on startup to switch from the rolling-window bootstrap path to the incremental watermark path (`match_id > last_parsed_match_id ORDER BY match_id ASC LIMIT N`), preventing re-fetch of already-parsed matches.
+
+15. **PIT-safe snapshot aggregates with cross-patch lookback** — ML training uses 7 snapshot tables with per-date-bucket materializations queried via LATERAL "most recent AS OF match start" to prevent label leakage. **Two-tier resolution**: daily tables (team_hero, hero_baseline, hero_draft_slot, team_h2h) for granularity where row counts are manageable; weekly tables (player_hero, synergy, counter) to avoid hero×account×date combinatorics. **Cross-patch lookback** on 4 sparse combo-keyed tables (`lookback_patches=2`, `prior_patch_weight=0.5`) reweights prior-patch games to fractional FLOAT values, filling NULL combos that would otherwise fall to COALESCE defaults. Dense tables (>98% hit rate) stay single-patch. The daily `team_hero_snapshot` uses a two-phase query (pre-computed prior-patch aggregate + per-date PIT LATERAL) to avoid a 5M-row cross-product of dates × matches.

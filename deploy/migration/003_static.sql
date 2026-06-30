@@ -1,12 +1,9 @@
--- 002_constants.sql
+-- 003_static.sql
 -- Dota 2 static reference data: table definitions + seed data.
--- Tables and their data are inseparable, defined together here.
+-- Merges 002_constants.
 
--- ============================================================================
 -- 1. GAME MODE
--- ============================================================================
 CREATE TABLE IF NOT EXISTS const_game_mode (id INT PRIMARY KEY, name VARCHAR NOT NULL, balanced BOOLEAN NOT NULL);
-
 INSERT INTO const_game_mode (id, name, balanced) VALUES
     (0,  'game_mode_unknown',                    true),
     (1,  'game_mode_all_pick',                   true),
@@ -36,11 +33,8 @@ INSERT INTO const_game_mode (id, name, balanced) VALUES
     (25, 'game_mode_coaches_challenge',          false)
 ON CONFLICT (id) DO NOTHING;
 
--- ============================================================================
 -- 2. LOBBY TYPE
--- ============================================================================
 CREATE TABLE IF NOT EXISTS const_lobby_type (id INT PRIMARY KEY, name VARCHAR NOT NULL, balanced BOOLEAN NOT NULL);
-
 INSERT INTO const_lobby_type (id, name, balanced) VALUES
     (0,  'lobby_type_normal',           true),
     (1,  'lobby_type_practice',         true),
@@ -60,11 +54,8 @@ INSERT INTO const_lobby_type (id, name, balanced) VALUES
     (15, 'lobby_type_featured',         false)
 ON CONFLICT (id) DO NOTHING;
 
--- ============================================================================
 -- 3. REGION
--- ============================================================================
 CREATE TABLE IF NOT EXISTS const_region (id INT PRIMARY KEY, name VARCHAR NOT NULL);
-
 INSERT INTO const_region (id, name) VALUES
     (1,  'US WEST'), (2,  'US EAST'), (3,  'EUROPE'), (5,  'SINGAPORE'), (6,  'DUBAI'), (7,  'AUSTRALIA'),
     (8,  'STOCKHOLM'), (9,  'AUSTRIA'), (10, 'BRAZIL'), (11, 'SOUTHAFRICA'), (12, 'PW TELECOM SHANGHAI'),
@@ -73,11 +64,8 @@ INSERT INTO const_region (id, name) VALUES
     (37, 'TAIWAN'), (38, 'ARGENTINA')
 ON CONFLICT (id) DO NOTHING;
 
--- ============================================================================
 -- 4. PATCH
--- ============================================================================
 CREATE TABLE IF NOT EXISTS const_patch (id INT PRIMARY KEY, name VARCHAR NOT NULL, release_date TIMESTAMPTZ);
-
 INSERT INTO const_patch (id, name, release_date) VALUES
     (0, '6.70', '2010-12-24T00:00:00Z'), (1, '6.71', '2011-01-21T00:00:00Z'), (2, '6.72', '2011-04-27T00:00:00Z'),
     (3, '6.73', '2011-12-24T00:00:00Z'), (4, '6.74', '2012-03-10T00:00:00Z'), (5, '6.75', '2012-09-30T00:00:00Z'),
@@ -102,9 +90,7 @@ INSERT INTO const_patch (id, name, release_date) VALUES
     (60, '7.41', '2026-03-24T00:50:59Z')
 ON CONFLICT (id) DO NOTHING;
 
--- ============================================================================
 -- 5. HEROES
--- ============================================================================
 CREATE TABLE IF NOT EXISTS const_hero (
     id INT PRIMARY KEY, name VARCHAR NOT NULL, localized_name VARCHAR, primary_attr VARCHAR, attack_type VARCHAR, roles TEXT[], img VARCHAR, icon VARCHAR,
     base_health INT, base_health_regen FLOAT, base_mana INT, base_mana_regen FLOAT, base_armor FLOAT, base_mr FLOAT, base_attack_min INT, base_attack_max INT,
@@ -114,9 +100,7 @@ CREATE TABLE IF NOT EXISTS const_hero (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_const_hero_name ON const_hero(name);
 CREATE INDEX IF NOT EXISTS idx_const_hero_primary_attr ON const_hero(primary_attr);
 
--- ============================================================================
 -- 6. ITEMS
--- ============================================================================
 CREATE TABLE IF NOT EXISTS const_item (
     id INT PRIMARY KEY, name VARCHAR NOT NULL, dname VARCHAR, qual VARCHAR, cost INT, behavior VARCHAR, dmg_type VARCHAR, bkbpierce VARCHAR, notes TEXT,
     lore TEXT, created BOOLEAN, charges BOOLEAN, cd FLOAT, mc FLOAT, hc FLOAT, img VARCHAR, components TEXT[], attrib JSONB, abilities JSONB
@@ -127,28 +111,20 @@ CREATE INDEX IF NOT EXISTS idx_const_item_dname ON const_item(dname);
 CREATE TABLE IF NOT EXISTS const_item_id (id INT PRIMARY KEY, name VARCHAR NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_const_item_id_name ON const_item_id(name);
 
--- ============================================================================
 -- 7. ABILITIES
--- ============================================================================
 CREATE TABLE IF NOT EXISTS const_ability_id (id INT PRIMARY KEY, name VARCHAR NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_const_ability_id_name ON const_ability_id(name);
 
 CREATE TABLE IF NOT EXISTS const_ability (name VARCHAR PRIMARY KEY, dname VARCHAR, behavior VARCHAR, dmg_type VARCHAR, bkbpierce VARCHAR, description TEXT, lore TEXT, img VARCHAR, attrib JSONB);
 
--- ============================================================================
 -- 8. HERO-ABILITY & HERO-TALENT MAPPINGS
--- ============================================================================
 CREATE TABLE IF NOT EXISTS const_hero_ability (hero_name VARCHAR NOT NULL, ability_name VARCHAR NOT NULL, ability_order INT NOT NULL, PRIMARY KEY (hero_name, ability_name));
 CREATE INDEX IF NOT EXISTS idx_const_hero_ability_hero ON const_hero_ability(hero_name);
 
 CREATE TABLE IF NOT EXISTS const_hero_talent (hero_name VARCHAR NOT NULL, talent_name VARCHAR NOT NULL, talent_level INT NOT NULL, talent_order INT NOT NULL, PRIMARY KEY (hero_name, talent_order));
 CREATE INDEX IF NOT EXISTS idx_const_hero_talent_hero ON const_hero_talent(hero_name);
 
--- ============================================================================
--- 9. INTERNAL FKs (constants → constants only)
---    No FKs from fact tables (players, matches) to constants — prevents
---    ingestion crashes when Valve adds new heroes before the ETL updates them.
--- ============================================================================
+-- 9. INTERNAL FKs
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_ha_hero') THEN
         ALTER TABLE const_hero_ability ADD CONSTRAINT fk_ha_hero FOREIGN KEY (hero_name) REFERENCES const_hero(name) ON DELETE CASCADE; END IF;

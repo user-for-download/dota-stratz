@@ -6,6 +6,7 @@ services:
         image: "postgres:16-alpine"
         container_name: dota2-postgres
         restart: unless-stopped
+        shm_size: 256m
         environment:
             POSTGRES_USER: "${POSTGRES_USER:-dota2}"
             POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-dota2}"
@@ -19,11 +20,11 @@ services:
         command:
             - "postgres"
             - "-c"
-            - "shared_buffers=512MB"
+            - "shared_buffers=2GB"
             - "-c"
-            - "work_mem=16MB"
+            - "work_mem=128MB"
             - "-c"
-            - "maintenance_work_mem=128MB"
+            - "maintenance_work_mem=512MB"
             - "-c"
             - "shared_preload_libraries=pg_stat_statements"
         volumes:
@@ -41,8 +42,8 @@ services:
         deploy:
             resources:
                 limits:
-                    memory: 2G
-                    cpus: "2.0"
+                    memory: 6G
+                    cpus: "4.0"
     rabbitmq:
         profiles:
             - all
@@ -362,8 +363,8 @@ services:
         deploy:
             resources:
                 limits:
-                    memory: 2G
-                    cpus: "2.0"
+                    memory: 8G
+                    cpus: "4.0"
         # trainer is a batch/CLI service — use `docker compose run --rm trainer ...`
         # to execute training commands. The Dockerfile entrypoint is "python -m trainer.main".
         # Default: sleep so `docker compose up --profile train` keeps the container alive
