@@ -65,6 +65,7 @@ func (c *Client) FetchRaw(ctx context.Context, matchID int64) ([]byte, error) {
 	transport, transportErr := proxypool.MakeTransport(proxy, c.timeout)
 	if transportErr != nil {
 		_ = c.pool.Report(ctx, proxy, proxypool.ReasonHardFailure)
+		_ = c.pool.Release(ctx, proxy)
 		return nil, transportErr
 	}
 	defer transport.CloseIdleConnections()
@@ -94,11 +95,13 @@ func (c *Client) FetchRaw(ctx context.Context, matchID int64) ([]byte, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusTooManyRequests {
+		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = c.pool.Report(ctx, proxy, proxypool.ReasonRateLimited)
 		return nil, fmt.Errorf("rate limited on proxy %s", proxy)
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, resp.Body)
 		reason, shouldReport := proxypool.ClassifyError(nil, resp)
 		if shouldReport {
 			_ = c.pool.Report(ctx, proxy, reason)
@@ -179,10 +182,12 @@ func (c *Client) FetchRawDirect(ctx context.Context, matchID int64) ([]byte, err
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusTooManyRequests {
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil, fmt.Errorf("rate limited on direct connection")
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil, fmt.Errorf("non-200 status on direct: %d", resp.StatusCode)
 	}
 

@@ -1,6 +1,7 @@
 package mq
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -67,22 +68,26 @@ func (c *Consumer) Consume(tag string) (<-chan amqp.Delivery, error) {
 // If the broker restarts or the channel dies, it reconnects with exponential
 // backoff (1s → 30s max) and resumes delivery on the returned channel.
 // The channel is never closed on reconnect — only on permanent shutdown via
-// the done channel.
+// context cancellation.
 //
-// The returned channel must NOT be closed by the caller. It is GC'd after
-// all goroutines exit. The caller should exit via context cancellation or
-// the done channel.
-func (c *Consumer) ConsumeWithReconnect(done <-chan struct{}, tag string) <-chan amqp.Delivery {
+// The returned channel is closed when ctx is cancelled, allowing callers to
+// range over it. The caller should exit via context cancellation.
+func (c *Consumer) ConsumeWithReconnect(ctx context.Context, tag string) <-chan amqp.Delivery {
 	outCh := make(chan amqp.Delivery, c.prefetch)
 
 	go func() {
+		defer close(outCh)
 		backoff := 1 * time.Second
 		const maxBackoff = 30 * time.Second
 		var cons *Consumer
 
 		for {
 			select {
-			case <-done:
+			case <-ctx.Done():
+				if cons != nil {
+					cons.Close()
+				}
+				c.Close()
 				return
 			default:
 			}
@@ -108,6 +113,7 @@ func (c *Consumer) ConsumeWithReconnect(done <-chan struct{}, tag string) <-chan
 			msgs, err := cons.Consume(tag)
 			if err != nil {
 				cons.Close()
+				cons = nil
 				logger.Log.Warn("Consumer reconnect consume failed, retrying",
 					zap.Error(err),
 					zap.Duration("backoff", backoff))
@@ -118,12 +124,13 @@ func (c *Consumer) ConsumeWithReconnect(done <-chan struct{}, tag string) <-chan
 
 			backoff = 1 * time.Second // reset on success
 
-			// Forward messages until channel closes or done is signalled.
+			// Forward messages until channel closes or ctx is cancelled.
 			for d := range msgs {
 				select {
 				case outCh <- d:
-				case <-done:
+				case <-ctx.Done():
 					cons.Close()
+					c.Close()
 					return
 				}
 			}
@@ -131,9 +138,11 @@ func (c *Consumer) ConsumeWithReconnect(done <-chan struct{}, tag string) <-chan
 			// Message channel closed (connection lost). Sleep with backoff
 			// before reconnecting.
 			cons.Close()
+			cons = nil
 			select {
 			case <-time.After(backoff):
-			case <-done:
+			case <-ctx.Done():
+				c.Close()
 				return
 			}
 			backoff = min(backoff*2, maxBackoff)
@@ -147,8 +156,10 @@ func (c *Consumer) ConsumeWithReconnect(done <-chan struct{}, tag string) <-chan
 func (c *Consumer) Close() {
 	if c.ch != nil {
 		c.ch.Close()
+		c.ch = nil
 	}
 	if c.conn != nil {
 		c.conn.Close()
+		c.conn = nil
 	}
 }

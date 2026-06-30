@@ -52,11 +52,13 @@ def close_pool():
 def get_conn() -> Any:
     """Get a connection from the pool with a timeout.
 
-    The lock is only held for the pool reference read, NOT during
-    ``getconn()`` (which may block if all connections are in use).
-    Holding the lock during a blocking call would prevent any other
-    thread from returning a connection via ``put_conn``, causing a
-    deadlock when the pool is exhausted (BUG-004).
+    The semaphore is acquired FIRST (outside the lock) to prevent
+    deadlock: holding ``_pool_lock`` during a blocking ``acquire()``
+    would prevent ``put_conn()`` from releasing it (BUG-004).
+
+    ``getconn()`` runs INSIDE the lock so ``close_pool()`` cannot
+    race with it (TOCTOU bug MEDIUM-6). The lock is held only briefly
+    because the semaphore guarantees a free connection is available.
 
     A ``BoundedSemaphore`` (initialized to ``pool_max``) prevents
     ``getconn()`` from blocking indefinitely: if all connections are
@@ -65,8 +67,8 @@ def get_conn() -> Any:
     """
     if _pool is None:
         raise RuntimeError("DB pool not initialised")
-    with _pool_lock:
-        pool = _pool
+    # Acquire semaphore BEFORE the lock to avoid deadlock: holding the lock
+    # during a blocking acquire() would prevent put_conn() from releasing it.
     if _semaphore is not None:
         if not _semaphore.acquire(timeout=_GETCONN_TIMEOUT):
             raise TimeoutError(
@@ -74,7 +76,13 @@ def get_conn() -> Any:
                 "for a DB connection from the pool"
             )
     try:
-        return pool.getconn()
+        # getconn() runs inside the lock so close_pool() cannot race with it
+        # (TOCTOU bug MEDIUM-6). The lock is held briefly — getconn() on a
+        # healthy pool returns immediately from the free list.
+        with _pool_lock:
+            if _pool is None:
+                raise RuntimeError("DB pool closed before get_conn")
+            return _pool.getconn()
     except Exception:
         if _semaphore is not None:
             _semaphore.release()

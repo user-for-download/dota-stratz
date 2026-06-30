@@ -20,7 +20,7 @@ CREATE SCHEMA IF NOT EXISTS ml;
 GRANT USAGE ON SCHEMA ml TO analytics_reader;
 GRANT SELECT ON ALL TABLES IN SCHEMA ml TO analytics_reader;
 
-CREATE UNLOGGED TABLE IF NOT EXISTS ml.team_hero_agg (
+CREATE TABLE IF NOT EXISTS ml.team_hero_agg (
     patch_id   INT  NOT NULL,
     team_id    INT  NOT NULL,
     hero_id    INT  NOT NULL,
@@ -42,7 +42,7 @@ CREATE UNLOGGED TABLE IF NOT EXISTS ml.team_hero_agg (
 --    Per-patch, per-account, per-hero stats.
 --    Player mastery: how good is player X on hero H in patch P?
 -- ============================================================================
-CREATE UNLOGGED TABLE IF NOT EXISTS ml.player_hero_agg (
+CREATE TABLE IF NOT EXISTS ml.player_hero_agg (
     patch_id   INT     NOT NULL,
     account_id BIGINT  NOT NULL,
     hero_id    INT     NOT NULL,
@@ -65,7 +65,7 @@ CREATE UNLOGGED TABLE IF NOT EXISTS ml.player_hero_agg (
 --    Per-patch, per-hero-pair synergy (same team).
 --    Pair strength: how well do heroes A and B perform together in patch P?
 -- ============================================================================
-CREATE UNLOGGED TABLE IF NOT EXISTS ml.hero_synergy_agg (
+CREATE TABLE IF NOT EXISTS ml.hero_synergy_agg (
     patch_id      INT   NOT NULL,
     hero_a        INT   NOT NULL,
     hero_b        INT   NOT NULL,
@@ -80,7 +80,7 @@ CREATE UNLOGGED TABLE IF NOT EXISTS ml.hero_synergy_agg (
 --    Per-patch, per-hero-vs-enemy-hero matchup.
 --    Counter strength: how does hero A perform against hero B in patch P?
 -- ============================================================================
-CREATE UNLOGGED TABLE IF NOT EXISTS ml.hero_counter_agg (
+CREATE TABLE IF NOT EXISTS ml.hero_counter_agg (
     patch_id      INT   NOT NULL,
     hero_id       INT   NOT NULL,
     enemy_hero_id INT   NOT NULL,
@@ -96,7 +96,7 @@ CREATE UNLOGGED TABLE IF NOT EXISTS ml.hero_counter_agg (
 --    Per-patch, per-team-vs-team head-to-head.
 --    Historic matchup: how does Team X fare against Team Y in patch P?
 -- ============================================================================
-CREATE UNLOGGED TABLE IF NOT EXISTS ml.team_h2h_agg (
+CREATE TABLE IF NOT EXISTS ml.team_h2h_agg (
     patch_id     INT  NOT NULL,
     team_id      INT  NOT NULL,
     enemy_team_id INT NOT NULL,
@@ -111,7 +111,7 @@ CREATE UNLOGGED TABLE IF NOT EXISTS ml.team_h2h_agg (
 --    Per-patch hero global baselines (all teams, all players).
 --    Used as fallback when team/player-specific data is sparse.
 -- ============================================================================
-CREATE UNLOGGED TABLE IF NOT EXISTS ml.hero_baseline_agg (
+CREATE TABLE IF NOT EXISTS ml.hero_baseline_agg (
     patch_id       INT   NOT NULL,
     hero_id        INT   NOT NULL,
     total_picks    INT   NOT NULL DEFAULT 0,

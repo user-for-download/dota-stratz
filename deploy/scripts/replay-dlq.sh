@@ -56,7 +56,8 @@ done
 DLQ="${DLQ:-queue.match_ids.dlq}"
 TARGET_QUEUE="${TARGET_QUEUE:-queue.match_ids}"
 RABBIT_HOST="${RABBITMQ_HOST:-localhost}"
-RABBIT_PORT="${RABBITMQ_PORT:-15672}"
+RABBITMQ_MANAGEMENT_PORT="${RABBITMQ_MANAGEMENT_PORT:-${RABBITMQ_PORT:-15672}}"
+RABBIT_PORT="$RABBITMQ_MANAGEMENT_PORT"
 RABBIT_USER="${RABBITMQ_DEFAULT_USER:-guest}"
 RABBIT_PASS="${RABBITMQ_DEFAULT_PASS:-guest}"
 RABBIT_API="http://${RABBIT_HOST}:${RABBIT_PORT}/api"
@@ -251,10 +252,20 @@ FAILED=0
 FAILED_IDS=""
 while IFS= read -r MID; do
   [[ -z "$MID" ]] && continue
+  JSON_BODY=$(python3 -c "
+import json
+mid = ${MID}
+print(json.dumps({
+    'properties': {},
+    'routing_key': '${TARGET_QUEUE}',
+    'payload': json.dumps({'match_id': mid}),
+    'payload_encoding': 'string'
+}))
+")
   RESP=$(curl -sf -u "${RABBIT_USER}:${RABBIT_PASS}" \
     "${RABBIT_API}/exchanges/%2F/amq.default/publish" \
     -H 'content-type: application/json' \
-    -d "{\"properties\":{},\"routing_key\":\"${TARGET_QUEUE}\",\"payload\":\"{\\\"match_id\\\":${MID}}\",\"payload_encoding\":\"string\"}" \
+    -d "$JSON_BODY" \
     2>&1) || { FAILED=$((FAILED+1)); FAILED_IDS="$FAILED_IDS $MID"; continue; }
   if echo "$RESP" | grep -q '"routed":true'; then
     PUBLISHED=$((PUBLISHED+1))

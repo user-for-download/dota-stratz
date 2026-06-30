@@ -45,7 +45,9 @@ func newSourceFetchLimiter(cooldown time.Duration) *sourceFetchLimiter {
 
 // Run starts the proxy-manager service and blocks until SIGINT/SIGTERM.
 func Run() {
-	_ = godotenv.Load("deploy/.env")
+	if err := godotenv.Load("deploy/.env"); err != nil {
+		logger.Log.Warn("No .env file found, relying on process environment", zap.Error(err))
+	}
 
 	logger.InitLogger()
 	defer logger.Sync()
@@ -60,7 +62,19 @@ func Run() {
 		zap.String("redis_addr", cfg.RedisAddr),
 		zap.String("validation_target", cfg.ValidationTargetURL))
 
-	rdb, err := cache.Connect(cfg.RedisAddr, cfg.RedisPassword, int(cfg.RedisDB))
+	// Create context and signal listener before any operations that may
+	// need cancellation (such as Redis connection backoff, pool
+	// detection/health checks).
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-quit
+		logger.Log.Info("Shutdown signal received")
+		cancel()
+	}()
+
+	rdb, err := cache.Connect(ctx, cfg.RedisAddr, cfg.RedisPassword, int(cfg.RedisDB))
 	if err != nil {
 		logger.Log.Fatal("Redis connection failed", zap.Error(err))
 	}
@@ -75,17 +89,6 @@ func Run() {
 	prometheus.MustRegister(
 		proxypool.NewRedisPoolCollector(rdb, "dota2:proxies", "dota2:proxies:leases"),
 	)
-
-	// Create context and signal listener before any operations that may
-	// need cancellation (such as pool detection/health checks).
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		<-quit
-		logger.Log.Info("Shutdown signal received")
-		cancel()
-	}()
 
 	proxyPool, err := proxypool.New(rdb, proxypool.Config{
 		Strategy:          cfg.RotationStrategy,
@@ -185,6 +188,12 @@ func limitedFetchWithRetry(ctx context.Context, cfg *config.Config, limiter *sou
 
 // waitWithTimeout blocks until wg.Wait() returns or the timeout elapses.
 // Returns nil on clean drain, context.DeadlineExceeded on timeout.
+//
+// NOTE: When the timeout fires before wg.Wait() completes, the helper
+// goroutine that calls wg.Wait() is abandoned (it continues blocking on
+// wg.Wait() until all tracked goroutines finish). This is a bounded
+// goroutine leak — the goroutine is guaranteed to eventually complete
+// when the remaining workers finish, so it does not grow unboundedly.
 func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

@@ -60,9 +60,9 @@ CREATE TABLE IF NOT EXISTS matches (
     metadata JSONB
 );
 
--- B-tree for singleton lookups (e.g. /matches/:id).
 -- BRIN for range scans (append-only, monotonically increasing, ~100x smaller).
-CREATE INDEX IF NOT EXISTS idx_matches_start_time ON matches(start_time);
+-- The B-tree idx_matches_start_time was removed (LOW-15): it duplicated the BRIN
+-- but was ~100x larger and added write overhead with no query benefit.
 CREATE INDEX IF NOT EXISTS idx_matches_start_time_brin ON matches USING BRIN (start_time) WITH (pages_per_range = 32);
 CREATE INDEX IF NOT EXISTS idx_matches_leagueid ON matches(leagueid) WHERE leagueid > 0;
 CREATE INDEX IF NOT EXISTS idx_matches_pro_filter ON matches(leagueid, lobby_type, start_time) WHERE leagueid > 0 AND lobby_type IN (1, 2);
@@ -513,3 +513,13 @@ $$ LANGUAGE plpgsql;
 -- Initialize bounded partitions up to 30B + catchall
 SELECT public.ensure_player_partitions(30000000000, 5000000000);
 CREATE TABLE IF NOT EXISTS players_p_catchall PARTITION OF players DEFAULT;
+
+-- MEDIUM-10: Scheduled partition maintenance
+-- When match IDs exceed 30B, all inserts go to the players_p_catchall DEFAULT
+-- partition which grows unboundedly. A scheduled task (cron, pg_cron, etc.)
+-- should periodically call ensure_player_partitions() with a higher max_match_id
+-- before catchall becomes too large. Recommended query:
+--
+--   SELECT public.ensure_player_partitions(60000000000, 5000000000);
+--
+-- Raise 60B → 90B → etc. as matches are ingested. Run weekly or monthly.

@@ -25,7 +25,8 @@ func (d *funcDialer) DialContext(ctx context.Context, network, addr string) (net
 // the given dialFn (typically returning a net.Pipe client conn).
 func testSocks4Dialer(t *testing.T, dialFn func(ctx context.Context, network, addr string) (net.Conn, error)) *socks4Dialer {
 	t.Helper()
-	d := newSocks4Dialer("127.0.0.1:9999", "test", time.Second)
+	d, err := newSocks4Dialer("127.0.0.1:9999", "test", time.Second)
+	require.NoError(t, err)
 	d.tcpDialer = &funcDialer{fn: dialFn}
 	return d
 }

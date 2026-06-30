@@ -1,10 +1,13 @@
 FROM golang:1.26-alpine AS builder
 WORKDIR /app
-# Workspace definition — must be first so Go knows which local modules to use.
-COPY go.work ./
-# Copy the entire source so go work sync operates on complete module state.
-COPY . .
+COPY go.work go.work.sum ./
+COPY services/id-fetcher/go.mod services/id-fetcher/go.sum ./services/id-fetcher/
+COPY services/detail-fetcher/go.mod services/detail-fetcher/go.sum ./services/detail-fetcher/
+COPY services/parser/go.mod services/parser/go.sum ./services/parser/
+COPY services/proxy-manager/go.mod services/proxy-manager/go.sum ./services/proxy-manager/
+COPY shared/go-common/go.mod shared/go-common/go.sum ./shared/go-common/
 RUN go work sync
+COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /detail-fetcher ./services/detail-fetcher
 
 FROM alpine:3.21

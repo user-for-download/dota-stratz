@@ -510,6 +510,7 @@ armageddon: ## DESTRUCTIVE: remove all Docker containers, images, volumes, and n
 	@echo "$(YELLOW)WARNING: This is HOST-WIDE, not project-scoped.$(RESET)"
 	@echo "$(YELLOW)It will remove ALL Docker containers, images, volumes, and networks on this machine.$(RESET)"
 	@echo "$(YELLOW)This can delete data from unrelated projects.$(RESET)"
+	@read -p "Type 'armageddon' to confirm: " ans && [ "$$ans" = "armageddon" ]
 	@echo "Stopping all containers..."
 	@docker ps -aq | xargs -r docker stop
 	@echo "Removing all containers..."

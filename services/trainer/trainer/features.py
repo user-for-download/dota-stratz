@@ -120,10 +120,15 @@ TRAINING_FEATURES_SQL = """
 
         -- Synergy with already-picked allies (from ml.hero_synergy_agg)
         COALESCE(sy.win_rate, 0.5)  AS sy_avg_win_rate,
+        -- sy_n_teammates: counts the number of already-picked allies (COUNT(*) over the
+        -- lateral join's pb2 rows, which is preserved for all prior picks regardless of
+        -- whether a synergy row exists). Semantically equivalent to len(ally_picks) in the API.
         COALESCE(sy.games, 0)       AS sy_n_teammates,
 
         -- Counter vs already-picked enemies (from ml.hero_counter_agg)
         COALESCE(co.win_rate, 0.5)  AS co_avg_win_rate,
+        -- co_n_enemies: counts the number of already-picked enemies (COUNT(*) over the
+        -- lateral join's pb2 rows for the opposing team). Semantically equivalent to len(enemy_picks) in the API.
         COALESCE(co.games, 0)       AS co_n_enemies,
         COALESCE(co.avg_kd_diff, 0) AS co_avg_kd_diff,
 

@@ -122,11 +122,39 @@ func Load() (*Config, error) {
 	if cfg.RotationStrategy != "timestamp" && cfg.RotationStrategy != "random" {
 		return nil, fmt.Errorf("PROXY_ROTATION_STRATEGY must be 'timestamp' or 'random', got %q", cfg.RotationStrategy)
 	}
-	if cfg.PoolMinSize >= cfg.PoolMaxSize {
-		return nil, fmt.Errorf("PROXY_POOL_MIN_SIZE (%d) must be < PROXY_POOL_MAX_SIZE (%d)",
-			cfg.PoolMinSize, cfg.PoolMaxSize)
+	if err := cfg.Validate(); err != nil {
+		return nil, err
 	}
 	return cfg, nil
+}
+
+// Validate checks that all critical integer config fields have sensible
+// non-zero values. A zero value for fields like LeaseDurationSec or
+// PoolMaxSize would silently create a non-functional proxy pool.
+func (cfg *Config) Validate() error {
+	if cfg.LeaseDurationSec <= 0 {
+		return fmt.Errorf("PROXY_LEASE_DURATION_SEC must be > 0, got %d", cfg.LeaseDurationSec)
+	}
+	if cfg.SoftFailThreshold <= 0 {
+		return fmt.Errorf("PROXY_SOFT_FAIL_THRESHOLD must be > 0, got %d", cfg.SoftFailThreshold)
+	}
+	if cfg.CooldownMin <= 0 {
+		return fmt.Errorf("PROXY_COOLDOWN_MIN must be > 0, got %d", cfg.CooldownMin)
+	}
+	if cfg.PoolMaxSize <= 0 {
+		return fmt.Errorf("PROXY_POOL_MAX_SIZE must be > 0, got %d", cfg.PoolMaxSize)
+	}
+	if cfg.PoolMinSize < 0 {
+		return fmt.Errorf("PROXY_POOL_MIN_SIZE must be >= 0, got %d", cfg.PoolMinSize)
+	}
+	if cfg.PoolMinSize >= cfg.PoolMaxSize {
+		return fmt.Errorf("PROXY_POOL_MIN_SIZE (%d) must be < PROXY_POOL_MAX_SIZE (%d)",
+			cfg.PoolMinSize, cfg.PoolMaxSize)
+	}
+	if cfg.ShutdownGraceMs <= 0 {
+		return fmt.Errorf("PROXY_SHUTDOWN_GRACE_MS must be > 0, got %d", cfg.ShutdownGraceMs)
+	}
+	return nil
 }
 
 func requireEnv(key string) (string, error) {

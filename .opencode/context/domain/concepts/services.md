@@ -30,6 +30,7 @@
 - FK violation (23503) → per-match fallback, offending match to DLQ
 - `context.WithoutCancel` for `SendBatch`/`Commit` to prevent connection pool corruption during shutdown
 - All child table helpers return errors (no swallowed failures)
+- Consumer uses `context.Context`-based `ConsumeWithReconnect(ctx, tag)` (HIGH-8 fix — replaced `done` channel with context for goroutine leak safety)
 
 ## Proxy Manager
 **Purpose**: Autonomous proxy pool. Fetches, validates, and maintains proxy health in Redis.

@@ -693,7 +693,7 @@ def _analyze_ml_tables(conn) -> None:
     ]
     with conn.cursor() as cur:
         for tbl in tables:
-            cur.execute(f"ANALYZE {tbl}")
+            cur.execute(f"VACUUM ANALYZE {tbl}")
     conn.commit()
     logger.info("Analyzed %d ML tables", len(tables))
 

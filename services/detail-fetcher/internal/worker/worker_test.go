@@ -21,7 +21,7 @@ func init() {
 // --- fakes ---
 
 type fakeFetcher struct {
-	fetchRawFn      func(ctx context.Context, matchID int64) ([]byte, error)
+	fetchRawFn       func(ctx context.Context, matchID int64) ([]byte, error)
 	fetchRawDirectFn func(ctx context.Context, matchID int64) ([]byte, error)
 }
 

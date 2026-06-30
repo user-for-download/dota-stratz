@@ -28,11 +28,12 @@ var ErrNoProxyAvailable = errors.New("no proxy available")
 type FailureReason string
 
 const (
-	ReasonHardFailure     FailureReason = "hard"
-	ReasonTimeout         FailureReason = "timeout"
-	ReasonBadStatus       FailureReason = "bad_status"
-	ReasonRateLimited     FailureReason = "rate_limit"
-	ReasonSoftThreshold   FailureReason = "soft_threshold_exceeded"
+	ReasonNoFailure     FailureReason = "no_failure"
+	ReasonHardFailure   FailureReason = "hard"
+	ReasonTimeout       FailureReason = "timeout"
+	ReasonBadStatus     FailureReason = "bad_status"
+	ReasonRateLimited   FailureReason = "rate_limit"
+	ReasonSoftThreshold FailureReason = "soft_threshold_exceeded"
 )
 
 // knownReasons is the allowlist of valid failure reasons used for metrics
@@ -296,11 +297,22 @@ func (p *Pool) AcquireWithRateLimit(ctx context.Context, maxPerMinute int) (stri
 
 		ok, err := rateLimitScript.Run(ctx, p.rdb, []string{key}, maxPerMinute).Result()
 		if err != nil {
-			_ = p.Release(ctx, proxy)
+			if relErr := p.Release(ctx, proxy); relErr != nil {
+				logger.Log.Warn("AcquireWithRateLimit: Release failed after rate limit script error",
+					zap.String("proxy", proxy), zap.Error(relErr))
+			}
 			return "", err
 		}
 
-		if ok.(int64) == 1 {
+		n, typeOK := ok.(int64)
+		if !typeOK {
+			if relErr := p.Release(ctx, proxy); relErr != nil {
+				logger.Log.Warn("AcquireWithRateLimit: Release failed after unexpected type",
+					zap.String("proxy", proxy), zap.Error(relErr))
+			}
+			return "", fmt.Errorf("rate limit script returned unexpected type %T", ok)
+		}
+		if n == 1 {
 			// Rate limit counter was INCR'd. Return the proxy to the caller
 			// — they'll Release() it when done, which decrements the lease.
 			// If Release() fails, the counter stays incremented for the 60s
@@ -314,7 +326,10 @@ func (p *Pool) AcquireWithRateLimit(ctx context.Context, maxPerMinute int) (stri
 		// timestamp, which would make it the next candidate and cause
 		// busy-spin on the same proxy (audit finding #5).
 		deferredScore := float64(time.Now().Add(p.cooldownDuration).UnixMicro())
-		_, _ = releaseScript.Run(ctx, p.rdb, []string{RedisKey, LeaseKey}, proxy, deferredScore).Result()
+		if _, err := releaseScript.Run(ctx, p.rdb, []string{RedisKey, LeaseKey}, proxy, deferredScore).Result(); err != nil {
+			logger.Log.Warn("AcquireWithRateLimit: releaseScript failed",
+				zap.String("proxy", proxy), zap.Error(err))
+		}
 		ProxyRateLimitedTotal.Inc()
 
 		if attempt < maxRetries-1 {
@@ -559,6 +574,9 @@ func (p *Pool) InCooldown(ctx context.Context, proxy string) (bool, error) {
 }
 
 func (p *Pool) Trim(ctx context.Context, max int64) error {
+	if max <= 0 {
+		return fmt.Errorf("Trim: max must be > 0, got %d", max)
+	}
 	size, err := p.Available(ctx)
 	if err != nil {
 		return err
@@ -640,16 +658,25 @@ func (p *Pool) WithProxy(ctx context.Context, fn func(proxy string) (*http.Respo
 	if resp == nil {
 		if err != nil {
 			if reason, shouldReport := ClassifyError(err, resp); shouldReport {
-				_ = p.Report(ctx, proxy, reason)
+				if repErr := p.Report(ctx, proxy, reason); repErr != nil {
+					logger.Log.Warn("WithProxy: Report failed (nil resp, reportable)",
+						zap.String("proxy", proxy), zap.Error(repErr))
+				}
 			} else {
 				// Non-reportable error (e.g. context.Canceled): release
 				// the lease instead of leaking it until the reaper fires.
 				// Fixes audit finding #2: lease leak on non-reportable error.
-				_ = p.Release(ctx, proxy)
+				if relErr := p.Release(ctx, proxy); relErr != nil {
+					logger.Log.Warn("WithProxy: Release failed (nil resp, not reportable)",
+						zap.String("proxy", proxy), zap.Error(relErr))
+				}
 			}
 			return nil, err // preserve the original error
 		}
-		_ = p.Report(ctx, proxy, ReasonHardFailure)
+		if repErr := p.Report(ctx, proxy, ReasonHardFailure); repErr != nil {
+			logger.Log.Warn("WithProxy: Report of ReasonHardFailure failed (nil resp, no err)",
+				zap.String("proxy", proxy), zap.Error(repErr))
+		}
 		return nil, fmt.Errorf("nil response for proxy %s", proxy)
 	}
 	defer resp.Body.Close()
@@ -658,7 +685,10 @@ func (p *Pool) WithProxy(ctx context.Context, fn func(proxy string) (*http.Respo
 		logger.Log.Debug("WithProxy: reporting proxy failure",
 			zap.String("proxy", proxy),
 			zap.String("reason", string(reason)))
-		_ = p.Report(ctx, proxy, reason)
+		if repErr := p.Report(ctx, proxy, reason); repErr != nil {
+			logger.Log.Warn("WithProxy: Report failed (non-nil resp, reportable)",
+				zap.String("proxy", proxy), zap.Error(repErr))
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -670,7 +700,10 @@ func (p *Pool) WithProxy(ctx context.Context, fn func(proxy string) (*http.Respo
 	// falling through to ReportSuccess/ReadAll, which would treat a
 	// cancelled request as a success (audit finding #3).
 	if err != nil {
-		_ = p.Release(ctx, proxy)
+		if relErr := p.Release(ctx, proxy); relErr != nil {
+			logger.Log.Warn("WithProxy: Release failed (non-nil resp, not reportable)",
+				zap.String("proxy", proxy), zap.Error(relErr))
+		}
 		return nil, err
 	}
 
@@ -681,7 +714,10 @@ func (p *Pool) WithProxy(ctx context.Context, fn func(proxy string) (*http.Respo
 			zap.Error(readErr))
 		// Use ReasonTimeout for transient TCP read failures so the proxy
 		// gets a soft retry instead of permanent removal (Bug #6).
-		_ = p.Report(ctx, proxy, ReasonTimeout)
+		if repErr := p.Report(ctx, proxy, ReasonTimeout); repErr != nil {
+			logger.Log.Warn("WithProxy: Report of ReasonTimeout failed (body read error)",
+				zap.String("proxy", proxy), zap.Error(repErr))
+		}
 		return nil, readErr
 	}
 	if int64(len(body)) > MaxWithProxyBytes {
@@ -689,11 +725,20 @@ func (p *Pool) WithProxy(ctx context.Context, fn func(proxy string) (*http.Respo
 			zap.String("proxy", proxy),
 			zap.Int("bytes", len(body)),
 			zap.Int("max", MaxWithProxyBytes))
-		_ = p.Report(ctx, proxy, ReasonHardFailure)
+		if repErr := p.Report(ctx, proxy, ReasonHardFailure); repErr != nil {
+			logger.Log.Warn("WithProxy: Report of ReasonHardFailure failed (body too large)",
+				zap.String("proxy", proxy), zap.Error(repErr))
+		}
 		return nil, fmt.Errorf("response body exceeds %d bytes (proxy %s)", MaxWithProxyBytes, proxy)
 	}
-	_ = p.ReportSuccess(ctx, proxy)
-	_ = p.Release(ctx, proxy)
+	if repErr := p.ReportSuccess(ctx, proxy); repErr != nil {
+		logger.Log.Warn("WithProxy: ReportSuccess failed",
+			zap.String("proxy", proxy), zap.Error(repErr))
+	}
+	if relErr := p.Release(ctx, proxy); relErr != nil {
+		logger.Log.Warn("WithProxy: Release failed on success path",
+			zap.String("proxy", proxy), zap.Error(relErr))
+	}
 	logger.Log.Debug("WithProxy: completed successfully",
 		zap.String("proxy", proxy),
 		zap.Int("body_bytes", len(body)))

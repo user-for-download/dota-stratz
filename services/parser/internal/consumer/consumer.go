@@ -1,6 +1,8 @@
 package consumer
 
 import (
+	"context"
+
 	"github.com/dota-stratz/shared/go-common/mq"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -14,8 +16,8 @@ type Consumer struct {
 // sets QoS, and returns a Consumer ready for use.
 func NewConsumer(url, queue, dlqName string, prefetch int) (*Consumer, error) {
 	inner, err := mq.NewConsumer(url, mq.QueueConfig{
-		Name:      queue,
-		DLQName:   dlqName,
+		Name:       queue,
+		DLQName:    dlqName,
 		MessageTTL: mq.DefaultMessageTTL,
 	}, prefetch)
 	if err != nil {
@@ -25,8 +27,8 @@ func NewConsumer(url, queue, dlqName string, prefetch int) (*Consumer, error) {
 }
 
 // ConsumeWithReconnect starts consuming with automatic reconnection.
-func (c *Consumer) ConsumeWithReconnect(done <-chan struct{}) <-chan amqp.Delivery {
-	return c.inner.ConsumeWithReconnect(done, "parser")
+func (c *Consumer) ConsumeWithReconnect(ctx context.Context) <-chan amqp.Delivery {
+	return c.inner.ConsumeWithReconnect(ctx, "parser")
 }
 
 // Close cleanly shuts down the consumer.

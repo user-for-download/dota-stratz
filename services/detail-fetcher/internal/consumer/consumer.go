@@ -12,8 +12,8 @@ type Consumer struct {
 
 func NewConsumer(url string, queueName, dlqName string, prefetch int) (*Consumer, error) {
 	inner, err := mq.NewConsumer(url, mq.QueueConfig{
-		Name:      queueName,
-		DLQName:   dlqName,
+		Name:       queueName,
+		DLQName:    dlqName,
 		MessageTTL: mq.DefaultMessageTTL,
 	}, prefetch)
 	if err != nil {

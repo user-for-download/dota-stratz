@@ -247,8 +247,15 @@ func (f *Fetcher) Run(ctx context.Context) error {
 	// and forceDownload is false.
 	var dbExisting map[int64]struct{}
 	if f.existsChecker != nil && !f.forceDownload && len(matches) > 0 {
-		minID := matches[0].MatchID
-		maxID := matches[len(matches)-1].MatchID
+		minID, maxID := matches[0].MatchID, matches[0].MatchID
+		for _, m := range matches[1:] {
+			if m.MatchID < minID {
+				minID = m.MatchID
+			}
+			if m.MatchID > maxID {
+				maxID = m.MatchID
+			}
+		}
 		existing, err := f.existsChecker.ExistingMatchIDs(ctx, minID, maxID)
 		if err != nil {
 			logger.Log.Warn("Failed to query existing matches from DB, "+

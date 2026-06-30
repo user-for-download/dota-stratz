@@ -27,7 +27,7 @@ func ClassifyError(err error, resp *http.Response) (FailureReason, bool) {
 		// NOT a proxy failure. Do not report it — otherwise every deploy or
 		// graceful restart permanently bans the active proxy from the pool.
 		if errors.Is(err, context.Canceled) {
-			return "", false
+			return ReasonNoFailure, false
 		}
 
 		// Everything else — DNS, connection refused, TLS cert errors — is a hard failure
@@ -52,5 +52,5 @@ func ClassifyError(err error, resp *http.Response) (FailureReason, bool) {
 		return ReasonBadStatus, false
 	}
 
-	return "", false
+	return ReasonNoFailure, false
 }

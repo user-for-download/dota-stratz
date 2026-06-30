@@ -19,6 +19,12 @@ services:
         command:
             - "postgres"
             - "-c"
+            - "shared_buffers=512MB"
+            - "-c"
+            - "work_mem=16MB"
+            - "-c"
+            - "maintenance_work_mem=128MB"
+            - "-c"
             - "shared_preload_libraries=pg_stat_statements"
         volumes:
             - "pg-data:/var/lib/postgresql/data"
@@ -35,8 +41,8 @@ services:
         deploy:
             resources:
                 limits:
-                    memory: 512M
-                    cpus: "1.0"
+                    memory: 2G
+                    cpus: "2.0"
     rabbitmq:
         profiles:
             - all
@@ -55,6 +61,7 @@ services:
             RABBITMQ_USER_ID_FETCHER_PASS: "${RABBITMQ_USER_ID_FETCHER_PASS:-idfetcher_secret}"
             RABBITMQ_USER_DETAIL_FETCHER_PASS: "${RABBITMQ_USER_DETAIL_FETCHER_PASS:-detailfetcher_secret}"
             RABBITMQ_USER_PARSER_PASS: "${RABBITMQ_USER_PARSER_PASS:-parser_secret}"
+            RABBITMQ_VM_MEMORY_HIGH_WATERMARK: 0.5
         ports:
             - "5672:5672"
             - "15672:15672"
@@ -104,7 +111,12 @@ services:
         image: "prom/prometheus:v2.55.0"
         container_name: dota2-prometheus
         restart: unless-stopped
-        network_mode: host
+        ports:
+            - "9092:9092"
+        networks:
+            - dota2-net
+        # NOTE: Scrape targets in ../prometheus/prometheus.yml still use
+        # localhost — update to service names if switching networks.
         command:
             - "--config.file=/etc/prometheus/prometheus.yml"
             - "--storage.tsdb.path=/prometheus"
@@ -122,6 +134,11 @@ services:
             interval: 15s
             timeout: 5s
             retries: 3
+        deploy:
+            resources:
+                limits:
+                    memory: 512M
+                    cpus: "0.5"
 
     grafana:
         profiles:
@@ -130,10 +147,13 @@ services:
         image: "grafana/grafana:11.3.0"
         container_name: dota2-grafana
         restart: unless-stopped
-        network_mode: host
+        ports:
+            - "3000:3000"
+        networks:
+            - dota2-net
         environment:
             GF_SECURITY_ADMIN_USER: "${GRAFANA_USER:-admin}"
-            GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-admin}"
+            GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-admin}"  # Change default in .env!
             GF_USERS_ALLOW_SIGN_UP: "false"
         volumes:
             - "grafana-data:/var/lib/grafana"
@@ -145,6 +165,12 @@ services:
             interval: 15s
             timeout: 5s
             retries: 3
+        deploy:
+            resources:
+                limits:
+                    memory: 512M
+                    cpus: "0.5"
+
     proxy-manager:
         profiles:
             - all
@@ -153,6 +179,8 @@ services:
         build:
             context: ..
             dockerfile: services/proxy-manager/Dockerfile
+        image: deploy-proxy-manager:latest
+        pull_policy: never
         container_name: dota2-proxy-manager
         restart: unless-stopped
         env_file:
@@ -197,6 +225,8 @@ services:
         build:
             context: ..
             dockerfile: services/detail-fetcher/Dockerfile
+        image: deploy-detail-fetcher:latest
+        pull_policy: never
         container_name: dota2-detail-fetcher
         restart: unless-stopped
         env_file:
@@ -226,6 +256,8 @@ services:
         build:
             context: ..
             dockerfile: services/id-fetcher/Dockerfile
+        image: deploy-id-fetcher:latest
+        pull_policy: never
         container_name: dota2-id-fetcher
         restart: unless-stopped
         env_file:
@@ -249,6 +281,8 @@ services:
                 condition: service_healthy
             proxy-manager:
                 condition: service_healthy
+            postgres:
+                condition: service_healthy
         healthcheck:
             test:
                 - CMD-SHELL
@@ -271,6 +305,8 @@ services:
         build:
             context: ..
             dockerfile: services/parser/Dockerfile
+        image: deploy-parser:latest
+        pull_policy: never
         container_name: dota2-parser
         restart: unless-stopped
         env_file:

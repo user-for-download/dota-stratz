@@ -35,7 +35,10 @@ type socks4Dialer struct {
 	tcpDialer tcpDialer
 }
 
-func newSocks4Dialer(host string, userID string, timeout time.Duration) *socks4Dialer {
+func newSocks4Dialer(host string, userID string, timeout time.Duration) (*socks4Dialer, error) {
+	if timeout <= 0 {
+		return nil, fmt.Errorf("socks4: timeout must be > 0, got %v", timeout)
+	}
 	return &socks4Dialer{
 		host:    host,
 		userID:  userID,
@@ -44,7 +47,7 @@ func newSocks4Dialer(host string, userID string, timeout time.Duration) *socks4D
 			Timeout:   timeout,
 			KeepAlive: -1,
 		},
-	}
+	}, nil
 }
 
 // DialContext implements proxy.ContextDialer.
@@ -58,7 +61,10 @@ func (d *socks4Dialer) DialContext(ctx context.Context, network, addr string) (n
 	if err != nil {
 		return nil, fmt.Errorf("socks4: connect to proxy %s: %w", d.host, err)
 	}
-	proxyConn.SetDeadline(time.Now().Add(d.timeout))
+	if err := proxyConn.SetDeadline(time.Now().Add(d.timeout)); err != nil {
+		proxyConn.Close()
+		return nil, fmt.Errorf("socks4: set deadline: %w", err)
+	}
 
 	destHost, destPortStr, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -121,7 +127,10 @@ func (d *socks4Dialer) DialContext(ctx context.Context, network, addr string) (n
 	switch resp[1] {
 	case socks4Granted:
 		// Success — clear deadline so the caller sets its own.
-		proxyConn.SetDeadline(time.Time{})
+		if err := proxyConn.SetDeadline(time.Time{}); err != nil {
+			proxyConn.Close()
+			return nil, fmt.Errorf("socks4: clear deadline: %w", err)
+		}
 		return proxyConn, nil
 	case socks4Rejected:
 		proxyConn.Close()

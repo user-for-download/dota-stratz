@@ -26,11 +26,15 @@ trap cleanup EXIT INT TERM
 
 export TARGET_URL OUTPUT_FILE CONNECT_TIMEOUT TIMEOUT
 
-# ---------- Proxy check function ----------
+# ---------- Proxy check function (written to temp script for xargs) ----------
+CHECK_SCRIPT=$(mktemp /tmp/check-proxy.XXXXXX)
+trap 'rm -f "$CHECK_SCRIPT"' EXIT INT TERM
+
+cat > "$CHECK_SCRIPT" << 'SCRIPT'
+#!/usr/bin/env bash
 check_proxy() {
     local input="$1"
 
-    # Seed random to ensure true randomness across simultaneous subshells
     RANDOM=$(( $$ + $SRANDOM + $SECONDS ))
 
     local uas=(
@@ -45,8 +49,6 @@ check_proxy() {
 
     local targets=()
 
-    # If the protocol is already known (from JSON or Text), only test that ONE protocol.
-    # Otherwise, brute-force test all 3 standard protocols.
     if [[ "$input" == *"://"* ]]; then
         targets=("$input")
     else
@@ -55,18 +57,17 @@ check_proxy() {
 
     for proxy in "${targets[@]}"; do
         echo -e "[\e[32m-CHECK-\e[0m] $proxy"
-        # Test the proxy (silent, fast fail, ipv4 only)
         if [ "$(curl -4 -s -x "$proxy" -A "$user_agent" --connect-timeout "$CONNECT_TIMEOUT" -m "$TIMEOUT" -o /dev/null -w "%{http_code}" "$TARGET_URL" 2>/dev/null)" = "200" ]; then
-
-            # Native >> is atomic. Safe for parallel threads.
             echo "$proxy" >> "$OUTPUT_FILE"
             echo -e "[\e[32mVALID\e[0m] $proxy"
-
-            return 0 # Proxy found, stop checking other protocols for this IP
+            return 0
         fi
     done
 }
-export -f check_proxy
+export TARGET_URL OUTPUT_FILE CONNECT_TIMEOUT TIMEOUT
+check_proxy "$1"
+SCRIPT
+chmod +x "$CHECK_SCRIPT"
 
 # ---------- Pre-Process List (Blazing Fast JSON & Text parsing) ----------
 {
@@ -145,7 +146,7 @@ echo "Running aggressively with $THREADS threads..."
 echo "------------------------------------------------------"
 
 # ---------- Run in parallel ----------
-xargs -a "$TEMP_LIST" -n 1 -P "$THREADS" bash -c 'check_proxy "$1"' _
+xargs -a "$TEMP_LIST" -n 1 -P "$THREADS" "$CHECK_SCRIPT" 2>&1
 
 # ---------- Report ----------
 echo "------------------------------------------------------"

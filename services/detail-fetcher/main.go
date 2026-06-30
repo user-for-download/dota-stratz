@@ -39,7 +39,7 @@ func main() {
 	defer cancel()
 
 	// 1. Redis & Proxy Pool
-	rdb, err := cache.Connect(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
+	rdb, err := cache.Connect(ctx, cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
 	if err != nil {
 		logger.Log.Fatal("Redis connection failed", zap.Error(err))
 	}

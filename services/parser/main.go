@@ -65,10 +65,8 @@ func main() {
 	// reconnection. If the broker restarts or the channel dies, it
 	// reconnects with exponential backoff (1s → 30s max) and resumes
 	// delivery on the returned channel. The channel is never closed on
-	// reconnect — only on permanent shutdown via the done channel.
-	done := make(chan struct{})
-	defer close(done)
-	msgs := cons.ConsumeWithReconnect(done)
+	// reconnect — only on permanent shutdown via context cancellation.
+	msgs := cons.ConsumeWithReconnect(ctx)
 
 	// 3. Metrics & Health Server
 	go startMetricsServer(ctx, cfg.Worker.MetricsPort, repo)

@@ -9,7 +9,7 @@
 | `002_constants.sql` | Static reference: `const_game_mode`, `const_lobby_type`, `const_region`, `const_patch`, `const_hero`, `const_item`, `const_ability` |
 | `003_analytics.sql` | Bayesian shrinkage config, MV `mv_team_hero_profile`, `mv_hero_synergy`, `mv_hero_counter`, `mv_player_team_history`, feature snapshots, roles, refresh functions |
 | `004_partition_verify.sql` | Idempotent assertion that 6 expected `players` partitions exist (safety check) |
-| `005_ml_tables.sql` | 6 initial ML aggregate tables in `ml` schema (all UNLOGGED) |
+| `005_ml_tables.sql` | 6 initial ML aggregate tables in `ml` schema (originally UNLOGGED, changed to LOGGED per CRITICAL-5 fix) |
 | `006_postgres_best_practices_fixes.sql` | Runtime fixes: grants on `ml` schema, `grant_ml_access()` function |
 | `007_enhanced_features.sql` | Adds 3 behavioral feature columns (`firstblood_rate`, `avg_camps_stacked`, `avg_vision_placed`) to `ml.team_hero_agg` and `ml.player_hero_agg` |
 | `008_minute_stats_columns.sql` | Adds `gold_t` / `xp_t` JSONB columns to `player_minute_stats` for early-game (min 0-9) gold/XP computation |
@@ -33,10 +33,10 @@
 
 ## ML Schema (`ml`)
 - **7** patch-aware aggregate tables for LightGBM training and inference
-- Tables are UNLOGGED for write speed (re-populated on each train run)
+- Tables are LOGGED for crash safety (previously UNLOGGED — changed per CRITICAL-5; VACUUM ANALYZE added to aggregate populator to compensate for write performance)
 - All aggregate queries filter `WHERE radiant_win IS NOT NULL` to exclude abandoned matches from win-rate calculations (prevents ~3-5% deflation)
 - avg_gold_10 / avg_xp_10 computed from `gold_t`/`xp_t` JSONB arrays now stored in `player_time_series_arrays` (separated from `player_minute_stats` minute=0 sentinel by migration `013` to avoid PK conflict)
-- **Stale row protection**: Every populator `DELETE`s rows for the current patch_id before re-inserting, so rows that disappear from source queries don't persist in aggregate tables
+- **Stale row protection**: `_clean_patch_rows` deletes rows for the current patch_id before re-inserting (so disappeared rows don't persist), and `_analyze_ml_tables()` runs `VACUUM ANALYZE` on all 7 tables after every full populate cycle to reclaim bloat and update query planner stats
 - **Configurable match filtering**: All seven populators apply the same `TRAINER_LEAGUE_ONLY` / `TRAINER_LOBBY_TYPES` filter (replaces old hardcoded `leagueid > 0` that was only in `populate_h2h`)
 - Trainer's `TRAINING_FEATURES_SQL` computes **58 aggregate + 160 one-hot hero ID = 218-dim feature vectors** via a single query with `LEAST`/`GREATEST` index-friendly joins on synergy aggregates, and `LATERAL` subqueries for PIT synergy/counter lookups. Player-hero features use real data when `account_id` is available at inference time, otherwise fall back to hardcoded defaults to avoid train-serving skew.
 

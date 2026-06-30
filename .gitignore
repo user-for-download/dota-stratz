@@ -37,6 +37,8 @@ Thumbs.db
 
 # Data & models (managed via Docker volumes)
 /models/
+deploy/models/model_patch_*.txt
+deploy/models/*.bin
 /data/
 prc.json
 proxy.txt

@@ -291,7 +291,18 @@ func (p *Processor) Run(ctx context.Context) (err error) {
 func (p *Processor) fetchBatch(ctx context.Context) []amqp.Delivery {
 	var batch []amqp.Delivery
 	timer := time.NewTimer(p.fetchTimeout)
-	defer timer.Stop()
+	defer func() {
+		if !timer.Stop() {
+			// Drain the timer channel to prevent a stale value from
+			// leaking — Stop() returns false when the timer has already
+			// fired but the value was never received (e.g. the !ok path
+			// returned before the <-timer.C case was selected).
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}()
 
 	for len(batch) < p.batchSize {
 		select {

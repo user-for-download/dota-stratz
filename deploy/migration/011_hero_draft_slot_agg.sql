@@ -12,7 +12,7 @@
 
 CREATE SCHEMA IF NOT EXISTS ml;
 
-CREATE UNLOGGED TABLE IF NOT EXISTS ml.hero_draft_slot_agg (
+CREATE TABLE IF NOT EXISTS ml.hero_draft_slot_agg (
     patch_id           INT      NOT NULL,
     hero_id            INT      NOT NULL,
     team_pick_ordinal  SMALLINT NOT NULL, -- 1st/2nd/3rd/4th/5th pick for that team

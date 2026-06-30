@@ -14,17 +14,18 @@ FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
 
-# Workspace definition — must be first so Go knows which local modules to use.
-COPY go.work ./
+COPY go.work go.work.sum ./
 
-# Copy the entire source first so that go work sync operates on the
-# complete module state (go.mod files may be updated by the sync).
-COPY . .
+COPY services/id-fetcher/go.mod services/id-fetcher/go.sum ./services/id-fetcher/
+COPY services/detail-fetcher/go.mod services/detail-fetcher/go.sum ./services/detail-fetcher/
+COPY services/parser/go.mod services/parser/go.sum ./services/parser/
+COPY services/proxy-manager/go.mod services/proxy-manager/go.sum ./services/proxy-manager/
+COPY shared/go-common/go.mod shared/go-common/go.sum ./shared/go-common/
 
-# Download all workspace dependencies (cached until a manifest changes).
 RUN go work sync
 
-# Build a fully static binary.
+COPY . .
+
 RUN CGO_ENABLED=0 go build \
     -trimpath \
     -ldflags="-s -w" \
@@ -48,6 +49,4 @@ RUN adduser -D appuser
 COPY --from=builder /proxy-manager /proxy-manager
 
 USER appuser
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s \
-  CMD wget -qO- http://localhost:${PROXY_METRICS_PORT:-9090}/healthz || exit 1
 ENTRYPOINT ["/proxy-manager"]

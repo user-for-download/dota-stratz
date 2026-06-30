@@ -59,12 +59,12 @@ func NewPublisher(url string, queueCfg *QueueConfig) (*Publisher, error) {
 	confirms := ch.NotifyPublish(make(chan amqp.Confirmation, 100))
 
 	p := &Publisher{
-		url:       url,
-		queueCfg:  queueCfg,
-		conn:      conn,
-		ch:        ch,
-		confirms:  confirms,
-		shutdown:  make(chan struct{}),
+		url:      url,
+		queueCfg: queueCfg,
+		conn:     conn,
+		ch:       ch,
+		confirms: confirms,
+		shutdown: make(chan struct{}),
 	}
 
 	if queueCfg != nil {
@@ -105,9 +105,13 @@ func (p *Publisher) Publish(ctx context.Context, queueName string, body []byte) 
 		},
 	); err != nil {
 		// Connection/channel may be dead. Try reconnecting once and retry.
+		// Release publishMu before reconnect so other goroutines are not
+		// blocked for the entire backoff window (up to 30s).
 		logger.Log.Warn("Publish failed, attempting reconnect and retry",
 			zap.Error(err))
+		p.publishMu.Unlock()
 		p.reconnect()
+		p.publishMu.Lock()
 
 		p.closeMu.Lock()
 		ch = p.ch
@@ -126,6 +130,18 @@ func (p *Publisher) Publish(ctx context.Context, queueName string, body []byte) 
 			return fmt.Errorf("publish failed after reconnect: %w", err)
 		}
 	}
+
+	// Re-verify confirms channel identity under closeMu. If reconnect()
+	// swapped p.confirms between our snapshot and this point, we cannot
+	// wait on the old (stale) channel — it will never receive a confirm.
+	p.closeMu.Lock()
+	if p.confirms != confirms {
+		logger.Log.Warn("Publish: confirms channel was swapped by concurrent reconnect; " +
+			"message was sent but confirm status is unknown")
+		p.closeMu.Unlock()
+		return nil // at-least-once: downstream dedup handles duplicates
+	}
+	p.closeMu.Unlock()
 
 	select {
 	case confirm, ok := <-confirms:
@@ -269,10 +285,13 @@ func (p *Publisher) reconnect() {
 }
 
 // backoffOrShutdown sleeps for the given duration or returns early if
-// shutdown is signalled.
+// shutdown is signalled. Uses time.NewTimer so the timer is stopped and
+// garbage-collected when shutdown fires first, preventing a timer leak.
 func (p *Publisher) backoffOrShutdown(d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
 	select {
-	case <-time.After(d):
+	case <-timer.C:
 	case <-p.shutdown:
 	}
 }
@@ -283,11 +302,22 @@ func (p *Publisher) backoffOrShutdown(d time.Duration) {
 func (p *Publisher) exchange(conn *amqp.Connection, ch *amqp.Channel) error {
 	p.closeMu.Lock()
 
+	// Check both p.closed and p.shutdown so exchange() bails out early
+	// during Close() — Close() now acquires closeMu before closing shutdown,
+	// so this check is race-free.
 	if p.closed {
 		p.closeMu.Unlock()
 		conn.Close()
 		ch.Close()
 		return fmt.Errorf("publisher is closed")
+	}
+	select {
+	case <-p.shutdown:
+		p.closeMu.Unlock()
+		conn.Close()
+		ch.Close()
+		return fmt.Errorf("publisher is shutting down")
+	default:
 	}
 
 	oldConn := p.conn
@@ -314,11 +344,11 @@ func (p *Publisher) exchange(conn *amqp.Connection, ch *amqp.Channel) error {
 // reconnect loops before closing the connection.
 func (p *Publisher) Close() {
 	p.closeOnce.Do(func() {
-		// Close shutdown FIRST to abort any in-progress reconnect loops
-		// before acquiring closeMu.
-		close(p.shutdown)
-
+		// Acquire closeMu BEFORE closing shutdown so exchange() (called
+		// by reconnect()) cannot sneak in between the close and the lock,
+		// swap in a fresh connection, and have it immediately destroyed.
 		p.closeMu.Lock()
+		close(p.shutdown)
 		p.closed = true
 		if p.ch != nil {
 			p.ch.Close()

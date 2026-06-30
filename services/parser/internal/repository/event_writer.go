@@ -88,8 +88,14 @@ func writePurchaseLog(batch *pgx.Batch, matchID int64, playerSlot int, raw json.
 
 // tableAllowlist restricts which table names can be interpolated into SQL
 // queries in writeObsLog and writeObsLeftLog, preventing SQL injection via
-// uncontrolled table name input (Issue #34). When adding new event-log tables,
-// add the table name here.
+// uncontrolled table name input (Issue #34).
+//
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║   IMPORTANT: When adding a new player_*_log table that uses dynamic     ║
+// ║   table name interpolation (fmt.Sprintf with table name), you MUST     ║
+// ║   add the table name to this allowlist. Failure to do so will cause    ║
+// ║   a runtime error (unrecognized table name). See also: obsTableName.  ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
 var tableAllowlist = map[string]bool{
 	"player_obs_log":      true,
 	"player_sen_log":      true,

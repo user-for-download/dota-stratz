@@ -1,3 +1,7 @@
+# Bake produces images tagged as deploy-<service>:latest.  Compose
+# services reference these exact tags via `image:` + `pull_policy: never`
+# so they find locally-baked images instead of trying to pull.
+
 group "default" {
   targets = ["id-fetcher", "detail-fetcher", "parser", "proxy-manager"]
 }
@@ -5,8 +9,6 @@ group "default" {
 target "id-fetcher" {
   context = "../"
   dockerfile = "services/id-fetcher/Dockerfile"
-  # Image name must match what compose.yaml expects by default
-  # (project=deploy + service=id-fetcher => deploy-id-fetcher:latest).
   tags = ["deploy-id-fetcher:latest"]
 }
 

@@ -37,7 +37,10 @@ func MakeTransport(proxyStr string, timeout time.Duration) (*http.Transport, err
 		if proxyURL.User != nil {
 			userID = proxyURL.User.Username()
 		}
-		dialer := newSocks4Dialer(proxyURL.Host, userID, timeout)
+		dialer, err := newSocks4Dialer(proxyURL.Host, userID, timeout)
+		if err != nil {
+			return nil, fmt.Errorf("socks4 dialer: %w", err)
+		}
 		return &http.Transport{
 			DialContext:           dialer.DialContext,
 			DisableKeepAlives:     true,

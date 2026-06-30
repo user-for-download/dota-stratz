@@ -288,11 +288,17 @@ def build_feature_vector(
     # -- Synergy with allies (from pre-fetched batch dict) --
     sy = batch.synergy.get(hero_id)
     vec["sy_avg_win_rate"] = _float(sy[0] if sy else None, "win_rate")
+    # sy_n_teammates = len(ally_picks): counts the number of already-picked allies at
+    # this draft state. The training SQL uses COUNT(*) over pb2 rows in the LATERAL join,
+    # which is semantically equivalent (LEFT JOIN preserves all prior pick rows).
     vec["sy_n_teammates"] = float(sy[1] if sy else 0)
 
     # -- Counter vs enemies (from pre-fetched batch dict) --
     co = batch.counter.get(hero_id)
     vec["co_avg_win_rate"] = _float(co[0] if co else None, "win_rate")
+    # co_n_enemies = len(enemy_picks): counts the number of already-picked enemies at
+    # this draft state. Semantically equivalent to the training SQL's COUNT(*) over
+    # opposing-team pb2 rows in the LATERAL join.
     vec["co_n_enemies"] = float(co[1] if co else 0)
     vec["co_avg_kd_diff"] = _float(co[2] if co else None, "avg_kd_diff")
 

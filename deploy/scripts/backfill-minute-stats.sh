@@ -12,18 +12,21 @@
 # player_minute_stats and insert them into player_time_series_arrays.
 #
 # Usage:
-#   PG_DSN="postgres://user:pass@host:5432/dota2" bash backfill-minute-stats.sh
+#   export PGPASSWORD="pass" && bash backfill-minute-stats.sh
 #
 # Safe to run multiple times — uses ON CONFLICT DO UPDATE.
 # ==============================================================================
 
 set -euo pipefail
 
-PG_DSN="${PG_DSN:-postgres://dota2:dota2@localhost:5432/dota2?sslmode=disable}"
+export PGPASSWORD="${PGPASSWORD:-dota2}"
+PGHOST="${PGHOST:-localhost}"
+PGUSER="${PGUSER:-dota2}"
+PGDATABASE="${PGDATABASE:-dota2}"
 
 echo "Backfilling gold_t / xp_t from per-minute rows into player_time_series_arrays ..."
 
-psql "${PG_DSN}" <<'SQL'
+psql -h "$PGHOST" -U "$PGUSER" -d "$PGDATABASE" <<'SQL'
 WITH aggregated AS (
     SELECT
         match_id,
@@ -43,4 +46,4 @@ ON CONFLICT (match_id, player_slot) DO UPDATE SET
     xp_t   = EXCLUDED.xp_t;
 SQL
 
-echo "Done. Affected rows: $(psql "${PG_DSN}" -t -A -c "SELECT COUNT(*) FROM player_time_series_arrays WHERE gold_t IS NOT NULL;")"
+echo "Done. Affected rows: $(psql -h "$PGHOST" -U "$PGUSER" -d "$PGDATABASE" -t -A -c "SELECT COUNT(*) FROM player_time_series_arrays WHERE gold_t IS NOT NULL;")"

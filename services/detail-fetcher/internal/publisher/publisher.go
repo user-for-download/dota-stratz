@@ -36,8 +36,8 @@ type Publisher struct {
 // automatic reconnection and publisher confirms.
 func NewPublisher(url string, rawMatchesQueue, dlqQueue string) (*Publisher, error) {
 	inner, err := mq.NewPublisher(url, &mq.QueueConfig{
-		Name:      rawMatchesQueue,
-		DLQName:   dlqQueue,
+		Name:       rawMatchesQueue,
+		DLQName:    dlqQueue,
 		MessageTTL: mq.DefaultMessageTTL,
 	})
 	if err != nil {

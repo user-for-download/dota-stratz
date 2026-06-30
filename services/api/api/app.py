@@ -122,12 +122,19 @@ def reload_model(
     cfg: APIConfig = request.app.state.cfg
 
     # Validate admin token
-    if cfg.admin_token:
-        token = ""
-        if authorization and authorization.startswith("Bearer "):
-            token = authorization[len("Bearer "):]
-        if token != cfg.admin_token:
-            raise HTTPException(status_code=403, detail="Invalid admin token")
+    if not cfg.admin_token:
+        logger.warning(
+            "STRATZ_ADMIN_TOKEN not set — rejecting /reload requests for security"
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="STRATZ_ADMIN_TOKEN not configured",
+        )
+    token = ""
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization[len("Bearer "):]
+    if token != cfg.admin_token:
+        raise HTTPException(status_code=403, detail="Invalid admin token")
 
     predictor.unload_model(patch_id)
     loaded = predictor.load_model(patch_id)

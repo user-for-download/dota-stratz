@@ -46,7 +46,7 @@ func main() {
 	defer mqPub.Close()
 
 	// 2. Connect to Redis & initialise Proxy Pool.
-	rdb, err := cache.Connect(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
+	rdb, err := cache.Connect(ctx, cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
 	if err != nil {
 		logger.Log.Fatal("Failed to connect to Redis", zap.Error(err))
 	}
@@ -149,7 +149,10 @@ func main() {
 	running := make(chan struct{}, 1) // capacity-1 = non-blocking trylock
 	running <- struct{}{}             // pre-fill: first tick is allowed immediately
 
-	scheduler := cron.New()
+	scheduler := cron.New(
+		cron.WithLocation(time.UTC),
+		cron.WithChain(cron.Recover(cron.DefaultLogger)),
+	)
 	_, err = scheduler.AddFunc(cfg.OpenDota.FetchSchedule, func() {
 		select {
 		case token := <-running:

@@ -47,8 +47,8 @@ func NewPublisher(url string, matchIDsQueue string) (*Publisher, error) {
 
 	// Declare queues using the shared helper.
 	if err := mq.DeclareQueueWithDLQ(topoCh, mq.QueueConfig{
-		Name:      matchIDsQueue,
-		DLQName:   matchIDsQueue + ".dlq",
+		Name:       matchIDsQueue,
+		DLQName:    matchIDsQueue + ".dlq",
 		MessageTTL: mq.DefaultMessageTTL,
 	}); err != nil {
 		conn.Close()
@@ -194,8 +194,7 @@ func (p *Publisher) publishChannel() (*amqp.Channel, error) {
 	}
 
 	// Try to reconnect if the connection is no longer healthy.
-	if err := p.reconnectIfNeeded(); err != nil {
-	}
+	p.reconnectIfNeeded()
 
 	ch, err := p.conn.Channel()
 	if err != nil {
