@@ -691,10 +691,15 @@ def _analyze_ml_tables(conn) -> None:
         "ml.hero_baseline_agg",
         "ml.hero_draft_slot_agg",
     ]
-    with conn.cursor() as cur:
-        for tbl in tables:
-            cur.execute(f"VACUUM ANALYZE {tbl}")
-    conn.commit()
+    # VACUUM requires autocommit (Postgres forbids VACUUM inside a transaction block).
+    old_autocommit = conn.autocommit
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            for tbl in tables:
+                cur.execute(f"VACUUM ANALYZE {tbl}")
+    finally:
+        conn.autocommit = old_autocommit
     logger.info("Analyzed %d ML tables", len(tables))
 
 

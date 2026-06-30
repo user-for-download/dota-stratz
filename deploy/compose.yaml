@@ -365,10 +365,12 @@ services:
                     memory: 2G
                     cpus: "2.0"
         # trainer is a batch/CLI service — use `docker compose run --rm trainer ...`
-        # to execute training commands. Default: sleep (keep container alive for
-        # `docker compose up --profile train` or exec debugging).
-        entrypoint: ["/bin/sh", "-c"]
-        command: ["trap 'exit 0' TERM; sleep infinity & wait"]
+        # to execute training commands. The Dockerfile entrypoint is "python -m trainer.main".
+        # Default: sleep so `docker compose up --profile train` keeps the container alive
+        # for exec debugging without exiting.
+        # Runs as root to write model files to the shared ml-models volume (owned by root).
+        user: "0"
+        command: ["sleep", "infinity"]
     api:
         profiles:
             - all
