@@ -61,7 +61,7 @@ services:
             RABBITMQ_USER_ID_FETCHER_PASS: "${RABBITMQ_USER_ID_FETCHER_PASS:-idfetcher_secret}"
             RABBITMQ_USER_DETAIL_FETCHER_PASS: "${RABBITMQ_USER_DETAIL_FETCHER_PASS:-detailfetcher_secret}"
             RABBITMQ_USER_PARSER_PASS: "${RABBITMQ_USER_PARSER_PASS:-parser_secret}"
-            RABBITMQ_VM_MEMORY_HIGH_WATERMARK: 0.5
+            # Memory watermark now set via rabbitmq.conf (env var deprecated in modern RabbitMQ)
         ports:
             - "5672:5672"
             - "15672:15672"

@@ -13,6 +13,8 @@ FROM rabbitmq:management-alpine
 
 COPY init.sh /workspace/init.sh
 COPY startup.sh /usr/local/bin/startup.sh
+COPY rabbitmq.conf /etc/rabbitmq/rabbitmq.conf
+COPY definitions.json /etc/rabbitmq/definitions.json
 
 RUN chmod +x /workspace/init.sh /usr/local/bin/startup.sh
 

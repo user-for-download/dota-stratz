@@ -45,12 +45,12 @@ func newSourceFetchLimiter(cooldown time.Duration) *sourceFetchLimiter {
 
 // Run starts the proxy-manager service and blocks until SIGINT/SIGTERM.
 func Run() {
+	logger.InitLogger()
+	defer logger.Sync()
+
 	if err := godotenv.Load("deploy/.env"); err != nil {
 		logger.Log.Warn("No .env file found, relying on process environment", zap.Error(err))
 	}
-
-	logger.InitLogger()
-	defer logger.Sync()
 
 	cfg, err := config.Load()
 	if err != nil {
