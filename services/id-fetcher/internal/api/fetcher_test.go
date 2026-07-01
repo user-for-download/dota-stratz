@@ -128,11 +128,12 @@ func Test_RollingWindowPublishesBatches(t *testing.T) {
 	pub.mu.Unlock()
 }
 
-// Test_WatermarkFilterSkipsOldMatches verifies that when a watermark is
-// set via SetWatermark, the fetcher uses the watermark-based query
-// (FetchMatchesSince) with a wider lookback to catch missed matches.
-// The Go-side filter in Run() handles deduplication against lastMaxMatchID.
-func Test_WatermarkFilterSkipsOldMatches(t *testing.T) {
+// Test_WatermarkDoesNotFilterMatches verifies that the watermark is NOT
+// used as a per-match filter in Run(). Only the DB existence check and
+// Redis lastMaxMatchID filter are used for deduplication. This prevents
+// data loss when the watermark is higher than some unparsed matches
+// (e.g. after a backup restore).
+func Test_WatermarkDoesNotFilterMatches(t *testing.T) {
 	const batchSize = 10
 
 	src := &fakeSource{
@@ -160,8 +161,10 @@ func Test_WatermarkFilterSkipsOldMatches(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
+	// All matches should be published — watermark is not used as a filter.
+	// Only the DB check (not present in this test) and Redis filter apply.
 	published := pub.publishedItems()
-	want := []int64{101, 150, 200}
+	want := []int64{50, 80, 100, 101, 150, 200}
 	if len(published) != len(want) {
 		t.Fatalf("published %d items, want %d: %v", len(published), len(want), published)
 	}
@@ -302,10 +305,9 @@ func isClosed(ch <-chan struct{}) bool {
 }
 
 // Test_WatermarkPositiveWithZeroLookbackDays_NoError verifies that the
-// fetcher no longer requires lookbackDays > 0 when watermark is set.
-// Since the watermark filter is now applied in Go code (not in a separate
-// SQL path), a zero lookback is harmless — only the watermark value
-// determines which matches are skipped.
+// fetcher works correctly when watermark > 0 but lookbackDays = 0.
+// Falls back to rolling-window query. Watermark is NOT used as a
+// per-match filter — only DB check and Redis filter apply.
 func Test_WatermarkPositiveWithZeroLookbackDays_NoError(t *testing.T) {
 	src := &fakeSource{
 		fetchMatchesFn: func(_ context.Context) ([]MatchNode, error) {
@@ -317,7 +319,6 @@ func Test_WatermarkPositiveWithZeroLookbackDays_NoError(t *testing.T) {
 	}
 	pub := &fakePublisher{}
 	f := newTestFetcher(src, pub, 10)
-	// Set watermark to 100 but leave lookbackDays at 0 (previously an error).
 	f.SetWatermark(100, 0)
 
 	if err := f.Run(context.Background()); err != nil {
@@ -325,8 +326,8 @@ func Test_WatermarkPositiveWithZeroLookbackDays_NoError(t *testing.T) {
 	}
 
 	published := pub.publishedItems()
-	// Only match_id > 100 should be published.
-	if len(published) != 1 || published[0] != 150 {
-		t.Errorf("published = %v, want [150]", published)
+	// Both matches published — watermark is not a per-match filter.
+	if len(published) != 2 {
+		t.Errorf("published = %v, want [50, 150]", published)
 	}
 }

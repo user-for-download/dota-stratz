@@ -286,15 +286,11 @@ func (f *Fetcher) Run(ctx context.Context) error {
 	)
 
 	for _, m := range matches {
-		// Layer 1: skip already-parsed matches (watermark).
-		if f.watermark > 0 && m.MatchID <= f.watermark {
-			continue
-		}
-		// Layer 2: skip already-queued matches (Redis).
-		if f.lastMaxMatchID > 0 && m.MatchID <= f.lastMaxMatchID {
-			continue
-		}
-		// Layer 3: skip matches already committed to the database.
+		// DB existence check: skip matches already committed to the database.
+		// This is the authoritative deduplication mechanism. The watermark
+		// and Redis filters are NOT used here because they can cause data
+		// loss when the watermark/Redis value is higher than some unparsed
+		// matches (e.g. after a backup restore with stale values).
 		if dbExisting != nil {
 			if _, exists := dbExisting[m.MatchID]; exists {
 				continue

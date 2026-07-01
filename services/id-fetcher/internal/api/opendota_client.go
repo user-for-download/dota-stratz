@@ -165,16 +165,14 @@ func (c *OpenDotaClient) FetchMatchesSince(
 	}
 	lobbyList := strings.Join(parts, ",")
 
-	// SQL: WHERE ... AND match_id > %d ORDER BY match_id ASC LIMIT %d
-	// The match_id filter is pushed into the SQL itself so that matches
-	// above the watermark are always found regardless of backlog depth,
-	// and ASC ordering guarantees the oldest are processed first —
-	// preventing both the pipeline stall and permanent data-loss bugs.
-	query := fmt.Sprintf(fetchMatchesWatermarkQuery, lookbackDays, watermark, lobbyList, maxResults)
+	// SQL: WHERE ... ORDER BY match_id ASC LIMIT %d
+	// The match_id filter is NOT in SQL — deduplication is handled by the
+	// DB existence check in Run(). This prevents data loss when the
+	// watermark is higher than some unparsed matches.
+	query := fmt.Sprintf(fetchMatchesWatermarkQuery, lookbackDays, lobbyList, maxResults)
 	reqURL := c.url + "?sql=" + url.QueryEscape(query)
 
 	logger.Log.Info("OpenDota: executing watermark fetch query",
-		zap.Int64("watermark", watermark),
 		zap.Int("lookback_days", lookbackDays),
 		zap.Int("max_results", maxResults),
 		zap.String("lobby_types", lobbyList))
