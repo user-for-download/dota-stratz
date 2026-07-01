@@ -23,6 +23,7 @@ from . import db as db_
 from .config import APIConfig
 from .draft_state import DraftContext
 from .features import BatchContext, build_feature_vector, load_schema, pre_fetch_batch
+from .lookahead import ranked_with_lookahead
 from .reasoning import generate_reasoning
 
 logger = logging.getLogger(__name__)
@@ -223,19 +224,13 @@ class Predictor:
             scores = raw_scores
 
         # Sort by calibrated score descending
-        indices = np.argsort(scores)[::-1][:num_recommendations]
+        indices = np.argsort(scores)[::-1][:num_recommendations * 2]
 
         recommendations: list[dict[str, Any]] = []
-        top_hero_id = None
-        top_score = None
-
         for idx in indices:
             hid = eligible_hero_ids[idx]
             sc = float(scores[idx])
             raw = float(raw_scores[idx])
-            if top_hero_id is None:
-                top_hero_id = hid
-                top_score = sc
             recommendations.append({
                 "hero_id": hid,
                 "score": raw,
@@ -243,11 +238,35 @@ class Predictor:
                 "win_probability": round(sc, 4),
             })
 
+        # === Look-ahead minimax re-ranking ===
+        try:
+            def model_fn(hero_id, draft_state):
+                # Simplified: return the calibrated score for this hero
+                for i, h in enumerate(eligible_hero_ids):
+                    if h == hero_id and i < len(scores):
+                        return float(scores[i])
+                return 0.5
+
+            recommendations = ranked_with_lookahead(
+                candidates=recommendations,
+                draft_state=[],
+                patch_id=patch_id,
+                eligible_hero_ids=eligible_hero_ids,
+                model_fn=model_fn,
+                batch_ctx=batch,
+                schema=schema,
+                top_k=num_recommendations,
+            )
+        except Exception as e:
+            logger.warning("Look-ahead failed, falling back to greedy: %s", e)
+            recommendations = recommendations[:num_recommendations]
+
         # Generate reasoning for the top recommendation
         reasoning: str | None = None
-        if top_hero_id is not None:
+        if recommendations:
+            top = recommendations[0]
             reasoning = self._build_reasoning(
-                top_hero_id, top_score, ctx, patch_id,
+                top["hero_id"], top["score"], ctx, patch_id,
                 radiant_team_id, dire_team_id,
                 batch=batch,
             )
