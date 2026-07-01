@@ -187,6 +187,7 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 **Key behaviors:**
 - **Bootstrap:** Load from local file + remote URL, deduplicate, validate, add survivors to pool
 - **Refresh loop:** Periodic fetch from remote source (default 15min), validate fresh proxies, top-up if below min
+- **Revalidation:** Full pool revalidation every 60min — validates ALL proxies in Redis, removes dead ones
 - **Lease reaper:** Reclaims expired leases every 30s
 - **Source-fetch cooldown:** 10-minute guard prevents HTTP 429 on rapid successive fetches
 - **Top-up:** If pool drops below `PoolMinSize` (20), fetches more immediately
@@ -203,6 +204,7 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 | `PROXY_POOL_MIN_SIZE` | 20 | Minimum pool size (triggers top-up) |
 | `PROXY_LEASE_DURATION_SEC` | 120 | Acquired proxy lease duration |
 | `PROXY_ROTATION_STRATEGY` | `timestamp` | Pool strategy (timestamp, random) |
+| `PROXY_REVALIDATION_INTERVAL_MIN` | 60 | Full pool revalidation interval (0 = disabled) |
 
 ---
 
