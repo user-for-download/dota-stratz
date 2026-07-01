@@ -164,12 +164,18 @@ func writeObsLeftLog(batch *pgx.Batch, matchID int64, playerSlot int, raw json.R
 // player_slot) instead of player_minute_stats so they don't conflict with
 // real minute-zero stat rows (issue #5 — the old schema used minute=0 as a
 // sentinel which collided with real data).
-func writeTimeSeriesArrays(batch *pgx.Batch, matchID int64, playerSlot int, goldT, xpT []float64) {
+func writeTimeSeriesArrays(batch *pgx.Batch, matchID int64, playerSlot int, goldT, xpT []float64) error {
 	if len(goldT) == 0 && len(xpT) == 0 {
-		return
+		return nil
 	}
-	goldJSON, _ := json.Marshal(goldT)
-	xpJSON, _ := json.Marshal(xpT)
+	goldJSON, err := json.Marshal(goldT)
+	if err != nil {
+		return fmt.Errorf("marshal gold_t: %w", err)
+	}
+	xpJSON, err := json.Marshal(xpT)
+	if err != nil {
+		return fmt.Errorf("marshal xp_t: %w", err)
+	}
 	batch.Queue(`
 		INSERT INTO player_time_series_arrays (match_id, player_slot, gold_t, xp_t)
 		VALUES ($1, $2, $3, $4)
@@ -178,6 +184,7 @@ func writeTimeSeriesArrays(batch *pgx.Batch, matchID int64, playerSlot int, gold
 			xp_t = EXCLUDED.xp_t`,
 		matchID, playerSlot, goldJSON, xpJSON,
 	)
+	return nil
 }
 
 func writeAbilityUpgrades(batch *pgx.Batch, matchID int64, playerSlot int, raw json.RawMessage) error {

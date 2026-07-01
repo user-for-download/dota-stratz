@@ -156,7 +156,9 @@ func (r *Repository) WriteBatch(ctx context.Context, matches []models.OpenDotaMa
 				return fmt.Errorf("match %d player %d neutral_item_history: %w", m.MatchID, p.PlayerSlot, err)
 			}
 			// 2f. Minute-by-minute gold/XP arrays (JSONB in player_time_series_arrays)
-			writeTimeSeriesArrays(batch, m.MatchID, p.PlayerSlot, p.GoldT, p.XPT)
+			if err := writeTimeSeriesArrays(batch, m.MatchID, p.PlayerSlot, p.GoldT, p.XPT); err != nil {
+				return fmt.Errorf("match %d player %d time_series: %w", m.MatchID, p.PlayerSlot, err)
+			}
 		}
 
 		// 3. Picks/Bans

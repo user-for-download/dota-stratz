@@ -50,7 +50,6 @@ _FLOAT_DEFAULTS: dict[str, float] = {
     "avg_gold_10": 0.0,
     "avg_xp_10": 0.0,
     "hds_win_rate": 0.5,
-    "hds_games": 0,
 }
 
 _INT_DEFAULTS: dict[str, int] = {
@@ -61,6 +60,7 @@ _INT_DEFAULTS: dict[str, int] = {
     "total_wins": 0,
     "total_bans": 0,
     "lane_role": 0,
+    "hds_games": 0,
 }
 
 

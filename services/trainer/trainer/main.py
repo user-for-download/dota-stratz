@@ -110,6 +110,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     finally:
         conn.close()
+        eng.dispose()
 
     logger.info("All done.")
     return 0

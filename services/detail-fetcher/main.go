@@ -89,6 +89,7 @@ func main() {
 			logger.Log.Warn("Postgres unreachable, DB existence check disabled",
 				zap.Error(err))
 		} else {
+			defer dbPool.Close()
 			logger.Log.Info("Postgres connected, DB existence check enabled")
 		}
 	}

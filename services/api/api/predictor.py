@@ -187,7 +187,7 @@ class Predictor:
                 ctx=ctx,
                 account_id=account_id,
             )
-        except RuntimeError as e:
+        except (RuntimeError, TimeoutError) as e:
             raise ValueError(
                 f"Database pool is not available: {e}. "
                 "The service may still be starting up."

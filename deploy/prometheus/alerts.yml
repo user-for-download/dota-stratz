@@ -23,7 +23,7 @@ groups:
           severity: warning
         annotations:
           summary: "ID Fetcher has not published match IDs in 15+ minutes"
-          description: "Last successful publish was {{ $value | humanizeDuration }} ago. Cron schedule is */5 * * * * (every 5 minutes)."
+          description: "No match IDs published in the last 15 minutes. Cron schedule is */5 * * * * (every 5 minutes)."
 
       - alert: DLQDepthGrowing
         # Two queues carry a DLQ: queue.match_ids.dlq and queue.raw_matches.dlq.

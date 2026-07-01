@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -o pipefail
+set -euo pipefail
 
 # ---------- Configuration ----------
 PROXY_LIST_FILE="proxy.txt"    # Checks local file first (can be .txt or .json)

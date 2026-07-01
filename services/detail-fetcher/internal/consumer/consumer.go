@@ -26,8 +26,8 @@ func (c *Consumer) Close() {
 	c.inner.Close()
 }
 
-func (c *Consumer) Consume(queueName string) (<-chan amqp.Delivery, error) {
-	return c.inner.Consume("detail-fetcher")
+func (c *Consumer) Consume(tag string) (<-chan amqp.Delivery, error) {
+	return c.inner.Consume(tag)
 }
 
 // ConsumeTag starts consuming with a custom consumer tag. Used by

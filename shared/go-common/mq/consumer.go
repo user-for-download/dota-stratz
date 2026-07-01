@@ -3,6 +3,7 @@ package mq
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/dota-stratz/shared/go-common/logger"
@@ -19,6 +20,8 @@ type Consumer struct {
 
 	conn *amqp.Connection
 	ch   *amqp.Channel
+
+	closeOnce sync.Once
 }
 
 // NewConsumer connects to RabbitMQ, declares the queue + DLQ, sets QoS,
@@ -153,13 +156,16 @@ func (c *Consumer) ConsumeWithReconnect(ctx context.Context, tag string) <-chan 
 }
 
 // Close cleanly shuts down the consumer's channel and connection.
+// Safe to call multiple times from different goroutines.
 func (c *Consumer) Close() {
-	if c.ch != nil {
-		c.ch.Close()
-		c.ch = nil
-	}
-	if c.conn != nil {
-		c.conn.Close()
-		c.conn = nil
-	}
+	c.closeOnce.Do(func() {
+		if c.ch != nil {
+			c.ch.Close()
+			c.ch = nil
+		}
+		if c.conn != nil {
+			c.conn.Close()
+			c.conn = nil
+		}
+	})
 }

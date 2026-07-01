@@ -136,13 +136,14 @@ def reload_model(
     if token != cfg.admin_token:
         raise HTTPException(status_code=403, detail="Invalid admin token")
 
-    predictor.unload_model(patch_id)
+    # Load new model first, then unload old one to prevent data loss on failure.
     loaded = predictor.load_model(patch_id)
     if not loaded:
         raise HTTPException(
             status_code=404,
             detail=f"Model file not found for patch {patch_id}",
         )
+    predictor.unload_model(patch_id)
     return ReloadResponse(
         status="ok",
         patch_id=patch_id,

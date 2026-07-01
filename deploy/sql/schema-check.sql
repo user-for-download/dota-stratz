@@ -42,7 +42,7 @@ SELECT '3. Required indexes' AS check_name;
 SELECT indexname, indexdef
 FROM pg_indexes
 WHERE tablename IN ('matches', 'picks_bans', 'players')
-  AND indexname IN ('idx_matches_pro_filter', 'idx_matches_start_time',
+  AND indexname IN ('idx_matches_pro_filter', 'idx_matches_start_time_brin',
                     'idx_matches_leagueid', 'idx_players_account_hero');
 
 -- ============================================================================

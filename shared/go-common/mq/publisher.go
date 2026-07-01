@@ -85,7 +85,6 @@ func NewPublisher(url string, queueCfg *QueueConfig) (*Publisher, error) {
 // goroutine reads its own confirmation.
 func (p *Publisher) Publish(ctx context.Context, queueName string, body []byte) error {
 	p.publishMu.Lock()
-	defer p.publishMu.Unlock()
 
 	p.closeMu.Lock()
 	ch := p.ch
@@ -127,6 +126,7 @@ func (p *Publisher) Publish(ctx context.Context, queueName string, body []byte) 
 				Timestamp:    time.Now(),
 			},
 		); err != nil {
+			p.publishMu.Unlock()
 			return fmt.Errorf("publish failed after reconnect: %w", err)
 		}
 	}
@@ -139,6 +139,7 @@ func (p *Publisher) Publish(ctx context.Context, queueName string, body []byte) 
 		logger.Log.Warn("Publish: confirms channel was swapped by concurrent reconnect; " +
 			"message was sent but confirm status is unknown")
 		p.closeMu.Unlock()
+		p.publishMu.Unlock()
 		return nil // at-least-once: downstream dedup handles duplicates
 	}
 	p.closeMu.Unlock()
@@ -146,17 +147,22 @@ func (p *Publisher) Publish(ctx context.Context, queueName string, body []byte) 
 	select {
 	case confirm, ok := <-confirms:
 		if !ok {
+			p.publishMu.Unlock()
 			return fmt.Errorf("confirm channel closed; delivery status unknown")
 		}
 		if !confirm.Ack {
+			p.publishMu.Unlock()
 			return fmt.Errorf("broker nacked message")
 		}
 	case <-time.After(5 * time.Second):
+		p.publishMu.Unlock()
 		return fmt.Errorf("publish confirm timeout")
 	case <-ctx.Done():
+		p.publishMu.Unlock()
 		return ctx.Err()
 	}
 
+	p.publishMu.Unlock()
 	return nil
 }
 

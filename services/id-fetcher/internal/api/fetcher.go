@@ -303,6 +303,17 @@ func (f *Fetcher) Run(ctx context.Context) error {
 					logger.Log.Error("Failed to flush partial match batch on shutdown",
 						zap.Int("batch_size", len(batch)),
 						zap.Error(flushErr))
+				} else {
+					// Save watermark after successful flush to prevent
+					// re-publishing these IDs on next run.
+					for _, id := range batch {
+						if id > thisRunMaxID {
+							thisRunMaxID = id
+						}
+					}
+					if thisRunMaxID > f.lastMaxMatchID {
+						f.saveLastMaxMatchID(flushCtx, thisRunMaxID)
+					}
 				}
 				cancel()
 			}

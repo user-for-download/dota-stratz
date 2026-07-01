@@ -23,9 +23,6 @@ COMPOSE := docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE)
 SERVICES := detail-fetcher id-fetcher parser proxy-manager
 MODULES  := shared/go-common $(addprefix services/,$(SERVICES))
 
-# ── ML Services ─────────────────────────────────────────────────────────
-ML_SERVICES := trainer api
-
 # ------------------------------------------------------------------------------
 # Containers / Defaults
 # ------------------------------------------------------------------------------
@@ -81,6 +78,7 @@ env: ## Create deploy/.env from deploy/.env.example if missing
 
 .PHONY: env-sync
 env-sync: env ## Sync deploy/.env to root .env legacy copy
+	@cp "$(ENV_FILE)" "$(ROOT_ENV_FILE)"
 	@echo "Synced $(ENV_FILE) -> $(ROOT_ENV_FILE)"
 
 # ==============================================================================
@@ -144,18 +142,6 @@ logs: ## Tail all logs
 logs-%: ## Tail logs for a service, e.g. make logs-parser
 	$(COMPOSE) logs -f --tail=100 $*
 
-.PHONY: logs-pg
-logs-pg: ## Tail Postgres logs
-	$(COMPOSE) logs -f --tail=100 postgres
-
-.PHONY: logs-mq
-logs-mq: ## Tail RabbitMQ logs
-	$(COMPOSE) logs -f --tail=100 rabbitmq
-
-.PHONY: logs-redis
-logs-redis: ## Tail Redis logs
-	$(COMPOSE) logs -f --tail=100 redis
-
 # ==============================================================================
 # Database
 # ==============================================================================
@@ -206,11 +192,6 @@ db-reset: ## Drop and recreate database, then run migrations
 		-c "DROP DATABASE IF EXISTS $(POSTGRES_DB) WITH (FORCE);" \
 		-c "CREATE DATABASE $(POSTGRES_DB);"
 	$(MAKE) migrate
-
-# ───── Physical volume backup / recovery ─────────────────────────────────────
-# Snapshot / restore the entire PostgreSQL data directory at the filesystem
-# level using --volumes-from. Postgres is briefly stopped during the
-# operation for a consistent snapshot.
 
 .PHONY: db-backup-physical
 db-backup-physical: ## Create physical Postgres volume backup, stops Postgres briefly
@@ -319,13 +300,6 @@ replay-dlq-n: ## Replay N messages from DLQ, e.g. make replay-dlq-n N=1000
 # Go
 # ==============================================================================
 
-.PHONY: deps
-deps: ## Download dependencies for all modules
-	@for mod in $(MODULES); do \
-		echo "==> go mod download: $$mod"; \
-		(cd "$$mod" && go mod download) || exit 1; \
-	done
-
 .PHONY: tidy
 tidy: ## Run go mod tidy for all modules
 	@for mod in $(MODULES); do \
@@ -399,10 +373,6 @@ run-%: env-sync ## Run service locally, e.g. make run-parser
 # ML Training & Inference API
 # ==============================================================================
 
-.PHONY: build-ml
-build-ml: ## Build ML service images (trainer + api)
-	$(COMPOSE) build trainer api
-
 .PHONY: train
 train: ## Train LightGBM model: make train PATCH=<id> (default: auto-detect)
 	$(COMPOSE) --profile db --profile train run --rm trainer python -m trainer.main $(if $(PATCH),--patch $(PATCH),)
@@ -443,9 +413,9 @@ test-api: ## Quick smoke-test the inference API
 		-d '{"patch_id":60,"first_pick_team":0,"draft":[{"hero_id":1,"is_pick":false,"team":0,"order":1},{"hero_id":2,"is_pick":false,"team":0,"order":2},{"hero_id":3,"is_pick":false,"team":1,"order":3},{"hero_id":4,"is_pick":false,"team":1,"order":4}]}' | python3 -m json.tool
 
 .PHONY: migrate-ml
-migrate-ml: ## Apply only the ML migration (005_ml_tables.sql)
+migrate-ml: ## Apply only the ML migration (002_ml.sql)
 	@echo "$(YELLOW)Applying ML migration...$(RESET)"
-	@name="005_ml_tables.sql"; \
+	@name="002_ml.sql"; \
 	applied=$$(docker exec -i $(POSTGRES_CONTAINER) psql \
 		-U $(POSTGRES_USER) \
 		-d $(POSTGRES_DB) \
@@ -465,10 +435,6 @@ migrate-ml: ## Apply only the ML migration (005_ml_tables.sql)
 			-c "INSERT INTO _migrations (name) VALUES ('$$name') ON CONFLICT DO NOTHING;" || exit 1; \
 		echo "$(CYAN)ML migration applied.$(RESET)"; \
 	fi
-
-.PHONY: build-ml-images
-build-ml-images: ## Build ML Docker images
-	$(COMPOSE) build trainer api
 
 # ==============================================================================
 # Docker Buildx Bake
@@ -497,30 +463,3 @@ nuke: ## DESTRUCTIVE: stop compose stack and remove project volumes
 	@read -p "Continue? [y/N] " ans && [ "$${ans:-N}" = "y" ]
 	$(COMPOSE) --profile all down -v --remove-orphans
 	@echo "$(CYAN)Project stack removed.$(RESET)"
-
-# ==============================================================================
-# Danger
-# ==============================================================================
-# Host-wide Docker cleanup. This is intentionally destructive.
-# Use only on a dedicated dev machine or disposable CI host.
-# ==============================================================================
-
-.PHONY: armageddon
-armageddon: ## DESTRUCTIVE: remove all Docker containers, images, volumes, and networks on this host
-	@echo "$(YELLOW)WARNING: This is HOST-WIDE, not project-scoped.$(RESET)"
-	@echo "$(YELLOW)It will remove ALL Docker containers, images, volumes, and networks on this machine.$(RESET)"
-	@echo "$(YELLOW)This can delete data from unrelated projects.$(RESET)"
-	@read -p "Type 'armageddon' to confirm: " ans && [ "$$ans" = "armageddon" ]
-	@echo "Stopping all containers..."
-	@docker ps -aq | xargs -r docker stop
-	@echo "Removing all containers..."
-	@docker ps -aq | xargs -r docker rm -f
-	@echo "Removing all images..."
-	@docker images -aq | xargs -r docker rmi -f
-	@echo "Removing all volumes..."
-	@docker volume ls -q | xargs -r docker volume rm -f
-	@echo "Pruning networks..."
-	@docker network prune -f
-	@echo "Pruning build cache..."
-	@docker builder prune -af
-	@echo "$(CYAN)Armageddon complete.$(RESET)"

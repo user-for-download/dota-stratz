@@ -22,6 +22,7 @@ type Publisher struct {
 	url       string
 	conn      *amqp.Connection
 	matchIDsQ string
+	queueCfg  mq.QueueConfig
 
 	closed bool
 
@@ -46,11 +47,12 @@ func NewPublisher(url string, matchIDsQueue string) (*Publisher, error) {
 	defer topoCh.Close()
 
 	// Declare queues using the shared helper.
-	if err := mq.DeclareQueueWithDLQ(topoCh, mq.QueueConfig{
+	queueCfg := mq.QueueConfig{
 		Name:       matchIDsQueue,
 		DLQName:    matchIDsQueue + ".dlq",
 		MessageTTL: mq.DefaultMessageTTL,
-	}); err != nil {
+	}
+	if err := mq.DeclareQueueWithDLQ(topoCh, queueCfg); err != nil {
 		conn.Close()
 		return nil, err
 	}
@@ -59,6 +61,7 @@ func NewPublisher(url string, matchIDsQueue string) (*Publisher, error) {
 		url:       url,
 		conn:      conn,
 		matchIDsQ: matchIDsQueue,
+		queueCfg:  queueCfg,
 		shutdown:  make(chan struct{}),
 	}
 
@@ -122,6 +125,21 @@ func (p *Publisher) reconnect() {
 		}
 		conn, topoCh, err := mq.Connect(p.url)
 		if err == nil {
+			// Re-declare queues on the new connection to handle
+			// Mnesia corruption, manual deletion, or cluster recovery.
+			if err := mq.DeclareQueueWithDLQ(topoCh, p.queueCfg); err != nil {
+				topoCh.Close()
+				conn.Close()
+				logger.Log.Warn("Reconnect queue declare failed, retrying",
+					zap.Error(err))
+				select {
+				case <-time.After(backoff):
+				case <-p.shutdown:
+					return
+				}
+				backoff = min(backoff*2, maxBackoff)
+				continue
+			}
 			topoCh.Close()
 
 			p.mu.Lock()
@@ -208,7 +226,8 @@ func (p *Publisher) publishChannel() (*amqp.Channel, error) {
 }
 
 // reconnectIfNeeded checks whether the connection is still alive (by
-// acquiring a channel) and reconnects if not. Must be called with p.mu held.
+// acquiring a channel) and reconnects if not. Releases p.mu before
+// reconnecting to avoid deadlock (reconnect acquires p.mu internally).
 func (p *Publisher) reconnectIfNeeded() error {
 	testCh, err := p.conn.Channel()
 	if err == nil {
@@ -218,7 +237,9 @@ func (p *Publisher) reconnectIfNeeded() error {
 
 	logger.Log.Warn("Publisher connection dead, reconnecting",
 		zap.Error(err))
+	p.mu.Unlock()
 	p.reconnect()
+	p.mu.Lock()
 	return nil
 }
 
