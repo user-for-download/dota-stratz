@@ -39,6 +39,9 @@ type Config struct {
 	LeaseReaperIntervalSec int64
 	FailureCounterTTLMin   int64
 
+	// Revalidation
+	RevalidationIntervalMin int64
+
 	// Lifecycle
 	ShutdownGraceMs int64
 
@@ -115,6 +118,15 @@ func Load() (*Config, error) {
 		n, err := strconv.ParseInt(v, 10, 64)
 		if err == nil {
 			cfg.SourceFetchCooldownMin = n
+		}
+	}
+
+	// Revalidation interval (optional, defaults to 60 min)
+	cfg.RevalidationIntervalMin = 60
+	if v := os.Getenv("PROXY_REVALIDATION_INTERVAL_MIN"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err == nil {
+			cfg.RevalidationIntervalMin = n
 		}
 	}
 

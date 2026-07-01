@@ -141,6 +141,8 @@ func Run() {
 		go refreshLoop(ctx, &wg, cfg, val, proxyPool, sourceFetchLimiter)
 		wg.Add(1)
 		go leaseReaperLoop(ctx, &wg, cfg, proxyPool)
+		wg.Add(1)
+		go revalidationLoop(ctx, &wg, cfg, val, proxyPool)
 	}
 
 	// Block until context is cancelled (signal received during or after bootstrap)
@@ -322,6 +324,106 @@ func leaseReaperLoop(
 			}
 		}
 	}
+}
+
+// revalidationLoop periodically validates ALL proxies in the Redis pool
+// and removes dead ones. This prevents stale proxies from accumulating
+// and consuming pool slots.
+func revalidationLoop(
+	ctx context.Context,
+	wg *sync.WaitGroup,
+	cfg *config.Config,
+	val *validator.Validator,
+	proxyPool *proxypool.Pool,
+) {
+	defer wg.Done()
+
+	if cfg.RevalidationIntervalMin <= 0 {
+		logger.Log.Debug("Revalidation loop disabled (interval <= 0)")
+		return
+	}
+
+	ticker := time.NewTicker(time.Duration(cfg.RevalidationIntervalMin) * time.Minute)
+	defer ticker.Stop()
+	logger.Log.Info("Revalidation loop started",
+		zap.Int64("interval_min", cfg.RevalidationIntervalMin))
+
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Log.Debug("Revalidation loop stopped")
+			return
+		case <-ticker.C:
+			runRevalidation(ctx, val, proxyPool)
+		}
+	}
+}
+
+// runRevalidation fetches all proxies from Redis, validates them concurrently,
+// and removes dead ones. This keeps the pool healthy by evicting proxies that
+// have become unreachable since they were last validated.
+func runRevalidation(ctx context.Context, val *validator.Validator, proxyPool *proxypool.Pool) {
+	// Collect all proxies: available (ZSET) + leased (HASH).
+	available, err := proxyPool.Members(ctx)
+	if err != nil {
+		logger.Log.Error("Revalidation: failed to fetch available proxies", zap.Error(err))
+		proxypool.ProxyRevalidationRunsTotal.WithLabelValues("error").Inc()
+		return
+	}
+
+	leased, err := proxyPool.LeasedMembers(ctx)
+	if err != nil {
+		logger.Log.Warn("Revalidation: failed to fetch leased proxies, validating available only", zap.Error(err))
+		leased = nil
+	}
+
+	all := make([]string, 0, len(available)+len(leased))
+	all = append(all, available...)
+	all = append(all, leased...)
+
+	if len(all) == 0 {
+		logger.Log.Debug("Revalidation: no proxies in pool")
+		proxypool.ProxyRevalidationRunsTotal.WithLabelValues("success").Inc()
+		return
+	}
+
+	logger.Log.Info("Revalidation: starting full pool validation",
+		zap.Int("total", len(all)),
+		zap.Int("available", len(available)),
+		zap.Int("leased", len(leased)))
+
+	// Track which proxies passed validation.
+	seen := make(map[string]struct{}, len(all))
+
+	stats := val.ValidateStream(ctx, all, func(_ context.Context, r validator.Result) {
+		if r.OK {
+			seen[r.Proxy] = struct{}{}
+		}
+	})
+
+	// Remove dead proxies (ones not in seen).
+	removed := 0
+	for _, p := range all {
+		if _, ok := seen[p]; !ok {
+			// Report as hard failure to remove from pool.
+			if err := proxyPool.Report(ctx, p, proxypool.ReasonHardFailure); err != nil {
+				logger.Log.Warn("Revalidation: failed to remove dead proxy",
+					zap.String("proxy", p), zap.Error(err))
+			} else {
+				removed++
+			}
+		}
+	}
+
+	proxypool.ProxyRevalidationRunsTotal.WithLabelValues("success").Inc()
+	proxypool.ProxyRevalidationRemovedTotal.Add(float64(removed))
+
+	logger.Log.Info("Revalidation: complete",
+		zap.Int("validated", stats.Total),
+		zap.Int("alive", stats.OK),
+		zap.Int("dead", stats.Failed),
+		zap.Int("removed", removed),
+		zap.Duration("elapsed", stats.Elapsed))
 }
 
 // bootstrap loads proxies from all available sources at startup (local file

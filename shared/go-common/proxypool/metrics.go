@@ -72,6 +72,18 @@ var (
 		Help: "Total number of periodic refresh cycles (URL fetch + validate), by outcome.",
 	}, []string{"result"}) // "success" | "fetch_failed"
 
+	// --- Revalidation cycle metrics ---
+
+	ProxyRevalidationRunsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "dota2_proxy_revalidation_runs_total",
+		Help: "Total number of full pool revalidation cycles, by outcome.",
+	}, []string{"result"}) // "success" | "error"
+
+	ProxyRevalidationRemovedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "dota2_proxy_revalidation_removed_total",
+		Help: "Total number of dead proxies removed during revalidation.",
+	})
+
 	// --- Rate-limit metrics ---
 
 	ProxyRateLimitedTotal = promauto.NewCounter(prometheus.CounterOpts{
