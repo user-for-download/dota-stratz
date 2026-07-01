@@ -1,7 +1,7 @@
 -- 002_ml.sql
 -- Analytics schema, ML tables, and Point-in-Time (PIT) safe snapshots.
--- Merges and optimizes: 003_analytics, 005_ml_tables, 006_postgres_best_practices_fixes (roles), 
--- 007_enhanced_features, 009_gold_xp_10_features, 010_team_id_bigint_indexes (ml part), 
+-- Merges and optimizes: 003_analytics, 005_ml_tables, 006_postgres_best_practices_fixes (roles),
+-- 007_enhanced_features, 009_gold_xp_10_features, 010_team_id_bigint_indexes (ml part),
 -- 011_hero_draft_slot_agg, 012_fix_ml_indexes (omits redundant), 014_pit_safe_snapshots, 015_snapshot_float_games.
 
 CREATE SCHEMA IF NOT EXISTS analytics;
@@ -155,7 +155,7 @@ CREATE TABLE IF NOT EXISTS analytics.feature_snapshots_player_hero (
 CREATE INDEX IF NOT EXISTS idx_feature_snapshots_date ON analytics.feature_snapshots_player_hero(snapshot_date);
 
 CREATE TABLE IF NOT EXISTS analytics.featurizer_runs (
-    id INT PRIMARY KEY DEFAULT 1, last_snapshot_date DATE, last_run_timestamp TIMESTAMPTZ, matches_processed BIGINT, 
+    id INT PRIMARY KEY DEFAULT 1, last_snapshot_date DATE, last_run_timestamp TIMESTAMPTZ, matches_processed BIGINT,
     last_processed_match_id BIGINT, CONSTRAINT single_row_check CHECK (id = 1)
 );
 INSERT INTO analytics.featurizer_runs (id, last_snapshot_date, last_run_timestamp, matches_processed) VALUES (1, NULL, NULL, 0) ON CONFLICT (id) DO NOTHING;
@@ -329,8 +329,4 @@ $$ LANGUAGE plpgsql;
 -- 6. MIGRATIONS TRACKER
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now());
-INSERT INTO _migrations (name) VALUES 
-    ('005_ml_tables.sql'), ('006_postgres_best_practices_fixes.sql'), ('007_enhanced_features.sql'), ('008_minute_stats_columns.sql'), 
-    ('009_gold_xp_10_features.sql'), ('010_team_id_bigint_indexes.sql'), ('011_hero_draft_slot_agg.sql'), ('012_fix_ml_indexes.sql'), 
-    ('013_separate_time_series_arrays.sql'), ('014_pit_safe_snapshots.sql'), ('015_snapshot_float_games.sql') 
-ON CONFLICT DO NOTHING;
+INSERT INTO _migrations (name) VALUES ('002_ml.sql') ON CONFLICT DO NOTHING;

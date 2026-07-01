@@ -131,3 +131,9 @@ DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_ht_hero') THEN
         ALTER TABLE const_hero_talent ADD CONSTRAINT fk_ht_hero FOREIGN KEY (hero_name) REFERENCES const_hero(name) ON DELETE CASCADE; END IF;
 END $$;
+
+-- ============================================================================
+-- MIGRATIONS TRACKER
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now());
+INSERT INTO _migrations (name) VALUES ('003_static.sql') ON CONFLICT DO NOTHING;

@@ -1,6 +1,6 @@
 -- 001__init.sql
 -- Core schema, partition management, ingestion checkpoints.
--- Merges and optimizes: 001_core, 004_partition_verify, 006_postgres_best_practices_fixes (partition part), 
+-- Merges and optimizes: 001_core, 004_partition_verify, 006_postgres_best_practices_fixes (partition part),
 -- 008_minute_stats_columns (superseded), 010_team_id_bigint_indexes (core part), 013_separate_time_series_arrays.
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
@@ -504,3 +504,9 @@ $$ LANGUAGE plpgsql;
 
 SELECT public.ensure_player_partitions(30000000000, 5000000000);
 CREATE TABLE IF NOT EXISTS players_p_catchall PARTITION OF players DEFAULT;
+
+-- ============================================================================
+-- MIGRATIONS TRACKER
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now());
+INSERT INTO _migrations (name) VALUES ('001__init.sql') ON CONFLICT DO NOTHING;
