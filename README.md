@@ -92,7 +92,6 @@ make reload-api PATCH=60  # Hot-reload model (no restart)
 # Build Docker images
 make bake
 make bake-parser    # Build a single service image
-make build-ml-images  # Build trainer + api images
 
 # Stop
 make down
@@ -154,7 +153,6 @@ make fmt         # Format all Go code
 make lint        # Run golangci-lint (requires external install)
 make tidy        # Run go mod tidy across all modules
 make check       # Format + vet + test (one-shot quality gate)
-make deps        # Download dependencies for all modules
 make bake        # Build all Docker images via docker buildx bake
 ```
 
@@ -238,7 +236,7 @@ Each service exposes Prometheus metrics (ML services expose via `/metrics` on th
 
 Three pre-configured alerting rules ship with the deployment:
 
-- **DLQDepthCritical** — Dead-letter queue grows beyond 10 messages
+- **DLQDepthGrowing** — Dead-letter queue exceeds 50 messages for 5 minutes
 - **ProxyPoolDepleted** — Available proxies fall below minimum threshold (20)
 - **IngestionStalled** — No match IDs published for 15+ minutes
 

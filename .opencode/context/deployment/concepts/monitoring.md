@@ -2,14 +2,16 @@
 
 **Core concept**: Pre-configured Prometheus + Grafana stack with service-level metrics and 3 alerting rules.
 
-## Scrape Targets (bridge network — was host network prior to HIGH-2/MEDIUM-12 fixes)
-| Port | Service |
-|------|---------|
-| 9090 | Proxy Manager |
-| 9091 | Detail Fetcher |
-| 9092 | Prometheus self |
-| 9093 | Parser |
-| 9094 | ID Fetcher |
+## Scrape Targets (Docker bridge network)
+| Target | Port | Service |
+|--------|------|---------|
+| `proxy-manager:9090` | 9090 | Proxy Manager |
+| `detail-fetcher:9091` | 9091 | Detail Fetcher |
+| `localhost:9092` | 9092 | Prometheus self |
+| `parser:9093` | 9093 | Parser |
+| `id-fetcher:9094` | 9094 | ID Fetcher |
+| `rabbitmq:15692` | 15692 | RabbitMQ |
+| `api:8080` | 8080 | ML API |
 
 ## Alerts
 | Alert | Condition | Severity |
@@ -19,6 +21,6 @@
 | `DLQDepthGrowing` | Any DLQ queue >50 messages for 5m | warning |
 
 ## Grafana
-- Pre-provisioned datasource: Prometheus at `prometheus:9090` (was `localhost:9092` with host networking)
-- Dashboard: "Proxy Manager Overview" (pool health, validation latency p50/p95/p99, removal reasons)
+- Pre-provisioned datasource: Prometheus at `prometheus:9092`
+- Dashboard: "Proxy Manager Overview" (pool health, validation latency p50/p95/p99, removal reasons, cooldown rate)
 - Auto-provisioned via `deploy/grafana/provisioning/`

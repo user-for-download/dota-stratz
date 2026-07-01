@@ -116,8 +116,6 @@ services:
             - "9092:9092"
         networks:
             - dota2-net
-        # NOTE: Scrape targets in ../prometheus/prometheus.yml still use
-        # localhost — update to service names if switching networks.
         command:
             - "--config.file=/etc/prometheus/prometheus.yml"
             - "--storage.tsdb.path=/prometheus"

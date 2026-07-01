@@ -201,7 +201,7 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 | `PROXY_VALIDATION_TIMEOUT_SEC` | 10 | Per-proxy validation timeout |
 | `PROXY_POOL_MAX_SIZE` | 2000 | Maximum pool size |
 | `PROXY_POOL_MIN_SIZE` | 20 | Minimum pool size (triggers top-up) |
-| `PROXY_LEASE_DURATION_SEC` | 60 | Acquired proxy lease duration |
+| `PROXY_LEASE_DURATION_SEC` | 120 | Acquired proxy lease duration |
 | `PROXY_ROTATION_STRATEGY` | `timestamp` | Pool strategy (timestamp, random) |
 
 ---
@@ -421,7 +421,7 @@ Postgres is briefly stopped during the operation to ensure filesystem-level cons
 
 ### Network
 
-All services connect via `dota2-net` (bridge). Prometheus and Grafana use `network_mode: host`.
+All services connect via `dota2-net` (bridge network). Each service is addressable by its Docker Compose service name (e.g., `prometheus`, `grafana`, `parser`).
 
 ### Operations
 
@@ -435,14 +435,16 @@ make downv              # Stop services and remove project volumes
 
 ### Monitoring
 
-**Prometheus scrape targets** (via host networking):
+**Prometheus scrape targets** (via Docker bridge network):
 | Target | Port | Service |
 |---|---|---|
-| `localhost:9090` | 9090 | Proxy Manager |
-| `localhost:9091` | 9091 | Detail Fetcher |
+| `proxy-manager:9090` | 9090 | Proxy Manager |
+| `detail-fetcher:9091` | 9091 | Detail Fetcher |
 | `localhost:9092` | 9092 | Prometheus self |
-| `localhost:9093` | 9093 | Parser |
-| `localhost:9094` | 9094 | ID Fetcher |
+| `parser:9093` | 9093 | Parser |
+| `id-fetcher:9094` | 9094 | ID Fetcher |
+| `rabbitmq:15692` | 15692 | RabbitMQ |
+| `api:8080` | 8080 | ML API |
 
 **Alerting rules** (3 pre-configured):
 | Alert | Condition | Severity |
@@ -451,7 +453,7 @@ make downv              # Stop services and remove project volumes
 | `IngestionStalled` | `time() - max(timestamp(id_fetcher_match_ids_published_total > 0)) > 93600` for 5m | warning |
 | `DLQDepthGrowing` | `sum(rabbitmq_queue_messages_ready{queue=~".*\\.dlq"}) > 50` for 5m | warning |
 
-**Grafana:** Pre-provisioned datasource (Prometheus at `localhost:9092`) and "Proxy Manager Overview" dashboard with panels for pool health, validation latency (p50/p95/p99), removal reasons, and rate-limiting.
+**Grafana:** Pre-provisioned datasource (Prometheus at `prometheus:9092`) and "Proxy Manager Overview" dashboard with panels for pool health, validation latency (p50/p95/p99), removal reasons, and rate-limiting.
 
 ---
 

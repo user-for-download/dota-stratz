@@ -27,7 +27,6 @@
 | `make test-api` | Smoke-test health + /predict endpoints |
 | `make reload-api PATCH=N` | Hot-reload model (no restart, requires `STRATZ_ADMIN_TOKEN`) |
 | `make migrate-ml` | Apply ML migration only |
-| `make build-ml-images` | Build trainer + api Docker images (run after code changes) |
 
 ## RabbitMQ
 | Target | Action |
