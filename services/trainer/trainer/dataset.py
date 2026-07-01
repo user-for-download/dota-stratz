@@ -116,12 +116,12 @@ def load_dataset(
         "n_features": X.shape[1],
     }
 
-    train_data = lgb.Dataset(X_train, y_train)
+    train_data = lgb.Dataset(X_train, y_train, free_raw_data=False)
 
     val_data: lgb.Dataset | None = None
     if val_mask.sum() > 0:
         X_val = X[val_mask]
         y_val = y[val_mask]
-        val_data = lgb.Dataset(X_val, y_val, reference=train_data)
+        val_data = lgb.Dataset(X_val, y_val, reference=train_data, free_raw_data=False)
 
-    return train_data, val_data, metadata
+    return train_data, val_data, metadata, X_train, y_train

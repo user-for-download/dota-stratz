@@ -171,7 +171,30 @@ TRAINING_FEATURES_SQL = """
 
         -- Role interaction features
         CASE WHEN COALESCE(ph.lane_role, 0) = 5 THEN COALESCE(ph.avg_vision_placed, 0) ELSE 0 END AS ph_vision_support_score,
-        CASE WHEN COALESCE(ph.lane_role, 0) = 1 THEN COALESCE(ph.avg_gpm, 0) ELSE 0 END AS ph_gpm_carry_score
+        CASE WHEN COALESCE(ph.lane_role, 0) = 1 THEN COALESCE(ph.avg_gpm, 0) ELSE 0 END AS ph_gpm_carry_score,
+
+        -- === NEW: Recent Form (last 20 games recency-weighted) ===
+        COALESCE(rf_recent.win_rate, 0.5) AS rf_recent_win_rate,
+        COALESCE(rf_recent.games, 0)      AS rf_recent_games,
+        COALESCE(rf_recent.avg_kda, 0)    AS rf_recent_kda,
+
+        -- === NEW: Meta Drift (win rate trend over time) ===
+        COALESCE(md_trend.win_rate_delta, 0) AS md_win_rate_trend,
+        COALESCE(md_trend.pick_rate_delta, 0) AS md_pick_rate_trend,
+
+        -- === NEW: Sequence Context (draft state features) ===
+        ds.team_pick_ordinal::FLOAT AS seq_pick_position,
+        (SELECT COUNT(*) FROM picks_bans pb3
+         WHERE pb3.match_id = ds.match_id AND pb3.is_pick = TRUE AND pb3.team = ds.team
+           AND pb3."order" < ds."order")::FLOAT AS seq_team_picks_so_far,
+        (SELECT COUNT(*) FROM picks_bans pb3
+         WHERE pb3.match_id = ds.match_id AND pb3.is_pick = TRUE AND pb3.team != ds.team
+           AND pb3."order" < ds."order")::FLOAT AS seq_enemy_picks_so_far,
+
+        -- === NEW: Team Strategy Features ===
+        COALESCE(ts.push_score, 0) AS ts_push_score,
+        COALESCE(ts.gank_score, 0) AS ts_gank_score,
+        COALESCE(ts.fight_score, 0) AS ts_fight_score
 
     FROM draft_slots ds
 
@@ -274,6 +297,61 @@ TRAINING_FEATURES_SQL = """
         LIMIT 1
     ) hds ON TRUE
 
+    -- === NEW: Recent Form (last 20 games for this player-hero combo) ===
+    LEFT JOIN LATERAL (
+        SELECT
+            AVG(CASE WHEN p.radiant_win = (p.is_radiant) THEN 1.0 ELSE 0.0 END) AS win_rate,
+            COUNT(*)::INT AS games,
+            AVG(p.kills + p.assists - p.deaths) AS avg_kda
+        FROM (
+            SELECT p2.match_id, p2.radiant_win, p2.is_radiant, p2.kills, p2.assists, p2.deaths
+            FROM players p2
+            INNER JOIN matches m2 ON p2.match_id = m2.match_id
+            WHERE p2.account_id = ds.account_id
+              AND p2.hero_id = ds.hero_id
+              AND m2.start_time < ds.start_time
+            ORDER BY m2.start_time DESC
+            LIMIT 20
+        ) p
+    ) rf_recent ON TRUE
+
+    -- === NEW: Meta Drift (win rate change over time) ===
+    LEFT JOIN LATERAL (
+        SELECT
+            COALESCE(recent.win_rate, 0.5) - COALESCE(older.win_rate, 0.5) AS win_rate_delta,
+            COALESCE(recent.pick_rate, 0) - COALESCE(older.pick_rate, 0) AS pick_rate_delta
+        FROM (
+            SELECT win_rate, pick_rate FROM ml.hero_baseline_snapshot
+            WHERE hero_id = ds.hero_id AND patch_id = ds.patch_id
+              AND as_of_date <= to_timestamp(ds.start_time)::DATE
+            ORDER BY as_of_date DESC LIMIT 1
+        ) recent
+        LEFT JOIN (
+            SELECT win_rate, pick_rate FROM ml.hero_baseline_snapshot
+            WHERE hero_id = ds.hero_id AND patch_id = ds.patch_id
+              AND as_of_date <= (to_timestamp(ds.start_time) - INTERVAL '7 days')::DATE
+            ORDER BY as_of_date DESC LIMIT 1
+        ) older ON TRUE
+    ) md_trend ON TRUE
+
+    -- === NEW: Team Strategy Features (based on team's recent hero picks) ===
+    LEFT JOIN LATERAL (
+        SELECT
+            AVG(CASE WHEN ths2.avg_xpm > 400 THEN 1.0 ELSE 0.0 END) AS push_score,
+            AVG(CASE WHEN ths2.firstblood_rate > 0.1 THEN 1.0 ELSE 0.0 END) AS gank_score,
+            AVG(CASE WHEN ths2.avg_kills > 5 THEN 1.0 ELSE 0.0 END) AS fight_score
+        FROM (
+            SELECT avg_xpm, firstblood_rate, avg_kills, as_of_date
+            FROM ml.team_hero_snapshot ths2
+            WHERE ths2.team_id = CASE ds.team WHEN 0 THEN ds.radiant_team_id ELSE ds.dire_team_id END
+              AND ths2.patch_id = ds.patch_id
+              AND ths2.as_of_date <= to_timestamp(ds.start_time)::DATE
+              AND ths2.games >= 3
+            ORDER BY ths2.as_of_date DESC
+            LIMIT 5
+        ) ths2
+    ) ts ON TRUE
+
     ORDER BY ds.match_id, ds."order"
 """
 
@@ -319,6 +397,21 @@ def feature_column_names(include_onehot: bool = True, max_hero_id: int = 160) ->
         # Task 6: Role interactions
         "ph_vision_support_score",
         "ph_gpm_carry_score",
+        # Task 7: Recent Form
+        "rf_recent_win_rate",
+        "rf_recent_games",
+        "rf_recent_kda",
+        # Task 8: Meta Drift
+        "md_win_rate_trend",
+        "md_pick_rate_trend",
+        # Task 9: Sequence Context
+        "seq_pick_position",
+        "seq_team_picks_so_far",
+        "seq_enemy_picks_so_far",
+        # Task 10: Team Strategy
+        "ts_push_score",
+        "ts_gank_score",
+        "ts_fight_score",
     ]
     if include_onehot:
         cols.extend(f"oh_hero_{i}" for i in range(1, max_hero_id + 1))

@@ -1,6 +1,6 @@
-"""LightGBM binary classification model training.
+"""LightGBM binary classification model training with calibration.
 
-Returns the trained Booster and the best validation loss.
+Returns the trained Booster, the best validation loss, and a calibration model.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from pathlib import Path
 
 import lightgbm as lgb
 import numpy as np
+from sklearn.linear_model import LogisticRegression
 
 from .config import TrainerConfig
 from .dataset import load_dataset
@@ -36,7 +37,7 @@ def train_model(
     best_loss : float
         Best binary_logloss on the validation set (or training set).
     """
-    train_data, val_data, metadata = load_dataset(cfg, engine)
+    train_data, val_data, metadata, X_train, y_train = load_dataset(cfg, engine)
 
     logger.info(
         "Training set: %d rows | Validation set: %d rows",
@@ -67,6 +68,24 @@ def train_model(
 
     logger.info("Training complete. Best %s: %.4f", metric_name, best_loss)
 
+    # === Task 11: Confidence Calibration (Platt scaling) ===
+    # Train a logistic regression on model predictions to calibrate probabilities
+    if val_data:
+        X_val = val_data.get_data()
+        val_labels = val_data.get_label()
+        val_preds = model.predict(X_val)
+    else:
+        val_preds = model.predict(X_train)
+        val_labels = y_train
+
+    calibrator = LogisticRegression(C=1.0, solver='lbfgs')
+    calibrator.fit(val_preds.reshape(-1, 1), val_labels)
+
+    cal_train_preds = model.predict(X_train)
+    calibrator.fit(cal_train_preds.reshape(-1, 1), y_train)
+
+    logger.info("Calibration model trained (Platt scaling)")
+
     # Save model
     model_dir = Path(cfg.model_dir)
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -75,19 +94,24 @@ def train_model(
     model.save_model(str(model_path))
     logger.info("Model saved to %s", model_path)
 
+    # Save calibrator
+    cal_path = model_dir / f"calibrator_patch_{cfg.patch_id}.json"
+    cal_data = {
+        "coef": calibrator.coef_[0].tolist(),
+        "intercept": calibrator.intercept_[0].tolist(),
+    }
+    cal_path.write_text(json.dumps(cal_data))
+    logger.info("Calibrator saved to %s", cal_path)
+
     # Save metadata (cast numpy types to native Python for JSON)
     meta = {
         "patch_id": int(cfg.patch_id),
-        "best_binary_logloss": float(best_loss),
-        "n_train": int(metadata["n_train"]),
-        "n_val": int(metadata.get("n_val", 0)),
-        "n_features": int(metadata["n_features"]),
-        "params": {
-            k: int(v) if isinstance(v, (np.integer,)) else
-               float(v) if isinstance(v, (np.floating,)) else
-               v
-            for k, v in cfg.lgbm_params.items()
-        },
+        "best_binary_logloss": best_loss,
+        "n_train": metadata["n_train"],
+        "n_val": metadata.get("n_val", 0),
+        "n_features": metadata["n_features"],
+        "params": cfg.lgbm_params,
+        "has_calibrator": True,
     }
     meta_path = model_dir / f"model_patch_{cfg.patch_id}_meta.json"
     meta_path.write_text(json.dumps(meta, indent=2))

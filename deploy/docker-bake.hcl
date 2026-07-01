@@ -30,3 +30,15 @@ target "proxy-manager" {
   tags = ["deploy-proxy-manager:latest"]
 }
 
+target "trainer" {
+  context = "../"
+  dockerfile = "services/trainer/Dockerfile"
+  tags = ["deploy-trainer:latest"]
+}
+
+target "api" {
+  context = "../"
+  dockerfile = "services/api/Dockerfile"
+  tags = ["deploy-api:latest"]
+}
+

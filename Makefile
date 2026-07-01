@@ -375,11 +375,11 @@ run-%: env-sync ## Run service locally, e.g. make run-parser
 
 .PHONY: train
 train: ## Train LightGBM model: make train PATCH=<id> (default: auto-detect)
-	$(COMPOSE) --profile db --profile train run --rm trainer python -m trainer.main $(if $(PATCH),--patch $(PATCH),)
+	$(COMPOSE) --profile db --profile train run --rm trainer $(if $(PATCH),--patch $(PATCH),)
 
 .PHONY: train-agg-only
 train-agg-only: ## Populate aggregate tables only: make train-agg-only PATCH=<id>
-	$(COMPOSE) --profile db --profile train run --rm trainer python -m trainer.main $(if $(PATCH),--patch $(PATCH),) --agg-only
+	$(COMPOSE) --profile db --profile train run --rm trainer $(if $(PATCH),--patch $(PATCH),) --agg-only
 
 .PHONY: up-api
 up-api: ## Start ML inference API (foreground)

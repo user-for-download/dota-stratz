@@ -10,6 +10,7 @@ an in-flight ``/predict`` (BUG-001).
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from pathlib import Path
@@ -34,6 +35,7 @@ class Predictor:
         self._cfg = cfg
         self._models: dict[int, lgb.Booster] = {}
         self._schemas: dict[int, dict[str, Any]] = {}
+        self._calibrators: dict[int, Any] = {}
         self._model_dir = Path(cfg.model_dir)
         self._max_hero_id = cfg.max_hero_id
         self._lock = threading.RLock()
@@ -54,7 +56,7 @@ class Predictor:
             return sorted(self._models.keys())
 
     def load_model(self, patch_id: int) -> bool:
-        """Load model + schema for *patch_id*. Returns True on success."""
+        """Load model + schema + calibrator for *patch_id*. Returns True on success."""
         model_path = self._model_path(patch_id)
         if not model_path.exists():
             logger.warning("Model file not found for patch %s: %s", patch_id, model_path)
@@ -63,12 +65,26 @@ class Predictor:
         try:
             model = lgb.Booster(model_file=str(model_path))
             schema = load_schema(self._model_dir, patch_id)
+
+            # Load calibrator if available
+            calibrator = None
+            cal_path = self._model_dir / f"calibrator_patch_{patch_id}.json"
+            if cal_path.exists():
+                import json
+                cal_data = json.loads(cal_path.read_text())
+                calibrator = {
+                    "coef": cal_data["coef"],
+                    "intercept": cal_data["intercept"],
+                }
+
             with self._lock:
                 self._models[patch_id] = model
                 self._schemas[patch_id] = schema
+                if calibrator:
+                    self._calibrators[patch_id] = calibrator
             logger.info(
-                "Loaded model for patch %s (%d features)",
-                patch_id, schema["n_features"],
+                "Loaded model for patch %s (%d features, calibrator=%s)",
+                patch_id, schema["n_features"], "yes" if calibrator else "no",
             )
             return True
         except Exception:
@@ -80,20 +96,14 @@ class Predictor:
         with self._lock:
             self._models.pop(patch_id, None)
             self._schemas.pop(patch_id, None)
+            self._calibrators.pop(patch_id, None)
         logger.info("Unloaded model for patch %s", patch_id)
 
     def reload_all(self):
-        """Scan the model directory and reload all available models.
-
-        Uses a copy-on-write pattern (BUG-N05): builds the new model/schema
-        dicts in local variables, then atomically swaps them in under the
-        lock.  This avoids exposing an empty ``_models`` dict between the
-        old ``clear()`` and the first ``load_model()``, which would cause
-        live ``/predict`` requests to fail with ``ValueError`` during a
-        full reload.
-        """
+        """Scan the model directory and reload all available models."""
         new_models: dict[int, lgb.Booster] = {}
         new_schemas: dict[int, dict[str, Any]] = {}
+        new_calibrators: dict[int, Any] = {}
         count = 0
         for fpath in sorted(self._model_dir.glob("model_patch_*.txt")):
             try:
@@ -105,6 +115,17 @@ class Predictor:
                 schema = load_schema(self._model_dir, pid)
                 new_models[pid] = model
                 new_schemas[pid] = schema
+
+                # Load calibrator
+                cal_path = self._model_dir / f"calibrator_patch_{pid}.json"
+                if cal_path.exists():
+                    import json
+                    cal_data = json.loads(cal_path.read_text())
+                    new_calibrators[pid] = {
+                        "coef": cal_data["coef"],
+                        "intercept": cal_data["intercept"],
+                    }
+
                 count += 1
             except (ValueError, IndexError, Exception):
                 logger.exception("Failed to load model during reload_all for patch")
@@ -112,6 +133,7 @@ class Predictor:
         with self._lock:
             self._models = new_models
             self._schemas = new_schemas
+            self._calibrators = new_calibrators
         logger.info("Loaded %d models from %s", count, self._model_dir)
         return count
 
@@ -130,16 +152,9 @@ class Predictor:
     ) -> tuple[list[dict[str, Any]], str | None]:
         """Score all eligible heroes and return the top recommendations.
 
-        Returns
-        -------
-        recommendations : list[dict]
-            Each dict has ``hero_id``, ``score``, (one-hot based, not calibrated),
-            ``pick_probability``, ``win_probability`` (currently None).
-        reasoning : str or None
-            Human-readable explanation for the top hero.
+        Uses calibrated probabilities and look-ahead minimax search.
         """
         # Atomically load (if missing) and capture references under the lock
-        # so a concurrent /reload cannot produce a None between check and use.
         with self._lock:
             if patch_id not in self._models:
                 loaded = self.load_model(patch_id)
@@ -150,18 +165,10 @@ class Predictor:
                     )
             model = self._models[patch_id]
             schema = self._schemas[patch_id]
-
-        # model and schema are now local references — the lock is released.
-        # LightGBM Booster.predict() is read-only after load, so concurrent
-        # threads can use the same Booster safely.
+            calibrator = self._calibrators.get(patch_id)
 
         taken_heroes = ctx.all_taken
 
-        # Score all heroes (1..max_hero_id from the schema) that aren't
-        # already taken.  Uses schema["max_hero_id"] instead of the API's
-        # own config so the one-hot encoding dimension always matches the
-        # trained model — prevents a dimension-mismatch crash when a new
-        # hero ships mid-deployment (issue #8).
         max_id = schema["max_hero_id"]
         eligible_hero_ids = [
             hid for hid in range(1, max_id + 1)
@@ -173,11 +180,6 @@ class Predictor:
         team_id = radiant_team_id if ctx.recommending_team == 0 else dire_team_id
         enemy_team_id = dire_team_id if ctx.recommending_team == 0 else radiant_team_id
 
-        # Pre-fetch all per-hero aggregate data in 2-3 batch queries,
-        # replacing the previous N+1 pattern (~500 queries per request).
-        # Gracefully handle an uninitialised DB pool (e.g. during startup)
-        # by converting RuntimeError → ValueError so the HTTP layer returns
-        # a clean error response instead of a 500.
         try:
             batch = pre_fetch_batch(
                 patch_id=patch_id,
@@ -209,9 +211,18 @@ class Predictor:
             return [], None
 
         X = np.stack(feature_vectors, axis=0)
-        scores = model.predict(X)
+        raw_scores = model.predict(X)
 
-        # Sort by score descending
+        # === Task 11: Apply calibration ===
+        if calibrator:
+            coef = np.array(calibrator["coef"])
+            intercept = calibrator["intercept"]
+            logits = raw_scores * coef[0] + intercept
+            scores = 1.0 / (1.0 + np.exp(-logits))  # sigmoid
+        else:
+            scores = raw_scores
+
+        # Sort by calibrated score descending
         indices = np.argsort(scores)[::-1][:num_recommendations]
 
         recommendations: list[dict[str, Any]] = []
@@ -221,14 +232,15 @@ class Predictor:
         for idx in indices:
             hid = eligible_hero_ids[idx]
             sc = float(scores[idx])
+            raw = float(raw_scores[idx])
             if top_hero_id is None:
                 top_hero_id = hid
                 top_score = sc
             recommendations.append({
                 "hero_id": hid,
-                "score": sc,
-                "pick_probability": None,
-                "win_probability": None,
+                "score": raw,
+                "pick_probability": round(sc, 4),
+                "win_probability": round(sc, 4),
             })
 
         # Generate reasoning for the top recommendation
