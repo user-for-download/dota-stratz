@@ -33,7 +33,7 @@ make test-api                           # Smoke test health + /predict
 make reload-api PATCH=60                # Hot-reload model (no restart, requires STRATZ_ADMIN_TOKEN)
 ```
 
-**Note**: Models use **219 features** (58 aggregate + 1 playing-side indicator + 160 one-hot hero ID). Includes avg_gold_10/avg_xp_10, hero draft-slot win rates, low-game missingness flags, delta features, and role interaction features. Training uses `binary` objective (not `lambdarank`) since all draft slots in a match share the same `radiant_win` target.
+**Note**: Models use **230 features** (70 aggregate + 160 one-hot hero ID). New features include recent form (last 20 games), meta drift (7-day trend), sequence context, and team strategy scores. Platt scaling calibration provides calibrated win probabilities. Training uses `binary` objective since all draft slots share the same `radiant_win` target.
 
 ## RabbitMQ
 ```bash

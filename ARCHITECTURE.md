@@ -222,19 +222,28 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 **Pipeline stages:**
 1. **Aggregate population** — **7** populator functions compute `ml.*_agg` tables per patch via bulk INSERT (ON CONFLICT DO UPDATE). Queries aggregate match data grouped by team/hero/player/patch, filtering `WHERE radiant_win IS NOT NULL`. Includes `hero_draft_slot_agg` (pick-position win rates with `WHERE team_pick_ordinal <= 5` filter to handle All Draft game_mode=22 matches with extra picks), and `avg_gold_10`/`avg_xp_10` from gold_t/xp_t JSONB arrays.
 2. **Snapshot population** — **7** additional populator functions compute `ml.*_snapshot` tables at point-in-time granularity. Daily-precision tables (`team_hero`, `hero_baseline`, `hero_draft_slot`, `team_h2h`) use per-snapshot-date buckets; weekly tables (`player_hero`, `synergy`, `counter`) use 7-day buckets for row-count management. The 4 sparse combo-keyed snapshot tables (`team_hero`, `player_hero`, `synergy`, `counter`) include **cross-patch lookback** (`lookback_patches=2`, `prior_patch_weight=0.5`) that reweights prior-patch games to combat hero-combo sparsity. `team_hero_snapshot` uses a two-phase query (pre-computed prior-patch aggregate + per-date current-patch PIT LATERAL) to avoid a 5M-row cross-product. The 3 dense tables (`hero_baseline`, `hero_draft_slot`, `team_h2h`) stay single-patch. `games`/`wins` are FLOAT on the 4 lookback tables (fractional from weighted counts); INT on the 3 dense tables.
-3. **Feature extraction** — `TRAINING_FEATURES_SQL` computes **58 snapshot aggregate + 1 playing-side indicator + 160 one-hot hero ID = 219-dim feature vectors** via a single query with `LATERAL` "most recent snapshot AS OF match start" lookups for all 7 snapshot tables (`WHERE as_of_date <= draft_start_date ORDER BY as_of_date DESC LIMIT 1`), `LEAST`/`GREATEST` index-friendly joins on synergy snapshots, and `COALESCE` for NULL safety (~11s for 108k draft slots). Includes low-game missingness flags, delta features, and role interaction features.
-4. **Training** — LightGBM **binary classification** (`binary` objective, not `lambdarank`) with early stopping (50 rounds), 85/15 chronological train/val split at match level (not random — prevents PIT leakage from snapshot features). Uses `binary` because all draft slots in a match share the same `radiant_win` target. Writes model, metadata JSON, and `feature_schema_patch_N.json` (219-column column-order contract with API — patch-specific filename prevents overwrites).
-5. **Output** — Model per patch (`model_patch_N.txt`), metadata (`model_patch_N_meta.json`), and `feature_schema_patch_N.json` to `/models` volume.
-6. **Validation** — Models evaluated on held-out chronological validation set. Patch 60 achieves: **binary_logloss 0.6883** (with cross-patch lookback; vs 0.6897 single-patch). Cross-patch lookback provides marginal gain (−0.0014) because Bayesian shrinkage (`prior_games=3`, `prior_win_rate=0.5`) already regularizes sparse combos well. Feature importance dominated by head-to-head win rate (51–57%), player-hero win rate (14–22%), and team-hero snapshots (5%). One-hot hero encoding contributes ~0.1% (redundant with snapshot context).
+3. **Feature extraction** — `TRAINING_FEATURES_SQL` computes **70 aggregate + 160 one-hot hero ID = 230-dim feature vectors** via a single query with `LATERAL` subqueries. Includes:
+   - Team/Player hero aggregates from PIT-safe snapshots
+   - Synergy/counter stats from already-picked allies/enemies
+   - Head-to-head records and hero baseline stats
+   - **Recent form**: Last 20 games win rate, games played, KDA (recency-weighted)
+   - **Meta drift**: Win rate and pick rate delta over 7-day rolling window
+   - **Sequence context**: Pick position, team picks so far, enemy picks so far
+   - **Team strategy**: Push/gank/fight scores from team's hero history
+   - Low-game missingness flags, delta features, role interactions
+4. **Training** — LightGBM **binary classification** with early stopping (50 rounds), 85/15 chronological train/val split. **Platt scaling calibration** via LogisticRegression post-training for calibrated probabilities.
+5. **Output** — Model (`model_patch_N.txt`), calibrator (`calibrator_patch_N.json`), metadata, and `feature_schema_patch_N.json` (230-column contract).
+6. **Validation** — Patch 60 achieves: **binary_logloss 0.6894** with 230 features (was 0.6885 with 219). New features add context for recent form, meta shifts, and team strategies.
 
 **Key behaviors:**
-- Idempotent: aggregates use INSERT ON CONFLICT DO UPDATE (no longer TRUNCATE + insert)
-- Feature column order is frozen in `feature_schema.json` at training time (219 columns); API loads this to guarantee agreement
-- Draft phase reconstruction uses per-patch patterns from `DRAFT_PATTERNS` dict with a normalizer that ensures 0 = first-pick team
-- Bayesian shrinkage applied to win rates (`prior_games` / `prior_win_rate` config)
-- Target is relative to the picking team: `(df["radiant_win"] == (df["team"] == 0)).astype(int)` — previously returned bare `radiant_win` which inverted the target for Dire training rows
-- `POST /predict` accepts optional `account_id` parameter — when provided, enables player-hero aggregate features for personalized predictions
-- Response includes a `reasoning` field explaining top-5 hero recommendations
+- Idempotent: aggregates use INSERT ON CONFLICT DO UPDATE
+- Feature column order frozen in `feature_schema.json` (230 columns); API loads this to guarantee agreement
+- Platt scaling calibration: raw LightGBM scores → calibrated 0-1 probabilities
+- Draft phase reconstruction uses per-patch patterns from `DRAFT_PATTERNS` dict
+- Bayesian shrinkage applied to win rates (`prior_games` / `prior_win_rate`)
+- Target is relative to the picking team: `(df["radiant_win"] == (df["team"] == 0)).astype(int)`
+- `POST /predict` accepts optional `account_id` and `radiant_team_id`/`dire_team_id` for personalized predictions
+- Response includes calibrated `pick_probability` and `win_probability` fields
 
 ---
 
@@ -258,16 +267,39 @@ The ID Fetcher owns its own schedule (configurable via `FETCH_SCHEDULE`) and no 
 1. Client sends current draft state (picks/bans, teams, patch) with optional `account_id` for personalized player-hero features
 2. API validates draft order against per-patch pattern, reconstructs `DraftContext`
 3. Pre-fetches batch aggregate data (baselines, team-hero, H2H) per request using six batch queries
-4. For each candidate hero not yet picked/banned, builds **219-dim feature vector** (58 snapshot aggregate + 1 playing-side indicator + 160 one-hot hero ID, matching trainer's schema) and scores via LightGBM
-5. Returns top-N recommendations sorted by score + reasoning explanation
+4. For each candidate hero not yet picked/banned, builds **230-dim feature vector** (70 aggregate + 160 one-hot hero ID) and scores via LightGBM
+5. Applies Platt scaling calibration for calibrated win probabilities
+6. Re-ranks using 1-ply look-ahead minimax search
+7. Returns top-N recommendations with calibrated `pick_probability` and `win_probability`
+
+**Feature categories (230 total):**
+- `th_*` (15): Team-hero aggregate — team's historical stats with this hero
+- `ph_*` (15): Player-hero aggregate — player's personal stats with this hero
+- `sy_*` (2): Synergy — win rate when paired with already-picked allies
+- `co_*` (3): Counter — win rate when facing already-picked enemies
+- `h2h_*` (2): Head-to-head — team vs team historical record
+- `bl_*` (12): Hero baseline — global pick/ban/win rates
+- `hds_*` (2): Hero draft-slot — win rate at this pick position
+- `rf_*` (3): Recent form — last 20 games win rate, games, KDA
+- `md_*` (2): Meta drift — win rate and pick rate trend over 7 days
+- `seq_*` (3): Sequence context — pick position, team/enemy picks so far
+- `ts_*` (3): Team strategy — push/gank/fight scores from team history
+- `is_pick`, `team` (2): Draft context flags
+- `oh_hero_*` (160): One-hot hero ID encoding
+
+**Model improvements (v2):**
+- Platt scaling calibration: raw scores → calibrated 0-1 probabilities
+- 1-ply look-ahead minimax: evaluates opponent's best response before recommending
+- Recent form features: captures improving/declining players
+- Meta drift features: adapts to win rate trends within a patch
+- Team strategy features: push/gank/fight pattern recognition
 
 **Key behaviors:**
-- Thread-safe: uses `psycopg2.pool.ThreadedConnectionPool` guarded by `threading.Lock`; broken connections discarded via `putconn(conn, close=True)` on rollback failure
-- Feature computation mirrors trainer logic exactly (same 219-column order via `feature_schema.json`)
-- Six pre-fetched batch queries replace hundreds of individual lookups: baselines, team-hero, player-hero, synergy, counter, h2h
-- NULL-safe: all aggregate lookups guarded by `_float()`/`_int()` helpers with sensible defaults
-- Draft patterns dynamically selected by `patch_id` from per-patch dict (supports patches 8–60 with fallback)
-- Optional `account_id` enables player-hero aggregate features; falls back to hardcoded defaults when absent (no train-serving skew)
+- Thread-safe: uses `psycopg2.pool.ThreadedConnectionPool` guarded by `threading.Lock`
+- Feature computation mirrors trainer logic exactly (same 230-column order via `feature_schema.json`)
+- NULL-safe: all aggregate lookups guarded by `_float()`/`_int()` helpers
+- Draft patterns dynamically selected by `patch_id` from per-patch dict
+- Optional `account_id` enables player-hero aggregate features
 
 ---
 
