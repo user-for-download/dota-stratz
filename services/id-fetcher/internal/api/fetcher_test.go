@@ -129,18 +129,18 @@ func Test_RollingWindowPublishesBatches(t *testing.T) {
 }
 
 // Test_WatermarkFilterSkipsOldMatches verifies that when a watermark is
-// set via SetWatermark, the fetcher always uses the rolling-window query
-// (FetchMatches) and filters out match IDs <= watermark in Go code, so
-// only truly new matches are published.
-//
-// This replaces the former Test_WatermarkPathCallsFetchMatchesSince which
-// asserted FetchMatchesSince was called — the Go-side filter approach is
-// simpler and avoids the 2500-row LIMIT that caused multi-day catch-up lag.
+// set via SetWatermark, the fetcher uses the watermark-based query
+// (FetchMatchesSince) with a wider lookback to catch missed matches.
+// The Go-side filter in Run() handles deduplication against lastMaxMatchID.
 func Test_WatermarkFilterSkipsOldMatches(t *testing.T) {
 	const batchSize = 10
 
 	src := &fakeSource{
 		fetchMatchesFn: func(_ context.Context) ([]MatchNode, error) {
+			t.Error("FetchMatches was called (expected watermark path)")
+			return nil, nil
+		},
+		fetchMatchesSinceFn: func(_ context.Context, wm int64, lookback int, max int) ([]MatchNode, error) {
 			// Mixed set: below, at, and above the watermark.
 			return []MatchNode{
 				{MatchID: 50},
@@ -150,11 +150,6 @@ func Test_WatermarkFilterSkipsOldMatches(t *testing.T) {
 				{MatchID: 150},
 				{MatchID: 200},
 			}, nil
-		},
-		// FetchMatchesSince should never be called.
-		fetchMatchesSinceFn: func(_ context.Context, _ int64, _ int, _ int) ([]MatchNode, error) {
-			t.Error("FetchMatchesSince was called (expected rolling path only)")
-			return nil, nil
 		},
 	}
 	pub := &fakePublisher{}
@@ -177,10 +172,9 @@ func Test_WatermarkFilterSkipsOldMatches(t *testing.T) {
 	}
 }
 
-// Test_RollingWindowAlways asserts that the fetcher always uses
-// FetchMatches (rolling-window query) regardless of watermark state,
-// and FetchMatchesSince is never called.
-func Test_RollingWindowAlways(t *testing.T) {
+// Test_RollingWindowWhenNoWatermark asserts that the fetcher uses
+// FetchMatches (rolling-window query) when watermark is 0 (first run).
+func Test_RollingWindowWhenNoWatermark(t *testing.T) {
 	rollingCalled := false
 	watermarkCalled := false
 

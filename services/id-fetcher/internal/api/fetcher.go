@@ -104,6 +104,11 @@ type Fetcher struct {
 	// at or below this value are skipped in the Run loop.
 	watermark int64
 
+	// lookbackDays is the number of days to look back when using the
+	// watermark-based query. Wider than the bootstrap window to catch
+	// matches missed during downtime.
+	lookbackDays int
+
 	// rdb is the shared Redis client used by the proxy pool. It is also
 	// used to persist the highest match ID seen across fetcher runs so
 	// that already-queued match IDs are not re-published on restart or
@@ -154,7 +159,9 @@ func (f *Fetcher) SetWatermark(w int64, lookbackDays int) {
 		w = 0
 	}
 	f.watermark = w
-	_ = lookbackDays // retained for API compatibility with existing callers
+	if lookbackDays > 0 {
+		f.lookbackDays = lookbackDays
+	}
 }
 
 // Watermark returns the current watermark value (0 if unset). Useful
@@ -363,11 +370,16 @@ func (f *Fetcher) Run(ctx context.Context) error {
 	return nil
 }
 
-// fetch always uses the rolling-window query (matches.sql) which returns
-// all match IDs in the configured time window with a generous LIMIT 50000.
+// fetch selects the appropriate query based on watermark state.
 //
-// The watermark and Redis filters are applied in Go inside Run() so a
-// single round-trip covers the entire window.
+// When watermark > 0 and lookbackDays > 0, uses FetchMatchesSince with a
+// wider lookback window to catch matches missed during downtime.
+// Otherwise, uses the narrow rolling-window query for bootstrapping.
 func (f *Fetcher) fetch(ctx context.Context) ([]MatchNode, error) {
+	if f.watermark > 0 && f.lookbackDays > 0 {
+		// Use watermark-based query with wider lookback to catch missed matches.
+		// The Go-side filter in Run() handles deduplication against lastMaxMatchID.
+		return f.client.FetchMatchesSince(ctx, f.watermark, f.lookbackDays, f.batchSize*5)
+	}
 	return f.client.FetchMatches(ctx)
 }
