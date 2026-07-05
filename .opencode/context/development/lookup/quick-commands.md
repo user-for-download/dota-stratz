@@ -33,7 +33,7 @@ make test-api                           # Smoke test health + /predict
 make reload-api PATCH=60                # Hot-reload model (no restart, requires STRATZ_ADMIN_TOKEN)
 ```
 
-**Note**: Models use **219 features** (59 aggregate + 160 one-hot hero ID). Platt scaling calibration (fit on validation set only) provides calibrated win probabilities. Training uses `binary` objective since all draft slots share the same `radiant_win` target.
+**Note**: Model uses **59 aggregate features** + sequence data (draft picks/bans). PyTorch DraftBERT with BCEWithLogitsLoss provides direct logit training. All hyperparameters configurable via `deploy/.env`.
 
 ## RabbitMQ
 ```bash

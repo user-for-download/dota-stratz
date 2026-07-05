@@ -50,7 +50,7 @@
 - Cooldown checks ZScore before re-adding proxy to prevent race with concurrent remove()
 
 ## Inference API
-**Purpose**: Serves draft predictions via LightGBM binary classification models on HTTP :8080.
+**Purpose**: Serves draft predictions via PyTorch DraftBERT (TorchScript JIT) on HTTP :8080 with Monte Carlo rollouts.
 
 **Key behaviors**:
 - Threaded connection pool (psycopg2 `ThreadedConnectionPool`) guarded by `threading.Lock`

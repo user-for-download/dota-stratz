@@ -32,7 +32,7 @@
 - `refresh_all_mv()` — Function to refresh all MVs CONCURRENTLY with logging
 
 ## ML Schema (`ml`)
-- **7** patch-aware aggregate tables for LightGBM training and inference
+- **7** patch-aware aggregate tables for PyTorch DraftBERT training and inference
 - Tables are LOGGED for crash safety (previously UNLOGGED — changed per CRITICAL-5; VACUUM ANALYZE added to aggregate populator to compensate for write performance)
 - All aggregate queries filter `WHERE radiant_win IS NOT NULL` to exclude abandoned matches from win-rate calculations (prevents ~3-5% deflation)
 - avg_gold_10 / avg_xp_10 computed from `gold_t`/`xp_t` JSONB arrays now stored in `player_time_series_arrays` (separated from `player_minute_stats` minute=0 sentinel by migration `013` to avoid PK conflict)

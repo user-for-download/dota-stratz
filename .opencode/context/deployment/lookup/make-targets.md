@@ -20,7 +20,7 @@
 ## ML
 | Target | Action |
 |--------|--------|
-| `make train PATCH=N` | Train LightGBM binary classification model for patch N — populates aggregates + trains (uses profiles `db`+`train`) |
+| `make train PATCH=N` | Train PyTorch DraftBERT model for patch N — populates aggregates + trains (uses profiles `db`+`train`) |
 | `make train-agg-only PATCH=N` | Populate aggregates only (with `radiant_win IS NOT NULL` filter), skip training |
 | `make up-api-d` | Start inference API on :8080 (uses profiles `db`+`api`) |
 | `make down-api` | Stop inference API |
