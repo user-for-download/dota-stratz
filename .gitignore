@@ -1,0 +1,56 @@
+# Environment files (credentials, secrets)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+backups/
+
+# Go
+/bin/
+*.exe
+*.test
+*.out
+/vendor/
+dump_out/
+*.sum
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+opencode.json
+# OpenCode: track context, ignore transient files
+.opencode
+.agents/
+.pytest_cache
+skills-lock.json
+# OS
+.DS_Store
+Thumbs.db
+
+# Data & models (managed via Docker volumes)
+/models/
+deploy/models/model_patch_*.txt
+deploy/models/*.bin
+/data/
+prc.json
+proxy.txt
+# OpenCode session files
+.tmp/
+
+# Logs
+*.log
+dump_out/
+
+# Build artifacts
+/proxy-manager
+
+# Hero images (downloaded from Steam CDN, not tracked in git)
+services/frontend/img/

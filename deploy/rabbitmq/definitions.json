@@ -1,0 +1,17 @@
+{
+  "rabbit_version": "4.3.1",
+  "vhosts": [
+    {
+      "name": "/",
+      "limits": [],
+      "metadata": {
+        "description": "Default virtual host",
+        "tags": [],
+        "default_queue_type": "classic"
+      }
+    }
+  ],
+  "queues": [],
+  "exchanges": [],
+  "bindings": []
+}

@@ -1,0 +1,43 @@
+groups:
+  - name: dota2_ingestion
+    interval: 30s
+    rules:
+      - alert: ProxyPoolDepleted
+        expr: dota2_proxy_pool_available < 20
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Proxy pool below minimum threshold"
+          description: "Only {{ $value }} proxies available (min: 20)"
+
+      - alert: IngestionStalled
+        # Cron-driven batch pipeline: id-fetcher runs every 5 minutes.
+        # Uses increase() over 15m (3× cron interval) — if the counter has
+        # not advanced at all in the past 15 minutes, the pipeline is stalled.
+        # Cannot use time() - timestamp(counter > 0) because Prometheus's
+        # timestamp() returns the scrape time, not the last-change time.
+        expr: increase(id_fetcher_match_ids_published_total[15m]) == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ID Fetcher has not published match IDs in 15+ minutes"
+          description: "No match IDs published in the last 15 minutes. Cron schedule is */5 * * * * (every 5 minutes)."
+
+      - alert: DLQDepthGrowing
+        # Two queues carry a DLQ: queue.match_ids.dlq and queue.raw_matches.dlq.
+        # If the sum exceeds 50 messages for 5m, something is producing
+        # persistent failures. Use `make replay-dlq` to drain, or
+        # `make replay-dlq-dry` to preview. The 24h message TTL means
+        # truly-stuck messages will eventually be reaped.
+        # Note: rabbitmq_queue_messages_ready (not _messages) — the new
+        # format separates ready / unacked / total. We alert on ready
+        # because that is the "sitting in DLQ" count.
+        expr: sum(rabbitmq_queue_messages_ready{queue=~".*\\.dlq"}) > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DLQ depth > 50 for 5m"
+          description: "Total {{ $value }} messages across match_ids.dlq + raw_matches.dlq. Investigate: rabbitmqadmin list_queues."

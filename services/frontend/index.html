@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Dota 2 Draft Predictor</title>
+        <link rel="stylesheet" href="style.css">
+    </head>
+
+<!-- MCTS Progress Overlay -->
+<div id="mctsOverlay" class="mcts-overlay hidden">
+  <div class="mcts-box">
+    <div class="mcts-title">MCTS Simulation</div>
+    <div class="mcts-progress-track">
+      <div id="mctsProgressFill" class="mcts-progress-fill"></div>
+    </div>
+    <div id="mctsProgressText" class="mcts-progress-text">Initializing...</div>
+    <ul id="mctsTopPicks" class="mcts-top-picks"></ul>
+  </div>
+</div>
+
+<!-- Loading overlay -->
+<div id="loading" class="loading-overlay">
+  <div class="spinner"></div>
+  <div style="color:var(--text2);font-size:13px">Loading heroes...</div>
+</div>
+
+<!-- Tooltip -->
+<div id="tooltip" class="tooltip"></div>
+
+<!-- Header -->
+<div class="header">
+  <h1><span>Dota 2</span> Draft Predictor</h1>
+  <div class="header-right">
+    <div class="first-pick-group">
+      <label>First Pick</label>
+      <button class="first-pick-btn active" id="fp-radiant" onclick="setFirstPick(0)">Radiant</button>
+      <button class="first-pick-btn" id="fp-dire" onclick="setFirstPick(1)">Dire</button>
+    </div>
+    <div id="apiStatus" class="api-url">API: checking...</div>
+  </div>
+</div>
+
+<!-- Team selectors -->
+<div class="team-select-bar">
+  <div class="team-select">
+    <label class="team-select-label radiant">Radiant Team</label>
+    <select id="radiant-team" class="team-dropdown" onchange="onTeamChange()">
+      <option value="0">— No team selected —</option>
+    </select>
+  </div>
+  <div class="team-select-vs">VS</div>
+  <div class="team-select">
+    <label class="team-select-label dire">Dire Team</label>
+    <select id="dire-team" class="team-dropdown" onchange="onTeamChange()">
+      <option value="0">— No team selected —</option>
+    </select>
+  </div>
+  <button id="startBtn" class="start-btn" onclick="startDraft()" disabled>START DRAFT</button>
+</div>
+
+<!-- Draft area (hidden until Start) -->
+<div id="draftArea" style="display:none">
+  <!-- Draft bar -->
+  <div class="draft-bar">
+  <div class="team-col">
+    <div class="team-label radiant">Radiant</div>
+    <div id="radiantSlots" class="draft-slots"></div>
+  </div>
+  <div class="team-col" style="max-width:200px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 12px">
+    <div id="draftPhase" style="font-size:12px;color:var(--gold);font-weight:600">Draft Phase</div>
+    <div id="draftAction" style="font-size:22px;font-weight:700;margin:4px 0">-</div>
+    <div id="draftTurn" style="font-size:11px;color:var(--text2)">PICK / BAN</div>
+
+    <!-- 5v5 Victory Forecast Panel -->
+    <div id="matchForecast" style="display:none; width:100%; text-align:center; margin-top:8px;">
+      <div style="font-size:10px; color:var(--text2); text-transform:uppercase; font-weight:700; letter-spacing:0.5px;">Win Probability</div>
+      <div class="forecast-bar" style="height:6px; background:var(--bg); border-radius:3px; overflow:hidden; margin:4px 0; display:flex;">
+        <div id="forecastRadiant" style="width:50%; background:var(--green); transition:width 0.4s ease-out;"></div>
+        <div id="forecastDire" style="width:50%; background:var(--red); transition:width 0.4s ease-out;"></div>
+      </div>
+      <div style="display:flex; justify-content:space-between; font-size:11px; font-weight:800;">
+        <span id="forecastRadiantPct" style="color:var(--green)">50%</span>
+        <span id="forecastDirePct" style="color:var(--red)">50%</span>
+      </div>
+    </div>
+  </div>
+  <div class="team-col">
+    <div class="team-label dire">Dire</div>
+    <div id="direSlots" class="draft-slots"></div>
+  </div>
+</div>
+
+<!-- Center: controls + hero grid -->
+<div class="center">
+  <div class="controls">
+    <input type="text" id="search" class="search" placeholder="Search heroes...">
+    <div id="phaseInfo" class="phase-label"></div>
+    <button class="btn" onclick="resetDraft()">Reset</button>
+    <button class="btn danger" onclick="undoDraft()">Undo</button>
+  </div>
+  <div id="recoPanel" class="reco-panel" style="display:none">
+    <!-- BANS: Dire left, Radiant right -->
+    <div class="reco-section">
+      <div class="reco-section-title">BANS</div>
+      <div class="reco-columns">
+        <div class="reco-col">
+          <div class="reco-header dire">
+            <span id="recoTitleD" class="reco-title"></span>
+          </div>
+          <div id="recoListD" class="reco-list"></div>
+        </div>
+        <div class="reco-col">
+          <div class="reco-header radiant">
+            <span id="recoTitleR" class="reco-title"></span>
+          </div>
+          <div id="recoListR" class="reco-list"></div>
+        </div>
+      </div>
+    </div>
+    <!-- PICKS: Radiant left, Dire right -->
+    <div class="reco-section" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--bg4)">
+      <div class="reco-section-title">PICKS</div>
+      <div class="reco-columns">
+        <div class="reco-col">
+          <div class="reco-header radiant">
+            <span id="recoPickTitleR" class="reco-title"></span>
+          </div>
+          <div id="recoPickListR" class="reco-list"></div>
+        </div>
+        <div class="reco-col">
+          <div class="reco-header dire">
+            <span id="recoPickTitleD" class="reco-title"></span>
+          </div>
+          <div id="recoPickListD" class="reco-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="hero-grid">
+    <div id="heroGrid" class="grid"></div>
+  </div>
+</div>
+</div><!-- end draftArea -->
+
+<!-- Footer -->
+<div class="footer">
+  <span id="footerInfo">0 heroes loaded</span>
+  <span>Click hero to pick/ban &bull; Hover for AI prediction</span>
+</div>
+
+    <script src="app.js" async></script>
+    </body>
+</html>

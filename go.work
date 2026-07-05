@@ -1,0 +1,9 @@
+go 1.26.3
+
+use (
+	./services/detail-fetcher
+	./services/id-fetcher
+	./services/parser
+	./services/proxy-manager
+	./shared/go-common
+)

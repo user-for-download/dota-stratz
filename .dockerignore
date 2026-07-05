@@ -1,0 +1,20 @@
+# Version control
+.git/
+.gitignore
+
+# Local build artifacts
+bin/
+tmp/
+
+# IDE / editor config
+.vscode/
+.idea/
+.opencode/
+
+# Environment (may contain secrets)
+.env
+.env.*
+
+# OS metadata
+.DS_Store
+Thumbs.db
