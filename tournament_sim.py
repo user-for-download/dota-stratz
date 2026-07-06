@@ -141,16 +141,15 @@ def simulate_draft(team_a, team_b, first_pick_team):
             chosen = random.choice(available) if available else 1
 
         taken.add(chosen)
-        actual_team = team
-        draft_slots.append((chosen, is_pick, actual_team))
+        draft_slots.append((chosen, is_pick, recommending_team))
 
         if is_pick:
-            if actual_team == 0:
+            if recommending_team == 0:
                 rad_picks.append(chosen)
             else:
                 dire_picks.append(chosen)
         else:
-            if actual_team == 0:
+            if recommending_team == 0:
                 rad_bans.append(chosen)
             else:
                 dire_bans.append(chosen)
