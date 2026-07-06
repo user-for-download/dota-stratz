@@ -4,7 +4,8 @@
    ================================================================ */
 
 const API_BASE = '/api';
-const WS_BASE = `ws://${window.location.host}/ws/draft`;
+const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const WS_BASE = `${WS_PROTOCOL}//${window.location.host}/ws/draft`;
 
 let draftWs = null;
 let draftWsTurnId = 0;

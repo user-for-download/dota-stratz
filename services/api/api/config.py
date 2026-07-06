@@ -26,6 +26,16 @@ class APIConfig:
 
     max_hero_id: int = int(os.getenv("API_MAX_HERO_ID", "160"))
 
+    # ── CORS ────────────────────────────────────────────────────────────────
+    cors_origins: list[str] = field(default_factory=lambda: [
+        origin.strip()
+        for origin in os.getenv(
+            "API_CORS_ORIGINS",
+            "http://localhost,http://localhost:80,http://localhost:3000,http://localhost:5173,http://127.0.0.1:80"
+        ).split(",")
+        if origin.strip()
+    ])
+
     # ── Admin ─────────────────────────────────────────────────────────────
     admin_token: str = os.getenv("STRATZ_ADMIN_TOKEN", "")
 

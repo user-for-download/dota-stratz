@@ -40,10 +40,15 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Copy the trainer package
 COPY services/trainer/trainer/ ./trainer/
 
+# Copy entrypoint wrapper for volume permission handling
+COPY services/trainer/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
 # Mount point for model output — shared volume with inference API
 VOLUME /models
 
 # Switch to non-root user
 USER appuser
 
-ENTRYPOINT ["python", "-m", "trainer.main"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["python", "-m", "trainer.main"]

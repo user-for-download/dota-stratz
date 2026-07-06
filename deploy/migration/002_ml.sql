@@ -19,7 +19,7 @@ GRANT SELECT ON ALL TABLES IN SCHEMA ml TO analytics_reader;
 ALTER DEFAULT PRIVILEGES IN SCHEMA ml GRANT SELECT ON TABLES TO analytics_reader;
 
 DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'analytics_writer') THEN CREATE ROLE analytics_writer; END IF; END $$;
-GRANT USAGE ON SCHEMA public, analytics TO analytics_writer;
+GRANT USAGE ON SCHEMA public, analytics, ml TO analytics_writer;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO analytics_writer;
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA analytics FROM analytics_writer;
 REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA analytics FROM analytics_writer;
@@ -27,6 +27,12 @@ GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA analytics TO analytics_writ
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA analytics TO analytics_writer;
 ALTER DEFAULT PRIVILEGES IN SCHEMA analytics GRANT SELECT, INSERT, UPDATE ON TABLES TO analytics_writer;
 ALTER DEFAULT PRIVILEGES IN SCHEMA analytics GRANT USAGE, SELECT ON SEQUENCES TO analytics_writer;
+
+-- ML schema grants for analytics_writer (trainer/API write to ml.* tables)
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ml TO analytics_writer;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ml TO analytics_writer;
+ALTER DEFAULT PRIVILEGES IN SCHEMA ml GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO analytics_writer;
+ALTER DEFAULT PRIVILEGES IN SCHEMA ml GRANT USAGE, SELECT ON SEQUENCES TO analytics_writer;
 
 -- ============================================================================
 -- 1. ANALYTICS CONFIG & MATERIALIZED VIEWS

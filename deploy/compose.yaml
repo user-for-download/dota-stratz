@@ -370,8 +370,8 @@ services:
         # to execute training commands. The Dockerfile entrypoint is "python -m trainer.main".
         # Default: sleep so `docker compose up --profile train` keeps the container alive
         # for exec debugging without exiting.
-        # Runs as root to write model files to the shared ml-models volume (owned by root).
-        user: "0"
+        # Runs as appuser (UID 1001) matching the API service — volume permissions
+        # are handled by the entrypoint script which chowns /models on startup.
         command: ["sleep", "infinity"]
     api:
         profiles:

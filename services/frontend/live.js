@@ -1,7 +1,8 @@
 /* Live Match Prediction — vanilla JS, connects to /api/live and /ws/live */
 
 const LIVE_API = '/api/live';
-const LIVE_WS = `ws://${window.location.host}/ws/live`;
+const LIVE_WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const LIVE_WS = `${LIVE_WS_PROTOCOL}//${window.location.host}/ws/live`;
 
 let liveWs = null;
 let currentMatchId = null;

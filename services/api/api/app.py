@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -86,9 +87,19 @@ if _default_response_class is not None:
 
 app = FastAPI(**app_kwargs)
 
+# CORS origins from environment variable (comma-separated)
+_cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "API_CORS_ORIGINS",
+        "http://localhost,http://localhost:80,http://localhost:3000,http://localhost:5173,http://127.0.0.1:80"
+    ).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost", "http://localhost:80", "http://127.0.0.1:80"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

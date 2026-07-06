@@ -212,7 +212,9 @@ func (p *Publisher) publishChannel() (*amqp.Channel, error) {
 	}
 
 	// Try to reconnect if the connection is no longer healthy.
-	p.reconnectIfNeeded()
+	if err := p.reconnectIfNeeded(); err != nil {
+		return nil, fmt.Errorf("reconnect failed: %w", err)
+	}
 
 	ch, err := p.conn.Channel()
 	if err != nil {
@@ -242,12 +244,13 @@ func (p *Publisher) reconnectIfNeeded() error {
 	p.mu.Lock()
 
 	// Verify the new connection is alive after reconnect
-	if p.conn != nil {
-		if ch, err := p.conn.Channel(); err != nil {
-			return fmt.Errorf("reconnected but channel failed: %w", err)
-		} else {
-			ch.Close()
-		}
+	if p.conn == nil {
+		return fmt.Errorf("reconnect failed: connection is nil (publisher may be closed)")
+	}
+	if ch, err := p.conn.Channel(); err != nil {
+		return fmt.Errorf("reconnected but channel failed: %w", err)
+	} else {
+		ch.Close()
 	}
 	return nil
 }
