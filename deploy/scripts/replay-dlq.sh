@@ -188,7 +188,8 @@ fi
 # -----------------------------------------------------------------------------
 
 EXISTING_FILE=$(mktemp)
-trap 'rm -f "$EXISTING_FILE"' EXIT
+TO_PUBLISH_FILE=$(mktemp)
+trap 'rm -f "$EXISTING_FILE" "$TO_PUBLISH_FILE"' EXIT
 
 if [[ "$SKIP_EXISTING" == "true" ]]; then
   log "[3/4] Checking which match_ids are already in the matches table (single bulk query)..."
@@ -200,8 +201,6 @@ if [[ "$SKIP_EXISTING" == "true" ]]; then
   log "  Found $EXISTING_COUNT in DB (will be skipped)."
 
   # Set difference: IDs in MATCH_IDS_CSV that are NOT in EXISTING_FILE
-  TO_PUBLISH_FILE=$(mktemp)
-  trap 'rm -f "$EXISTING_FILE" "$TO_PUBLISH_FILE"' EXIT
   # comm requires sorted unique inputs
   printf '%s\n' "${MATCH_IDS_CSV//,/$'\n'}" | sort -un > "$TO_PUBLISH_FILE.unsorted"
   comm -23 "$TO_PUBLISH_FILE.unsorted" <(sort -un "$EXISTING_FILE") > "$TO_PUBLISH_FILE" \
@@ -211,8 +210,6 @@ if [[ "$SKIP_EXISTING" == "true" ]]; then
   TO_PUBLISH_COUNT=${TO_PUBLISH_COUNT:-0}
 else
   log "[3/4] Skipping dedupe (--no-skip-existing). Will republish all $MATCH_ID_COUNT."
-  TO_PUBLISH_FILE=$(mktemp)
-  trap 'rm -f "$EXISTING_FILE" "$TO_PUBLISH_FILE"' EXIT
   printf '%s\n' "${MATCH_IDS_CSV//,/$'\n'}" | sort -un > "$TO_PUBLISH_FILE"
   TO_PUBLISH_COUNT=$MATCH_ID_COUNT
   EXISTING_COUNT=0
