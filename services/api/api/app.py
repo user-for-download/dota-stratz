@@ -20,14 +20,6 @@ from fastapi import FastAPI, HTTPException, Header, Request, WebSocket, WebSocke
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# Use ORJSONResponse for faster serialization if orjson is installed
-try:
-    import orjson  # noqa: F401
-    from fastapi.responses import ORJSONResponse
-    _default_response_class = ORJSONResponse
-except (ImportError, ModuleNotFoundError):
-    _default_response_class = None
-
 from .config import APIConfig
 from .db import close_pool, get_conn, init_pool, put_conn
 from .draft_state import build_draft_context
@@ -77,15 +69,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("API shut down.")
 
 
-app_kwargs = dict(
+app = FastAPI(
     title="dota-stratz ML Inference API",
     version="1.0.0",
     lifespan=lifespan,
 )
-if _default_response_class is not None:
-    app_kwargs["default_response_class"] = _default_response_class
-
-app = FastAPI(**app_kwargs)
 
 # CORS origins from environment variable (comma-separated)
 _cors_origins = [
