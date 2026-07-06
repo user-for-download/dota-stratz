@@ -57,6 +57,30 @@ class TrainerConfig:
     nhead: int = int(os.getenv("TRAINER_NHEAD", "4"))
     num_layers: int = int(os.getenv("TRAINER_NUM_LAYERS", "3"))
 
+    # ── Model Architecture ───────────────────────────────────────────────
+    dropout: float = float(os.getenv("TRAINER_DROPOUT", "0.3"))
+    """Dropout rate for embedding, MLP, and fusion layers."""
+    transformer_dropout: float = float(os.getenv("TRAINER_TRANSFORMER_DROPOUT", "0.1"))
+    """Dropout rate inside TransformerEncoderLayer."""
+    static_hidden: int = int(os.getenv("TRAINER_STATIC_HIDDEN", "64"))
+    """Hidden dim for the static MLP branch."""
+    dynamic_hidden: int = int(os.getenv("TRAINER_DYNAMIC_HIDDEN", "32"))
+    """Hidden dim for the dynamic MLP branch."""
+    fusion_hidden: int = int(os.getenv("TRAINER_FUSION_HIDDEN", "64"))
+    """Hidden dim for the fusion head."""
+
+    # ── Training Loop ────────────────────────────────────────────────────
+    grad_clip: float = float(os.getenv("TRAINER_GRAD_CLIP", "1.0"))
+    """Max gradient norm for clipping."""
+    early_stop_patience: int = int(os.getenv("TRAINER_EARLY_STOP_PATIENCE", "5"))
+    """Epochs to wait before early stopping."""
+    lr_scheduler_patience: int = int(os.getenv("TRAINER_LR_SCHEDULER_PATIENCE", "2"))
+    """Epochs to wait before reducing LR."""
+    lr_scheduler_factor: float = float(os.getenv("TRAINER_LR_SCHEDULER_FACTOR", "0.5"))
+    """Factor by which LR is reduced."""
+    log_interval: int = int(os.getenv("TRAINER_LOG_INTERVAL", "50"))
+    """Log training progress every N batches."""
+
     # ── Cross-patch lookback (sparse snapshot tables) ─────────────────────
     lookback_patches: int = int(os.getenv("TRAINER_LOOKBACK_PATCHES", "2"))
     """Number of prior patches to include when computing sparse combo-keyed

@@ -19,6 +19,9 @@ class MultiModalDraftBERT(nn.Module):
         num_layers: int = 3,
         num_continuous_features: int = 59,
         max_seq_len: int = 50,
+        dropout: float = 0.3,
+        transformer_dropout: float = 0.1,
+        fusion_hidden: int = 64,
     ):
         super().__init__()
 
@@ -26,34 +29,31 @@ class MultiModalDraftBERT(nn.Module):
         self.hero_emb = nn.Embedding(vocab_size, d_model, padding_idx=0)
         self.action_emb = nn.Embedding(5, d_model, padding_idx=0)
         self.pos_emb = nn.Embedding(max_seq_len, d_model)
-        self.emb_dropout = nn.Dropout(0.3)
+        self.emb_dropout = nn.Dropout(dropout)
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=nhead,
             dim_feedforward=d_model * 4,
-            dropout=0.1,
+            dropout=transformer_dropout,
             batch_first=True,
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
         # --- 2. Tabular Branch (Continuous Features) ---
-        # Input LayerNorm normalizes features with vastly different scales
-        # (GPM ~500-800, win_rate ~0.4-0.6, game counts ~0-50) before the
-        # first linear layer so no single feature dominates gradients.
         self.tabular_mlp = nn.Sequential(
             nn.LayerNorm(num_continuous_features),
-            nn.Linear(num_continuous_features, 64),
+            nn.Linear(num_continuous_features, fusion_hidden),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(dropout),
         )
 
         # --- 3. Fusion Head ---
         self.fusion_head = nn.Sequential(
-            nn.Linear(d_model + 64, 64),
+            nn.Linear(d_model + fusion_hidden, fusion_hidden),
             nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(64, 1),
+            nn.Dropout(dropout),
+            nn.Linear(fusion_hidden, 1),
         )
 
     def forward(self, heroes, actions, continuous_features):

@@ -62,6 +62,11 @@ class LivePredictor:
                 num_static_features=schema.get("n_static_features", 59),
                 num_dynamic_features=schema.get("n_dynamic_features", 24),
                 max_seq_len=schema.get("max_seq_len", 50),
+                dropout=schema.get("dropout", 0.3),
+                transformer_dropout=schema.get("transformer_dropout", 0.1),
+                static_hidden=schema.get("static_hidden", 64),
+                dynamic_hidden=schema.get("dynamic_hidden", 32),
+                fusion_hidden=schema.get("fusion_hidden", 64),
             )
             model.load_state_dict(torch.load(str(weights_path), map_location="cpu", weights_only=True))
             model.eval()

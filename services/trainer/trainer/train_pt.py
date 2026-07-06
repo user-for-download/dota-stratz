@@ -42,17 +42,22 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
 
     # 2. Init Model
     model = MultiModalDraftBERT(
-        vocab_size=cfg.max_hero_id + 5,  # +5 for padding (0) and future heroes
+        vocab_size=cfg.max_hero_id + 5,
         d_model=cfg.d_model,
         nhead=cfg.nhead,
         num_layers=cfg.num_layers,
         num_continuous_features=num_continuous,
         max_seq_len=cfg.max_seq_len,
+        dropout=cfg.dropout,
+        transformer_dropout=cfg.transformer_dropout,
+        fusion_hidden=cfg.fusion_hidden,
     ).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     criterion = nn.BCEWithLogitsLoss()
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=cfg.lr_scheduler_factor, patience=cfg.lr_scheduler_patience,
+    )
 
     # 3. Training Loop
     best_val_loss = float("inf")

@@ -27,6 +27,11 @@ class LiveDraftBERT(nn.Module):
         num_static_features: int = 59,
         num_dynamic_features: int = 15,
         max_seq_len: int = 50,
+        dropout: float = 0.3,
+        transformer_dropout: float = 0.1,
+        static_hidden: int = 64,
+        dynamic_hidden: int = 32,
+        fusion_hidden: int = 64,
     ):
         super().__init__()
 
@@ -34,13 +39,13 @@ class LiveDraftBERT(nn.Module):
         self.hero_emb = nn.Embedding(vocab_size, d_model, padding_idx=0)
         self.action_emb = nn.Embedding(5, d_model, padding_idx=0)
         self.pos_emb = nn.Embedding(max_seq_len, d_model)
-        self.emb_dropout = nn.Dropout(0.3)
+        self.emb_dropout = nn.Dropout(dropout)
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=nhead,
             dim_feedforward=d_model * 4,
-            dropout=0.1,
+            dropout=transformer_dropout,
             batch_first=True,
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
@@ -48,25 +53,25 @@ class LiveDraftBERT(nn.Module):
         # --- Branch 2: Static MLP (pre-game aggregates) ---
         self.static_mlp = nn.Sequential(
             nn.LayerNorm(num_static_features),
-            nn.Linear(num_static_features, 64),
+            nn.Linear(num_static_features, static_hidden),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(dropout),
         )
 
         # --- Branch 3: Dynamic MLP (live game state) ---
         self.dynamic_mlp = nn.Sequential(
             nn.LayerNorm(num_dynamic_features),
-            nn.Linear(num_dynamic_features, 32),
+            nn.Linear(num_dynamic_features, dynamic_hidden),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(dropout),
         )
 
-        # --- Fusion Head (128 + 64 + 32 = 224 → 64 → 1) ---
+        # --- Fusion Head ---
         self.fusion_head = nn.Sequential(
-            nn.Linear(d_model + 64 + 32, 64),
+            nn.Linear(d_model + static_hidden + dynamic_hidden, fusion_hidden),
             nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(64, 1),
+            nn.Dropout(dropout),
+            nn.Linear(fusion_hidden, 1),
         )
 
     def forward(self, heroes, actions, static_features, dynamic_features):

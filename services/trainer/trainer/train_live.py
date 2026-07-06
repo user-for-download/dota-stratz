@@ -43,6 +43,9 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
         vocab_size=cfg.max_hero_id + 5, d_model=cfg.d_model, nhead=cfg.nhead,
         num_layers=cfg.num_layers, num_static_features=metadata["n_static_features"],
         num_dynamic_features=metadata["n_dynamic_features"], max_seq_len=cfg.max_seq_len,
+        dropout=cfg.dropout, transformer_dropout=cfg.transformer_dropout,
+        static_hidden=cfg.static_hidden, dynamic_hidden=cfg.dynamic_hidden,
+        fusion_hidden=cfg.fusion_hidden,
     ).to(device)
 
     logger.info("LiveDraftBERT: %d parameters", sum(p.numel() for p in model.parameters()))
@@ -50,7 +53,9 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
     # 3. Training setup
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     criterion = nn.BCEWithLogitsLoss()
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", patience=2, factor=0.5)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", patience=cfg.lr_scheduler_patience, factor=cfg.lr_scheduler_factor,
+    )
 
     # 4. Training loop — direct tensor slicing
     best_val_loss = float("inf")
@@ -81,13 +86,13 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
             logits = model(heroes, actions, static, dynamic)
             loss = criterion(logits, labels)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             optimizer.step()
 
             train_loss += loss.item() * len(labels)
             train_n += len(labels)
 
-            if (batch_i + 1) % 50 == 0:
+            if (batch_i + 1) % cfg.log_interval == 0:
                 logger.info("  batch %d/%d | samples %d/%d | loss=%.4f",
                             batch_i + 1, n_batches, train_n, n_train, train_loss / train_n)
 
@@ -133,7 +138,7 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
             logger.info("Saved: val_loss=%.4f -> %s", best_val_loss, weights_path)
         else:
             patience_counter += 1
-            if patience_counter >= 5:
+            if patience_counter >= cfg.early_stop_patience:
                 logger.info("Early stopping at epoch %d", epoch + 1)
                 break
 
@@ -151,6 +156,9 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
         "model_params": sum(p.numel() for p in model.parameters()),
         "max_seq_len": cfg.max_seq_len, "max_hero_id": cfg.max_hero_id,
         "d_model": cfg.d_model, "nhead": cfg.nhead, "num_layers": cfg.num_layers,
+        "dropout": cfg.dropout, "transformer_dropout": cfg.transformer_dropout,
+        "static_hidden": cfg.static_hidden, "dynamic_hidden": cfg.dynamic_hidden,
+        "fusion_hidden": cfg.fusion_hidden,
     }
 
     with open(model_dir / f"live_model_patch_{patch_id}_meta.json", "w") as f:
