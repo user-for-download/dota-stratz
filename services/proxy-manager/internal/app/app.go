@@ -487,7 +487,9 @@ func bootstrap(
 	}
 
 	if len(combined) == 0 {
-		logger.Log.Warn("Bootstrap: no proxies obtained from any source")
+		logger.Log.Error("Bootstrap: no proxies obtained from any source — pool will be empty until refreshLoop",
+			zap.String("file_path", cfg.ProxyFilePath),
+			zap.String("remote_url", cfg.RefreshSourceURL))
 		return
 	}
 

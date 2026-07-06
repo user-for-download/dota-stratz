@@ -41,6 +41,12 @@
   </div>
 </div>
 
+<!-- Navigation tabs -->
+<div class="nav-tabs">
+  <a href="#" id="draftPageLink" class="nav-tab active">Draft Predictor</a>
+  <a href="#" id="livePageLink" class="nav-tab">Live Match Prediction</a>
+</div>
+
 <!-- Team selectors -->
 <div class="team-select-bar">
   <div class="team-select">
@@ -143,6 +149,53 @@
 </div>
 </div><!-- end draftArea -->
 
+<!-- Live Match Prediction Area (hidden by default) -->
+<div id="liveArea" style="display:none">
+  <div class="live-header">
+    <h2>Live Match Prediction</h2>
+    <div id="liveStatus" class="live-status">Disconnected</div>
+    <button class="btn" onclick="fetchLiveMatches()">Refresh</button>
+  </div>
+
+  <!-- Match List -->
+  <div id="liveMatchList" class="live-match-list"></div>
+
+  <!-- Prediction Panel -->
+  <div id="livePredictionPanel" class="live-prediction-panel" style="display:none">
+    <button class="btn" onclick="backToMatchList()" style="margin-bottom:12px">← Back to matches</button>
+
+    <!-- Win Probability Gauge -->
+    <div class="live-gauge-container">
+      <div class="live-team-label radiant">
+        <span id="liveRadiantName">Radiant</span>
+        <span id="liveWinProb" class="live-prob">50%</span>
+      </div>
+      <div id="liveWinGauge" class="live-gauge">
+        <div id="liveWinGaugeFill" class="live-gauge-fill"></div>
+      </div>
+      <div class="live-team-label dire">
+        <span id="liveDireName">Dire</span>
+        <span id="liveDirePct" class="live-prob">50%</span>
+      </div>
+    </div>
+
+    <!-- Game Time -->
+    <div class="live-game-time" id="liveGameTime">0:00</div>
+
+    <!-- Timeline Chart -->
+    <div class="live-timeline-container">
+      <div class="live-timeline-label">Win Probability Over Time</div>
+      <canvas id="liveTimeline" class="live-timeline"></canvas>
+    </div>
+
+    <!-- Feature Contributions -->
+    <div class="live-features-container">
+      <div class="live-features-title">Key Factors</div>
+      <div id="liveFeatures" class="live-features"></div>
+    </div>
+  </div>
+</div>
+
 <!-- Footer -->
 <div class="footer">
   <span id="footerInfo">0 heroes loaded</span>
@@ -150,5 +203,6 @@
 </div>
 
     <script src="app.js" async></script>
+    <script src="live.js" async></script>
     </body>
 </html>

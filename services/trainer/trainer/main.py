@@ -2,14 +2,17 @@
 
 Usage:
 
-    # Train for a specific patch
+    # Train DraftBERT for a specific patch
     python -m trainer.main --patch 134
 
-    # Train for latest patch (auto-detect)
-    python -m trainer.main
+    # Train LiveDraftBERT for live match prediction
+    python -m trainer.main --patch 134 --live
 
     # Populate aggregates only (no training)
     python -m trainer.main --patch 134 --agg-only
+
+    # Skip aggregates and go straight to training
+    python -m trainer.main --patch 134 --skip-agg
 
     # Override model directory
     python -m trainer.main --patch 134 --model-dir /tmp/models
@@ -53,6 +56,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Only populate aggregate tables, skip model training",
     )
     parser.add_argument(
+        "--skip-agg",
+        action="store_true",
+        help="Skip populating aggregate tables (use if DB is already up to date)",
+    )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Train LiveDraftBERT for live match prediction (instead of DraftBERT)",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable debug logging",
@@ -88,22 +101,34 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("Resolved patch ID: %s", patch_id)
 
         # Step 1: Populate aggregate tables
-        logger.info("Step 1: Populating aggregate tables ...")
-        counts = populate_all(cfg, conn)
-        for name, cnt in counts.items():
-            logger.info("  %s: %d rows", name, cnt)
+        if not args.skip_agg:
+            logger.info("Step 1: Populating aggregate tables ...")
+            counts = populate_all(cfg, conn)
+            for name, cnt in counts.items():
+                logger.info("  %s: %d rows", name, cnt)
 
-        if args.agg_only:
-            logger.info("Aggregate population complete (--agg-only). Skipping training.")
-            return 0
+            if args.agg_only:
+                logger.info("Aggregate population complete (--agg-only). Skipping training.")
+                return 0
+        else:
+            logger.info("Step 1 Skipped (--skip-agg provided). Using existing database aggregates.")
 
         # Step 2: Train model
-        logger.info("Step 2: Training PyTorch DraftBERT model ...")
-        best_loss = train_pytorch_model(cfg, eng)
-        logger.info(
-            "Training complete. Patch %d | val_loss: %.4f",
-            patch_id, best_loss,
-        )
+        if args.live:
+            logger.info("Step 2: Training LiveDraftBERT model ...")
+            from .train_live import train_live_model
+            best_loss = train_live_model(cfg, eng)
+            logger.info(
+                "LiveDraftBERT training complete. Patch %d | val_loss: %.4f",
+                patch_id, best_loss,
+            )
+        else:
+            logger.info("Step 2: Training PyTorch DraftBERT model ...")
+            best_loss = train_pytorch_model(cfg, eng)
+            logger.info(
+                "Training complete. Patch %d | val_loss: %.4f",
+                patch_id, best_loss,
+            )
 
     except Exception:
         logger.exception("Training pipeline failed")

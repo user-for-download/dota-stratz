@@ -370,8 +370,12 @@ run-%: env-sync ## Run service locally, e.g. make run-parser
 # ==============================================================================
 
 .PHONY: train
-train: ## Train LightGBM model: make train PATCH=<id> (default: auto-detect)
+train: ## Train PyTorch DraftBERT model: make train PATCH=<id> (default: auto-detect)
 	$(COMPOSE) --profile db --profile train run --rm trainer $(if $(PATCH),--patch $(PATCH),)
+
+.PHONY: train-live
+train-live: ## Train LiveDraftBERT for live match prediction: make train-live PATCH=<id>
+	$(COMPOSE) --profile db --profile train run --rm trainer $(if $(PATCH),--patch $(PATCH),) --live
 
 .PHONY: train-agg-only
 train-agg-only: ## Populate aggregate tables only: make train-agg-only PATCH=<id>

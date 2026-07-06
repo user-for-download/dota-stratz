@@ -38,6 +38,8 @@ from .models import (
     ReloadResponse,
 )
 from .predictor import Predictor
+from .live_predict import LivePredictor, fetch_live_matches, fetch_match_state, compute_dynamic_features
+from .live_features import DYNAMIC_FEATURE_COLUMNS
 
 # Logging setup at module level so it applies regardless of ASGI server
 # behaviour — basicConfig is a no-op after the root logger has handlers.
@@ -57,13 +59,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # endpoint access via request.app.state.
     cfg = APIConfig()
     predictor = Predictor(cfg)
+    live_predictor = LivePredictor(cfg.model_dir)
     app.state.cfg = cfg
     app.state.predictor = predictor
+    app.state.live_predictor = live_predictor
 
     init_pool(cfg)
     n_loaded = predictor.reload_all()
     logger.info(
-        "API started on %s:%s | %d models loaded",
+        "API started on %s:%s | %d DraftBERT models loaded",
         cfg.host, cfg.port, n_loaded,
     )
     yield
@@ -229,6 +233,150 @@ async def predict_match(req: MatchForecastRequest, request: Request):
     return {
         "radiant_win_probability": round(rad_win_prob, 4),
         "dire_win_probability": round(1.0 - rad_win_prob, 4),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Live Match Prediction
+# ---------------------------------------------------------------------------
+
+class LiveMatchListItem(BaseModel):
+    match_id: int
+    duration: int
+    game_mode: int | None = None
+    radiant_team: str
+    dire_team: str
+    league_id: int | None = None
+    spectators: int = 0
+
+
+class LivePredictRequest(BaseModel):
+    match_id: int
+    minute: int = 0
+
+
+@app.get("/api/live/matches")
+def list_live_matches():
+    """List currently live matches from OpenDota."""
+    raw = fetch_live_matches()
+    matches = []
+    for m in raw:
+        matches.append({
+            "match_id": m.get("match_id"),
+            "duration": m.get("duration", 0),
+            "game_mode": m.get("game_mode"),
+            "radiant_team": m.get("radiant_name", "Radiant"),
+            "dire_team": m.get("dire_name", "Dire"),
+            "league_id": m.get("league_id"),
+            "spectators": m.get("spectators", 0),
+        })
+    return {"matches": matches}
+
+
+@app.post("/api/live/predict")
+def live_predict(req: LivePredictRequest, request: Request):
+    """Predict win probability for a live match at a given minute."""
+    live_pred: LivePredictor = request.app.state.live_predictor
+
+    match_data = fetch_match_state(req.match_id)
+    if not match_data:
+        raise HTTPException(status_code=404, detail="Match not found or not available")
+
+    # Compute dynamic features
+    features = compute_dynamic_features(match_data, req.minute)
+
+    # Build draft sequence from match data
+    picks_bans = match_data.get("picks_bans", [])
+    if not picks_bans:
+        # Fallback: use player hero picks
+        heroes = []
+        actions = []
+        for player in match_data.get("players", []):
+            hid = player.get("hero_id", 0)
+            slot = player.get("player_slot", 0)
+            team = 1 if slot >= 128 else 0
+            heroes.append(hid)
+            actions.append(team * 1 + 3)  # Pick action
+    else:
+        heroes = [pb["hero_id"] for pb in picks_bans]
+        actions = [pb["team"] * 1 + (1 if pb.get("is_pick", True) else 0) * 2 + 1 for pb in picks_bans]
+
+    # Static features: use zeros for now (would need ml.*_agg queries in production)
+    static_feats = [0.0] * 59
+
+    patch_id = match_data.get("patch", 60)
+
+    try:
+        result = live_pred.predict(
+            patch_id=patch_id,
+            match_id=req.match_id,
+            heroes=heroes,
+            actions=actions,
+            static_feats=static_feats,
+            dynamic_feats=[features[col] for col in DYNAMIC_FEATURE_COLUMNS],
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    return {
+        "match_id": req.match_id,
+        "minute": req.minute,
+        **result,
+        "features": features,
+    }
+
+
+@app.get("/api/live/predictions/{match_id}")
+def get_prediction_timeline(match_id: int, request: Request):
+    """Get win probability at every minute for a match (historical or live)."""
+    live_pred: LivePredictor = request.app.state.live_predictor
+
+    match_data = fetch_match_state(match_id)
+    if not match_data:
+        raise HTTPException(status_code=404, detail="Match not found")
+
+    duration = match_data.get("duration", 0)
+    max_minute = min(duration // 60, 60)
+    patch_id = match_data.get("patch", 60)
+
+    # Build draft sequence
+    picks_bans = match_data.get("picks_bans", [])
+    if picks_bans:
+        heroes = [pb["hero_id"] for pb in picks_bans]
+        actions = [pb["team"] * 1 + (1 if pb.get("is_pick", True) else 0) * 2 + 1 for pb in picks_bans]
+    else:
+        heroes = []
+        actions = []
+
+    static_feats = [0.0] * 59
+
+    timeline = []
+    for minute in range(1, max_minute + 1):
+        features = compute_dynamic_features(match_data, minute)
+        try:
+            pred = live_pred.predict(
+                patch_id=patch_id,
+                match_id=match_id,
+                heroes=heroes,
+                actions=actions,
+                static_feats=static_feats,
+                dynamic_feats=[features[col] for col in DYNAMIC_FEATURE_COLUMNS],
+            )
+            timeline.append({
+                "minute": minute,
+                "radiant_win_probability": pred["radiant_win_probability"],
+                "radiant_gold_adv": features.get("radiant_gold_adv", 0),
+                "radiant_xp_adv": features.get("radiant_xp_adv", 0),
+                "kill_diff": features.get("kill_diff", 0),
+                "tower_diff": features.get("tower_diff", 0),
+            })
+        except Exception:
+            continue
+
+    return {
+        "match_id": match_id,
+        "duration": duration,
+        "timeline": timeline,
     }
 
 
@@ -408,3 +556,110 @@ async def ws_draft(websocket: WebSocket):
         logger.info("WebSocket client disconnected")
     except Exception as e:
         logger.warning("WebSocket error: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# WebSocket: Live match prediction streaming
+# ---------------------------------------------------------------------------
+
+@app.websocket("/ws/live")
+async def ws_live(websocket: WebSocket):
+    """Stream live match predictions in real-time over WebSocket.
+
+    Client sends: {"match_id": 12345, "interval": 10}
+    Server streams: {"type": "prediction", "minute": N, "radiant_win_probability": 0.65, ...}
+
+    Polls OpenDota every `interval` seconds and pushes updated predictions.
+    """
+    await websocket.accept()
+    live_pred: LivePredictor = websocket.app.state.live_predictor
+
+    try:
+        while True:
+            raw = await websocket.receive_json()
+            match_id = raw.get("match_id")
+            interval = raw.get("interval", 10)
+
+            if not match_id:
+                await websocket.send_json({"type": "error", "detail": "match_id required"})
+                continue
+
+            loop = asyncio.get_running_loop()
+
+            # Poll loop
+            while True:
+                try:
+                    match_data = await loop.run_in_executor(
+                        None, fetch_match_state, match_id
+                    )
+                    if not match_data:
+                        await websocket.send_json({"type": "error", "detail": "Match not available"})
+                        break
+
+                    duration = match_data.get("duration", 0)
+                    minute = duration // 60
+                    patch_id = match_data.get("patch", 60)
+
+                    # Compute features in executor
+                    features = await loop.run_in_executor(
+                        None, compute_dynamic_features, match_data, minute
+                    )
+
+                    # Build draft
+                    picks_bans = match_data.get("picks_bans", [])
+                    if picks_bans:
+                        heroes = [pb["hero_id"] for pb in picks_bans]
+                        actions_list = [pb["team"] * 1 + (1 if pb.get("is_pick", True) else 0) * 2 + 1 for pb in picks_bans]
+                    else:
+                        heroes = []
+                        actions_list = []
+
+                    static_feats = [0.0] * 59
+                    dyn_feats = [features[col] for col in DYNAMIC_FEATURE_COLUMNS]
+
+                    # Predict in executor
+                    pred = await loop.run_in_executor(
+                        None,
+                        lambda: live_pred.predict(
+                            patch_id=patch_id,
+                            match_id=match_id,
+                            heroes=heroes,
+                            actions=actions_list,
+                            static_feats=static_feats,
+                            dynamic_feats=dyn_feats,
+                        ),
+                    )
+
+                    is_live = duration > 0 and duration < 3600  # Less than 1 hour
+
+                    await websocket.send_json({
+                        "type": "prediction",
+                        "match_id": match_id,
+                        "minute": minute,
+                        "duration": duration,
+                        "is_live": is_live,
+                        **pred,
+                        "features": {
+                            "radiant_gold_adv": features.get("radiant_gold_adv", 0),
+                            "radiant_xp_adv": features.get("radiant_xp_adv", 0),
+                            "kill_diff": features.get("kill_diff", 0),
+                            "tower_diff": features.get("tower_diff", 0),
+                            "tf_diff": features.get("tf_diff", 0),
+                        },
+                    })
+
+                    if not is_live:
+                        break  # Match ended
+
+                    await asyncio.sleep(interval)
+
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    await websocket.send_json({"type": "error", "detail": str(e)})
+                    await asyncio.sleep(interval)
+
+    except WebSocketDisconnect:
+        logger.info("Live prediction WS client disconnected")
+    except Exception as e:
+        logger.warning("Live prediction WS error: %s", e)

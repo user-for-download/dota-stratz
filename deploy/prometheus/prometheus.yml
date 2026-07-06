@@ -41,12 +41,6 @@ scrape_configs:
         labels:
           service: 'rabbitmq'
 
-  - job_name: 'ml'
-    static_configs:
-      - targets: ['api:8080']
-        labels:
-          service: 'ml'
-
   - job_name: 'prometheus'
     static_configs:
       - targets: ['localhost:9092']

@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # SQL query: build training features
 # ---------------------------------------------------------------------------
 
-def training_features_sql(extra: str = "") -> str:
+def training_features_sql(extra: str = "", lookback: int = 0) -> str:
     """Return the training features SQL with optional match filters.
 
     Parameters
@@ -56,7 +56,14 @@ def training_features_sql(extra: str = "") -> str:
         ``matches`` table.  Build via ``_match_extra_where(cfg)`` from
         ``aggregates.py`` to keep filters consistent with aggregate
         population.
+    lookback : int
+        Number of previous patches to include (e.g., 2 means patches 58-60).
     """
+    if lookback > 0:
+        patch_cond = f"m.patch >= %(patch_id)s - {lookback} AND m.patch <= %(patch_id)s"
+    else:
+        patch_cond = "m.patch = %(patch_id)s"
+
     return f"""
     WITH draft_slots AS (
         SELECT
@@ -72,8 +79,6 @@ def training_features_sql(extra: str = "") -> str:
             m.patch AS patch_id,
             p.account_id,
             p.player_slot,
-            -- Per-team pick ordinal (NULL for bans) — used to join
-            -- ml.hero_draft_slot_agg for pick-position win rate.
             CASE WHEN pb.is_pick THEN
                 ROW_NUMBER() OVER (
                     PARTITION BY pb.match_id, pb.team, pb.is_pick
@@ -86,7 +91,7 @@ def training_features_sql(extra: str = "") -> str:
                ON p.match_id = pb.match_id
               AND p.hero_id = pb.hero_id
               AND p.is_radiant = (pb.team = 0)
-        WHERE m.patch = %(patch_id)s
+        WHERE {patch_cond}
           AND m.radiant_win IS NOT NULL
           AND m.duration >= 900
           {extra}

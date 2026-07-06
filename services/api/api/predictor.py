@@ -207,8 +207,10 @@ class Predictor:
                 radiant_team_id, dire_team_id, batch=batch,
             )
             mc_prob = top.get("mc_win_probability")
-            mc_str = f" | MCTS Rollout WR: {mc_prob*100:.1f}%" if mc_prob else ""
-            reasoning = (base_reasoning or "") + mc_str
+            wc_prob = top.get("worst_case_nemesis_wr")
+            mc_str = f" | MC WR: {mc_prob*100:.1f}%" if mc_prob else ""
+            wc_str = f" | Worst-Case Counter WR: {wc_prob*100:.1f}%" if wc_prob else ""
+            reasoning = (base_reasoning or "") + mc_str + wc_str
 
         return recs, reasoning
 

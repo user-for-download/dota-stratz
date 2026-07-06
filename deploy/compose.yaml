@@ -82,7 +82,7 @@ services:
         deploy:
             resources:
                 limits:
-                    memory: 512M
+                    memory: 1G
                     cpus: "1.0"
     redis:
         profiles:
@@ -351,6 +351,9 @@ services:
         environment:
             - POSTGRES_HOST=postgres
             - TRAINER_MODEL_DIR=/models
+            - OMP_NUM_THREADS=${OMP_NUM_THREADS:-12}
+            - MKL_NUM_THREADS=${MKL_NUM_THREADS:-12}
+            - OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-12}
         volumes:
             - "ml-models:/models"
         depends_on:
