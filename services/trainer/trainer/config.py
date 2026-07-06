@@ -57,6 +57,13 @@ class TrainerConfig:
     nhead: int = int(os.getenv("TRAINER_NHEAD", "4"))
     num_layers: int = int(os.getenv("TRAINER_NUM_LAYERS", "3"))
 
+    def __post_init__(self):
+        if self.d_model % self.nhead != 0:
+            raise ValueError(
+                f"TRAINER_D_MODEL ({self.d_model}) must be divisible by "
+                f"TRAINER_NHEAD ({self.nhead})"
+            )
+
     # ── Model Architecture ───────────────────────────────────────────────
     dropout: float = float(os.getenv("TRAINER_DROPOUT", "0.3"))
     """Dropout rate for embedding, MLP, and fusion layers."""

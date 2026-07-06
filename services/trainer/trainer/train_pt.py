@@ -76,6 +76,7 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
             logits = model(heroes, actions, tabular)
             loss = criterion(logits, labels)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             optimizer.step()
             train_loss += loss.item()
 

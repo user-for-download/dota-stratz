@@ -208,8 +208,8 @@ class Predictor:
             )
             mc_prob = top.get("mc_win_probability")
             wc_prob = top.get("worst_case_nemesis_wr")
-            mc_str = f" | MC WR: {mc_prob*100:.1f}%" if mc_prob else ""
-            wc_str = f" | Worst-Case Counter WR: {wc_prob*100:.1f}%" if wc_prob else ""
+            mc_str = f" | MC WR: {mc_prob*100:.1f}%" if mc_prob is not None else ""
+            wc_str = f" | Worst-Case Counter WR: {wc_prob*100:.1f}%" if wc_prob is not None else ""
             reasoning = (base_reasoning or "") + mc_str + wc_str
 
         return recs, reasoning

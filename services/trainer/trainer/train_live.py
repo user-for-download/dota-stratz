@@ -119,7 +119,7 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
                 val_n += len(labels)
                 val_correct += (torch.sigmoid(logits) > 0.5).float().eq(labels).sum().item()
 
-        val_loss /= val_n
+        val_loss = val_loss / val_n if val_n > 0 else float("inf")
         val_acc = val_correct / val_n if val_n > 0 else 0.0
         scheduler.step(val_loss)
 

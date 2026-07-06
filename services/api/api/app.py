@@ -366,9 +366,8 @@ def get_prediction_timeline(match_id: int, request: Request):
                 "minute": minute,
                 "radiant_win_probability": pred["radiant_win_probability"],
                 "radiant_gold_adv": features.get("radiant_gold_adv", 0),
-                "radiant_xp_adv": features.get("radiant_xp_adv", 0),
-                "kill_diff": features.get("kill_diff", 0),
-                "tower_diff": features.get("tower_diff", 0),
+                        "radiant_xp_adv": features.get("radiant_xp_adv", 0),
+                        "tower_diff": features.get("tower_diff", 0),
             })
         except Exception:
             continue
@@ -642,7 +641,6 @@ async def ws_live(websocket: WebSocket):
                         "features": {
                             "radiant_gold_adv": features.get("radiant_gold_adv", 0),
                             "radiant_xp_adv": features.get("radiant_xp_adv", 0),
-                            "kill_diff": features.get("kill_diff", 0),
                             "tower_diff": features.get("tower_diff", 0),
                             "tf_diff": features.get("tf_diff", 0),
                         },

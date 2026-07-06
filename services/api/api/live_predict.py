@@ -236,16 +236,29 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
     for tf in match_data.get("teamfights", []):
         if tf.get("start_time", 0) > current_minute * 60:
             continue
-        for pid in range(5):
-            pdata = tf.get("players", {}).get(str(pid), {})
-            if pdata.get("gold_delta", 0) > 0:
-                radiant_tf_wins += 1
-                break
-        for pid in range(5, 10):
-            pdata = tf.get("players", {}).get(str(pid), {})
-            if pdata.get("gold_delta", 0) > 0:
-                dire_tf_wins += 1
-                break
+        players = tf.get("players", [])
+        if isinstance(players, list):
+            for pid in range(min(5, len(players))):
+                pdata = players[pid] if isinstance(players[pid], dict) else {}
+                if pdata.get("gold_delta", 0) > 0:
+                    radiant_tf_wins += 1
+                    break
+            for pid in range(5, min(10, len(players))):
+                pdata = players[pid] if isinstance(players[pid], dict) else {}
+                if pdata.get("gold_delta", 0) > 0:
+                    dire_tf_wins += 1
+                    break
+        elif isinstance(players, dict):
+            for pid in range(5):
+                pdata = players.get(str(pid), {})
+                if pdata.get("gold_delta", 0) > 0:
+                    radiant_tf_wins += 1
+                    break
+            for pid in range(5, 10):
+                pdata = players.get(str(pid), {})
+                if pdata.get("gold_delta", 0) > 0:
+                    dire_tf_wins += 1
+                    break
 
     # Power Spikes: BKB, Blink, Aghs, Rapier
     radiant_bkb = dire_bkb = 0

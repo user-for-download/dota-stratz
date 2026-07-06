@@ -16,7 +16,7 @@ class LiveDraftBERT(nn.Module):
         nhead: int = 4,
         num_layers: int = 3,
         num_static_features: int = 59,
-        num_dynamic_features: int = 15,
+        num_dynamic_features: int = 24,
         max_seq_len: int = 50,
         dropout: float = 0.3,
         transformer_dropout: float = 0.1,
@@ -88,3 +88,21 @@ class LiveDraftBERT(nn.Module):
         fused = torch.cat([seq_repr, static_repr, dynamic_repr], dim=1)
         logits = self.fusion_head(fused).squeeze(-1)
         return logits
+
+    def encode_draft(self, heroes, actions, static_features):
+        B, S = heroes.size()
+        positions = torch.arange(S, device=heroes.device).unsqueeze(0).expand(B, S)
+
+        x = self.hero_emb(heroes) + self.action_emb(actions) + self.pos_emb(positions)
+        x = self.emb_dropout(x)
+        pad_mask = (heroes == 0)
+        out = self.transformer(x, src_key_padding_mask=pad_mask)
+
+        mask_expanded = pad_mask.unsqueeze(-1).expand_as(out)
+        out = out.masked_fill(mask_expanded, 0.0)
+        sum_embeddings = out.sum(dim=1)
+        valid_lengths = (~pad_mask).sum(dim=1, keepdim=True).float().clamp(min=1.0)
+        seq_repr = sum_embeddings / valid_lengths
+
+        static_repr = self.static_mlp(static_features)
+        return seq_repr, static_repr
