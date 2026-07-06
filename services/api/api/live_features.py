@@ -1,7 +1,7 @@
 """Dynamic feature columns for live match prediction.
 
 Shared between trainer (training) and API (inference).
-26 dynamic features capturing the 5 true pillars of live Dota 2.
+24 dynamic features capturing the 5 true pillars of live Dota 2.
 """
 
 DYNAMIC_FEATURE_COLUMNS = [

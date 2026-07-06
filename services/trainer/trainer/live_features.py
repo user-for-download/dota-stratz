@@ -7,7 +7,7 @@ Extracts per-minute dynamic features capturing the 5 true pillars of live Dota 2
 4. Win Conditions (Mega Creeps)
 5. Vision & Map Control (Wards)
 
-26 dynamic features that capture actual game state, not just gold.
+24 dynamic features that capture actual game state, not just gold.
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ WITH match_minutes AS (
     SELECT m.match_id, m.duration, m.radiant_win,
            generate_series(0, m.duration / 60) AS minute
     FROM matches m
-    WHERE m.patch >= %(patch_id)s - 2 AND m.patch <= %(patch_id)s
+    WHERE m.patch >= %(patch_id)s - %(lookback)s AND m.patch <= %(patch_id)s
       AND m.radiant_win IS NOT NULL
       AND m.duration >= 600
 ),
@@ -184,11 +184,11 @@ ORDER BY mm.match_id, mm.minute
 """
 
 
-def extract_dynamic_features(engine, patch_id: int) -> pd.DataFrame:
+def extract_dynamic_features(engine, patch_id: int, lookback: int = 2) -> pd.DataFrame:
     """Extract per-minute dynamic features capturing true game state."""
-    logger.info("Extracting per-minute dynamic features for patch %s (lookback 2) ...", patch_id)
+    logger.info("Extracting per-minute dynamic features for patch %s (lookback %d) ...", patch_id, lookback)
 
-    df = pd.read_sql(EXTRACT_DYNAMIC_SQL, engine, params={"patch_id": patch_id})
+    df = pd.read_sql(EXTRACT_DYNAMIC_SQL, engine, params={"patch_id": patch_id, "lookback": lookback})
 
     if df.empty:
         raise ValueError(f"No data found for patch {patch_id}")

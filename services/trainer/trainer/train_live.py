@@ -54,6 +54,7 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
 
     # 4. Training loop — direct tensor slicing
     best_val_loss = float("inf")
+    best_val_acc = 0.0
     patience_counter = 0
     n_train = len(train_ds)
     n_val = len(val_ds)
@@ -124,24 +125,12 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            best_val_acc = val_acc
             patience_counter = 0
 
-            torch.save(model.state_dict(), model_dir / f"draftbert_live_weights_{patch_id}.pt")
-
-            # TorchScript export — use deepcopy to preserve exact parameter names
-            import copy
-            model_cpu = copy.deepcopy(model).cpu().eval()
-
-            seq_len = cfg.max_seq_len
-            dummy_h = torch.tensor([[5, 10, 15] + [0] * (seq_len - 3)], dtype=torch.long)
-            dummy_a = torch.tensor([[3, 4, 3] + [0] * (seq_len - 3)], dtype=torch.long)
-            dummy_s = torch.zeros((1, metadata["n_static_features"]), dtype=torch.float32)
-            dummy_d = torch.zeros((1, metadata["n_dynamic_features"]), dtype=torch.float32)
-
-            traced = torch.jit.trace(model_cpu, (dummy_h, dummy_a, dummy_s, dummy_d), check_trace=False)
-            compiled_path = model_dir / f"draftbert_live_compiled_{patch_id}.pt"
-            traced.save(str(compiled_path))
-            logger.info("Saved: val_loss=%.4f -> %s", best_val_loss, compiled_path)
+            weights_path = model_dir / f"draftbert_live_weights_{patch_id}.pt"
+            torch.save(model.state_dict(), weights_path)
+            logger.info("Saved: val_loss=%.4f -> %s", best_val_loss, weights_path)
         else:
             patience_counter += 1
             if patience_counter >= 5:
@@ -150,18 +139,18 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
 
     meta = {
         "patch_id": patch_id,
-        "model_filename": f"draftbert_live_compiled_{patch_id}.pt",
         "weights_filename": f"draftbert_live_weights_{patch_id}.pt",
         "n_static_features": metadata["n_static_features"],
         "n_dynamic_features": metadata["n_dynamic_features"],
         "dynamic_feature_columns": DYNAMIC_FEATURE_COLUMNS,
-        "val_loss": best_val_loss, "val_acc": val_acc,
+        "val_loss": best_val_loss, "val_acc": best_val_acc,
         "n_train_matches": metadata["n_train_matches"],
         "n_val_matches": metadata["n_val_matches"],
         "n_train_samples": metadata["n_train_samples"],
         "n_val_samples": metadata["n_val_samples"],
         "model_params": sum(p.numel() for p in model.parameters()),
         "max_seq_len": cfg.max_seq_len, "max_hero_id": cfg.max_hero_id,
+        "d_model": cfg.d_model, "nhead": cfg.nhead, "num_layers": cfg.num_layers,
     }
 
     with open(model_dir / f"live_model_patch_{patch_id}_meta.json", "w") as f:
@@ -191,7 +180,7 @@ def _upsert_model_meta(cfg: TrainerConfig, patch_id: int, meta: dict):
                     val_auc = EXCLUDED.val_auc, val_logloss = EXCLUDED.val_logloss,
                     n_matches = EXCLUDED.n_matches, n_samples = EXCLUDED.n_samples,
                     trained_at = NOW()""",
-                (patch_id, meta["model_filename"], meta["weights_filename"],
+                (patch_id, meta["weights_filename"], meta["weights_filename"],
                  json.dumps(meta["dynamic_feature_columns"]),
                  meta.get("val_acc"), meta.get("val_loss"),
                  meta["n_train_matches"] + meta["n_val_matches"],

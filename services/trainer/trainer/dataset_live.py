@@ -101,20 +101,21 @@ def load_live_dataset(cfg: TrainerConfig, engine, max_len: int = 50):
     logger.info("Draft data: %d matches", len(final_steps))
 
     # 2. Per-minute dynamic features
-    dynamic_df = extract_dynamic_features(engine, cfg.patch_id)
+    dynamic_df = extract_dynamic_features(engine, cfg.patch_id, cfg.lookback_patches)
 
     # 3. Build draft lookup: match_id → (hero_ids, actions, static_row)
+    # Use final_steps for static features (fully completed draft synergies/counters)
+    final_lookup = final_steps.set_index("match_id")
     draft_lookup = {}
-    for _, group in draft_df.groupby("match_id", sort=False):
-        mid = group["match_id"].iloc[0]
+    for mid, group in draft_df.groupby("match_id", sort=False):
         mh = group["hero_id"].astype(int).tolist()
         ma = (group["team"].astype(int) * 1 + group["is_pick"].astype(int) * 2 + 1).tolist()
-        mt = group[agg_cols].iloc[0].values.astype(np.float32)
-        ml = group["radiant_win"].iloc[0]
+        mt = final_lookup.loc[mid, fill_cols].values.astype(np.float32)
+        ml = final_lookup.loc[mid, "radiant_win"]
         draft_lookup[mid] = (mh, ma, mt, ml)
 
-    # 4. Chronological split by match start time
-    match_start = dynamic_df.groupby("match_id")["minute"].first().sort_values()
+    # 4. Chronological split by match start time (use draft_df start_time, not game minute)
+    match_start = draft_df.groupby("match_id")["start_time"].first().sort_values()
     match_ids_sorted = match_start.index
     n_train = int(len(match_ids_sorted) * (1 - cfg.val_ratio))
     train_matches = set(match_ids_sorted[:n_train])

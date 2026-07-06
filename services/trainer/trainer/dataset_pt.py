@@ -69,7 +69,7 @@ def load_sequence_dataset(cfg: TrainerConfig, engine, max_len: int = 50):
     """Load, clean, split, and augment sequence data for DraftBERT."""
     logger.info("Loading training data from DB for patch %s ...", cfg.patch_id)
 
-    df = pd.read_sql(training_features_sql(_match_extra_where(cfg)), engine, params={"patch_id": cfg.patch_id})
+    df = pd.read_sql(training_features_sql(_match_extra_where(cfg), lookback=cfg.lookback_patches), engine, params={"patch_id": cfg.patch_id})
 
     if df.empty:
         raise ValueError(f"No training data found for patch {cfg.patch_id}.")

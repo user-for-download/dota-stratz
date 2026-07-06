@@ -3,7 +3,7 @@
 Adds a Dynamic MLP branch to the existing DraftBERT architecture:
 - Branch 1: Transformer (draft sequence) → 128-dim [CACHED per match]
 - Branch 2: Static MLP (59 pre-game aggregates) → 64-dim [CACHED per match]
-- Branch 3: Dynamic MLP (15 live game state features) → 32-dim [RE-EVALUATED per tick]
+- Branch 3: Dynamic MLP (24 live game state features) → 32-dim [RE-EVALUATED per tick]
 - Fusion Head: Linear(128+64+32, 64) → ReLU → Dropout → Linear(64, 1)
 
 The Transformer and Static MLP embeddings are computed once at match start

@@ -17,6 +17,7 @@ import requests
 import torch
 
 from .live_features import DYNAMIC_FEATURE_COLUMNS
+from .model_live import LiveDraftBERT
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ OPENDOTA_MATCH_URL = "https://api.opendota.com/api/matches/{match_id}"
 
 
 class LivePredictor:
-    """Loads LiveDraftBERT TorchScript model for live match prediction.
+    """Loads LiveDraftBERT via state_dict for live match prediction.
 
     Caches transformer + static MLP embeddings per match to avoid
     re-evaluating the expensive branches every tick.
@@ -35,30 +36,39 @@ class LivePredictor:
         self._model_dir = Path(model_dir)
         self._models: dict[int, Any] = {}
         self._schemas: dict[int, dict] = {}
-        self._embedding_cache: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
 
     def load_model(self, patch_id: int) -> bool:
-        """Load compiled TorchScript model and feature schema."""
-        model_path = self._model_dir / f"draftbert_live_compiled_{patch_id}.pt"
-        if not model_path.exists():
-            logger.warning("Live model not found for patch %s: %s", patch_id, model_path)
+        """Load LiveDraftBERT from state_dict + meta JSON."""
+        import json
+
+        weights_path = self._model_dir / f"draftbert_live_weights_{patch_id}.pt"
+        meta_path = self._model_dir / f"live_model_patch_{patch_id}_meta.json"
+
+        if not weights_path.exists():
+            logger.warning("Live weights not found for patch %s: %s", patch_id, weights_path)
             return False
 
         try:
-            model = torch.jit.load(str(model_path), map_location="cpu")
-            model.eval()
-
-            # Load metadata
-            meta_path = self._model_dir / f"live_model_patch_{patch_id}_meta.json"
             schema = {}
             if meta_path.exists():
-                import json
                 with open(meta_path) as f:
                     schema = json.load(f)
 
+            model = LiveDraftBERT(
+                vocab_size=schema.get("max_hero_id", 160) + 5,
+                d_model=schema.get("d_model", 128),
+                nhead=schema.get("nhead", 4),
+                num_layers=schema.get("num_layers", 3),
+                num_static_features=schema.get("n_static_features", 59),
+                num_dynamic_features=schema.get("n_dynamic_features", 24),
+                max_seq_len=schema.get("max_seq_len", 50),
+            )
+            model.load_state_dict(torch.load(str(weights_path), map_location="cpu", weights_only=True))
+            model.eval()
+
             self._models[patch_id] = model
             self._schemas[patch_id] = schema
-            logger.info("Loaded LiveDraftBERT for patch %s", patch_id)
+            logger.info("Loaded LiveDraftBERT for patch %s (state_dict)", patch_id)
             return True
         except Exception:
             logger.exception("Failed to load live model for patch %s", patch_id)
@@ -166,7 +176,7 @@ def fetch_match_state(match_id: int) -> dict | None:
 
 
 def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str, float]:
-    """Compute 26 dynamic features capturing true game state from OpenDota data."""
+    """Compute 24 dynamic features capturing true game state from OpenDota data."""
     radiant_gold_adv = match_data.get("radiant_gold_adv", [])
     radiant_xp_adv = match_data.get("radiant_xp_adv", [])
 
@@ -281,14 +291,31 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
 
     # Active Vulnerability: Dead Heroes Now (rolling window by game phase)
     # Early (<20): dead ~1 min, Mid (20-40): dead ~2 min, Late (40+): dead ~3 min
-    radiant_dead_now = 0
-    dire_dead_now = 0
+    # Use kills_log to track recent kills (victims are "dead now")
+    kills_by_minute = {}  # {minute: (r_deaths, d_deaths)}
     for player in match_data.get("players", []):
         is_rad = player.get("player_slot", 0) < 128
-        deaths = player.get("deaths", 0)
-        # Approximate: heroes killed recently are "dead now"
-        # Use kills at current minute as proxy for active deaths
-        pass  # Would need per-death timestamps for precise calculation
+        for kill_entry in player.get("kills_log", []):
+            k_time = kill_entry.get("time", 0)
+            k_min = k_time // 60
+            if k_min not in kills_by_minute:
+                kills_by_minute[k_min] = [0, 0]
+            # This player got a kill → the VICTIM is on the opposite team
+            if is_rad:
+                kills_by_minute[k_min][1] += 1  # Dire hero died
+            else:
+                kills_by_minute[k_min][0] += 1  # Radiant hero died
+
+    radiant_dead_now = 0
+    dire_dead_now = 0
+    window = 1 if current_minute < 20 else (2 if current_minute < 40 else 3)
+    for m in range(max(0, current_minute - window + 1), current_minute + 1):
+        if m in kills_by_minute:
+            radiant_dead_now += kills_by_minute[m][0]
+            dire_dead_now += kills_by_minute[m][1]
+    # Cap at 5 (team size)
+    radiant_dead_now = min(radiant_dead_now, 5)
+    dire_dead_now = min(dire_dead_now, 5)
 
     # Momentum
     prev_gold = radiant_gold_adv[current_minute - 1] if current_minute > 0 and current_minute - 1 < len(radiant_gold_adv) else 0
