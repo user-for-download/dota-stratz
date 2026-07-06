@@ -165,15 +165,18 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
         json.dump(meta, f, indent=2)
 
     write_schema(model_dir, patch_id, cfg.max_hero_id, n_embeddings=0, max_seq_len=cfg.max_seq_len)
-    _upsert_model_meta(cfg, patch_id, meta)
+    _upsert_model_meta(cfg, patch_id, meta, engine)
 
     logger.info("Training complete. Best val_loss: %.4f", best_val_loss)
     return best_val_loss
 
 
-def _upsert_model_meta(cfg: TrainerConfig, patch_id: int, meta: dict):
-    import psycopg2
-    conn = psycopg2.connect(cfg.pg_dsn)
+def _upsert_model_meta(cfg: TrainerConfig, patch_id: int, meta: dict, engine=None):
+    if engine is not None:
+        conn = engine.raw_connection()
+    else:
+        import psycopg2
+        conn = psycopg2.connect(cfg.pg_dsn)
     try:
         with conn.cursor() as cur:
             cur.execute(

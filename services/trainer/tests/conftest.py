@@ -19,7 +19,7 @@ from trainer.features import feature_column_names
 # ---------------------------------------------------------------------------
 
 AGG_COLUMNS: list[str] = feature_column_names(include_onehot=False)
-"""The 58 aggregate feature columns used by feature functions (no one-hot)."""
+"""The 59 aggregate feature columns used by feature functions (no one-hot)."""
 
 
 # ---------------------------------------------------------------------------

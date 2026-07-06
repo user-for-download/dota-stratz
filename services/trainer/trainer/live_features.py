@@ -19,7 +19,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Dynamic feature columns (26 features)
+# Dynamic feature columns (24 features)
 # ---------------------------------------------------------------------------
 
 DYNAMIC_FEATURE_COLUMNS = [
