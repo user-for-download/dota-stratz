@@ -55,14 +55,21 @@ def score_bans(
 def classify_slot(draft_state: list[dict], next_slot: int) -> str:
     """Determine if the next draft slot is a pick or ban.
 
-    Uses the patch-specific draft pattern to classify.
+    Uses the draft pattern from draft_state.py to classify correctly
+    for any patch, not just patch 60.
     """
-    # This is a simplified version — the full implementation would use
-    # the DRAFT_PATTERNS from draft_state.py
-    picks_so_far = sum(1 for d in draft_state if d.get("is_pick"))
-    bans_so_far = sum(1 for d in draft_state if not d.get("is_pick"))
+    from .draft_state import DRAFT_PATTERNS
 
-    # Patch 60 pattern: 12 bans, 12 picks
-    if bans_so_far < 12:
+    # Default to modern Dota 2 pattern (20 actions: 8 bans + 12 picks)
+    pattern_str = DRAFT_PATTERNS.get(12, "B0 B1 B0 B1 P0 P1 P1 P0 B0 B1 B0 B1 P1 P0 P1 P0 B1 B0 P1 P0")
+    tokens = pattern_str.split()
+
+    if next_slot < len(tokens):
+        return "ban" if tokens[next_slot].startswith("B") else "pick"
+
+    # Fallback: count existing bans/picks
+    bans_so_far = sum(1 for d in draft_state if not d.get("is_pick"))
+    picks_so_far = sum(1 for d in draft_state if d.get("is_pick"))
+    if bans_so_far < 8:
         return "ban"
     return "pick"

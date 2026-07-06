@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -36,48 +37,53 @@ class LivePredictor:
         self._model_dir = Path(model_dir)
         self._models: dict[int, Any] = {}
         self._schemas: dict[int, dict] = {}
+        self._lock = threading.RLock()
 
     def load_model(self, patch_id: int) -> bool:
         """Load LiveDraftBERT from state_dict + meta JSON."""
         import json
 
-        weights_path = self._model_dir / f"draftbert_live_weights_{patch_id}.pt"
-        meta_path = self._model_dir / f"live_model_patch_{patch_id}_meta.json"
+        with self._lock:
+            if patch_id in self._models:
+                return True
 
-        if not weights_path.exists():
-            logger.warning("Live weights not found for patch %s: %s", patch_id, weights_path)
-            return False
+            weights_path = self._model_dir / f"draftbert_live_weights_{patch_id}.pt"
+            meta_path = self._model_dir / f"live_model_patch_{patch_id}_meta.json"
 
-        try:
-            schema = {}
-            if meta_path.exists():
-                with open(meta_path) as f:
-                    schema = json.load(f)
+            if not weights_path.exists():
+                logger.warning("Live weights not found for patch %s: %s", patch_id, weights_path)
+                return False
 
-            model = LiveDraftBERT(
-                vocab_size=schema.get("max_hero_id", 160) + 5,
-                d_model=schema.get("d_model", 128),
-                nhead=schema.get("nhead", 4),
-                num_layers=schema.get("num_layers", 3),
-                num_static_features=schema.get("n_static_features", 59),
-                num_dynamic_features=schema.get("n_dynamic_features", 24),
-                max_seq_len=schema.get("max_seq_len", 50),
-                dropout=schema.get("dropout", 0.3),
-                transformer_dropout=schema.get("transformer_dropout", 0.1),
-                static_hidden=schema.get("static_hidden", 64),
-                dynamic_hidden=schema.get("dynamic_hidden", 32),
-                fusion_hidden=schema.get("fusion_hidden", 64),
-            )
-            model.load_state_dict(torch.load(str(weights_path), map_location="cpu", weights_only=True))
-            model.eval()
+            try:
+                schema = {}
+                if meta_path.exists():
+                    with open(meta_path) as f:
+                        schema = json.load(f)
 
-            self._models[patch_id] = model
-            self._schemas[patch_id] = schema
-            logger.info("Loaded LiveDraftBERT for patch %s (state_dict)", patch_id)
-            return True
-        except Exception:
-            logger.exception("Failed to load live model for patch %s", patch_id)
-            return False
+                model = LiveDraftBERT(
+                    vocab_size=schema.get("max_hero_id", 160) + 5,
+                    d_model=schema.get("d_model", 128),
+                    nhead=schema.get("nhead", 4),
+                    num_layers=schema.get("num_layers", 3),
+                    num_static_features=schema.get("n_static_features", 59),
+                    num_dynamic_features=schema.get("n_dynamic_features", 24),
+                    max_seq_len=schema.get("max_seq_len", 50),
+                    dropout=schema.get("dropout", 0.3),
+                    transformer_dropout=schema.get("transformer_dropout", 0.1),
+                    static_hidden=schema.get("static_hidden", 64),
+                    dynamic_hidden=schema.get("dynamic_hidden", 32),
+                    fusion_hidden=schema.get("fusion_hidden", 64),
+                )
+                model.load_state_dict(torch.load(str(weights_path), map_location="cpu", weights_only=True))
+                model.eval()
+
+                self._models[patch_id] = model
+                self._schemas[patch_id] = schema
+                logger.info("Loaded LiveDraftBERT for patch %s (state_dict)", patch_id)
+                return True
+            except Exception:
+                logger.exception("Failed to load live model for patch %s", patch_id)
+                return False
 
     def predict(
         self,
@@ -156,6 +162,36 @@ class LivePredictor:
             "radiant_win_probability": round(prob, 4),
             "dire_win_probability": round(1.0 - prob, 4),
         }
+
+    def encode_draft(
+        self,
+        patch_id: int,
+        match_id: int,
+        heroes: list[int],
+        actions: list[int],
+        static_feats: list[float],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Encode draft + static features, return cached embeddings."""
+        if patch_id not in self._models:
+            if not self.load_model(patch_id):
+                raise ValueError(f"No live model for patch {patch_id}")
+
+        with self._lock:
+            model = self._models[patch_id]
+            schema = self._schemas[patch_id]
+
+        max_seq_len = schema.get("max_seq_len", 50)
+        pad_h = heroes[:max_seq_len] + [0] * max(0, max_seq_len - len(heroes))
+        pad_a = actions[:max_seq_len] + [0] * max(0, max_seq_len - len(actions))
+
+        t_h = torch.tensor([pad_h], dtype=torch.long)
+        t_a = torch.tensor([pad_a], dtype=torch.long)
+        t_s = torch.tensor([static_feats], dtype=torch.float32)
+
+        with torch.no_grad():
+            seq_repr, static_repr = model.encode_draft(t_h, t_a, t_s)
+
+        return seq_repr, static_repr
 
 
 def fetch_live_matches() -> list[dict]:

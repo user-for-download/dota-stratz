@@ -124,7 +124,7 @@ def health(request: Request):
 
 
 @app.post("/predict", response_model=PredictResponse)
-def predict(req: PredictRequest, request: Request):
+async def predict(req: PredictRequest, request: Request):
     predictor: Predictor = request.app.state.predictor
     try:
         ctx = build_draft_context(req.draft, patch_id=req.patch_id, first_pick_team=req.first_pick_team)
@@ -135,18 +135,21 @@ def predict(req: PredictRequest, request: Request):
     if req.for_team is not None:
         ctx.recommending_team = req.for_team
     elif ctx.recommending_team == -1:
-        # Default to Radiant if the draft is complete and for_team is not specified
         ctx.recommending_team = 0
 
+    loop = asyncio.get_running_loop()
     try:
-        recommendations, reasoning = predictor.predict(
-            patch_id=req.patch_id,
-            ctx=ctx,
-            draft_slots=req.draft,
-            radiant_team_id=req.radiant_team_id,
-            dire_team_id=req.dire_team_id,
-            num_recommendations=req.num_recommendations,
-            account_id=req.account_id,
+        recommendations, reasoning = await loop.run_in_executor(
+            None,
+            lambda: predictor.predict(
+                patch_id=req.patch_id,
+                ctx=ctx,
+                draft_slots=req.draft,
+                radiant_team_id=req.radiant_team_id,
+                dire_team_id=req.dire_team_id,
+                num_recommendations=req.num_recommendations,
+                account_id=req.account_id,
+            ),
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -568,7 +571,8 @@ async def ws_live(websocket: WebSocket):
     Client sends: {"match_id": 12345, "interval": 10}
     Server streams: {"type": "prediction", "minute": N, "radiant_win_probability": 0.65, ...}
 
-    Polls OpenDota every `interval` seconds and pushes updated predictions.
+    Caches transformer + static embeddings per match for fast per-tick updates.
+    Client can send a new message at any time to switch matches.
     """
     await websocket.accept()
     live_pred: LivePredictor = websocket.app.state.live_predictor
@@ -584,10 +588,28 @@ async def ws_live(websocket: WebSocket):
                 continue
 
             loop = asyncio.get_running_loop()
+            cached_seq = None
+            cached_static = None
+            cached_match = None
+            cached_patch = None
 
-            # Poll loop
+            # Poll loop — breaks on match end or new client message
             while True:
                 try:
+                    # Use wait_for to allow client messages between polls
+                    try:
+                        raw = await asyncio.wait_for(
+                            websocket.receive_json(), timeout=interval,
+                        )
+                        # Client sent a new message — switch matches
+                        match_id = raw.get("match_id", match_id)
+                        interval = raw.get("interval", interval)
+                        cached_seq = None
+                        cached_static = None
+                        break
+                    except asyncio.TimeoutError:
+                        pass  # No new message, continue polling
+
                     match_data = await loop.run_in_executor(
                         None, fetch_match_state, match_id
                     )
@@ -599,12 +621,7 @@ async def ws_live(websocket: WebSocket):
                     minute = duration // 60
                     patch_id = match_data.get("patch", 60)
 
-                    # Compute features in executor
-                    features = await loop.run_in_executor(
-                        None, compute_dynamic_features, match_data, minute
-                    )
-
-                    # Build draft
+                    # Build draft sequence
                     picks_bans = match_data.get("picks_bans", [])
                     if picks_bans:
                         heroes = [pb["hero_id"] for pb in picks_bans]
@@ -616,20 +633,32 @@ async def ws_live(websocket: WebSocket):
                     static_feats = [0.0] * 59
                     dyn_feats = [features[col] for col in DYNAMIC_FEATURE_COLUMNS]
 
-                    # Predict in executor
+                    # Encode draft once, cache transformer + static embeddings
+                    if cached_seq is None or cached_match != match_id or cached_patch != patch_id:
+                        def _encode():
+                            return live_pred.encode_draft(patch_id, match_id, heroes, actions_list, static_feats)
+                        cached_seq, cached_static = await loop.run_in_executor(None, _encode)
+                        cached_match = match_id
+                        cached_patch = patch_id
+
+                    features = await loop.run_in_executor(
+                        None, compute_dynamic_features, match_data, minute
+                    )
+                    dyn_feats = [features[col] for col in DYNAMIC_FEATURE_COLUMNS]
+
+                    # Fast path: only Dynamic MLP + Fusion runs
                     pred = await loop.run_in_executor(
                         None,
-                        lambda: live_pred.predict(
+                        lambda: live_pred.predict_with_cache(
                             patch_id=patch_id,
                             match_id=match_id,
-                            heroes=heroes,
-                            actions=actions_list,
-                            static_feats=static_feats,
+                            seq_repr=cached_seq,
+                            static_repr=cached_static,
                             dynamic_feats=dyn_feats,
                         ),
                     )
 
-                    is_live = duration > 0 and duration < 3600  # Less than 1 hour
+                    is_live = duration > 0 and duration < 3600
 
                     await websocket.send_json({
                         "type": "prediction",
@@ -647,9 +676,7 @@ async def ws_live(websocket: WebSocket):
                     })
 
                     if not is_live:
-                        break  # Match ended
-
-                    await asyncio.sleep(interval)
+                        break
 
                 except asyncio.CancelledError:
                     break
