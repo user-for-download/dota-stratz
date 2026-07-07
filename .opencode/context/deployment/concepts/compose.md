@@ -2,6 +2,8 @@
 
 **Core concept**: Profile-based Docker Compose with `docker buildx bake` for multi-service orchestration.
 
+**Last updated**: July 2026
+
 ## Profiles
 | Profile | Services | Make Target |
 |---------|----------|-------------|
@@ -32,6 +34,11 @@ ML targets that need postgres use `--profile db --profile api` or `--profile db 
 - **Prometheus**: Removed `network_mode: host`, uses bridge networking (MEDIUM-12)
 - **Resource limits**: Added for Prometheus and Grafana (LOW-18)
 - **RabbitMQ definitions**: Removed hardcoded users — `init.sh` now creates from `.env` (CRITICAL-1)
+- **Trainer no longer sleeps**: Removed `command: ["sleep", "infinity"]` from trainer service — Dockerfile `CMD` (`python -m trainer.main`) now runs normally (BLOCKER B3)
+- **proxy.txt validation**: Healthcheck now includes `test -s /app/proxy.txt` to verify proxy file exists and is non-empty (W12)
+- **Asyncio Semaphore**: `asyncio.Semaphore(2)` limits concurrent WebSocket evaluations to prevent unbounded task creation (W3)
+- **WebSocket cleanup**: `onclose` handler clears all orphaned connection resolvers to prevent hanging Promises (B6)
+- **Proxy.txt read-only mount**: `deploy/proxy.txt` mounted `:ro` with comment explaining it's validated once at startup
 
 ## Health Checks
 - API uses `python3 -c "import urllib.request..."` (slim image has no wget/curl)

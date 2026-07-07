@@ -47,11 +47,8 @@ let apiOk = false;
 let predictAbort = null;
 let tooltipDebounce = null;
 let recommendations = [];
-let recoAbort = null;
 let recoRadiant = [];
 let recoDire = [];
-let recoPickRadiant = [];
-let recoPickDire = [];
 let isLoadingRecs = false;
 
 // ── Init ─────────────────────────────────────────────────────────
@@ -153,6 +150,11 @@ function ensureWsConnected() {
       console.log('WS disconnected');
       draftWsConnected = null;
       draftWs = null;
+      // Clear orphaned resolvers to prevent hanging Promises
+      Object.keys(draftWsResolvers).forEach(key => {
+        draftWsResolvers[key]({ type: 'error', detail: 'WebSocket disconnected' });
+        delete draftWsResolvers[key];
+      });
     };
   });
 
@@ -194,8 +196,6 @@ function startDraft() {
   draftHistory = [];
   recoRadiant = [];
   recoDire = [];
-  recoPickRadiant = [];
-  recoPickDire = [];
   DRAFT_PHASES = getDraftPhases();
   renderDraftBar();
   renderGrid();
@@ -211,8 +211,7 @@ function setFirstPick(team) {
   draftHistory = [];
   recoRadiant = [];
   recoDire = [];
-  recoPickRadiant = [];
-  recoPickDire = [];
+
   document.getElementById('fp-radiant').className = 'first-pick-btn' + (team === 0 ? ' active' : '');
   document.getElementById('fp-dire').className = 'first-pick-btn' + (team === 1 ? ' active' : '');
   renderDraftBar();
@@ -227,8 +226,6 @@ async function fetchRecommendations() {
     setDraftLock(false);
     recoRadiant = [];
     recoDire = [];
-    recoPickRadiant = [];
-    recoPickDire = [];
     renderRecoPanel();
     return;
   }
@@ -244,8 +241,7 @@ async function fetchRecommendations() {
   // Clear stale recommendations and lock UI
   recoRadiant = [];
   recoDire = [];
-  recoPickRadiant = [];
-  recoPickDire = [];
+
   setDraftLock(true);
   renderRecoPanel();
 
@@ -272,7 +268,13 @@ async function fetchRecommendations() {
     return new Promise((resolve) => {
       const key = `${turnId}_${for_team}`;
       draftWsResolvers[key] = resolve;
-      draftWs.send(JSON.stringify({ ...baseBody, for_team, turn_id: turnId }));
+      try {
+        draftWs.send(JSON.stringify({ ...baseBody, for_team, turn_id: turnId }));
+      } catch (e) {
+        // WS dropped between ensureWsConnected and send
+        delete draftWsResolvers[key];
+        resolve({ type: 'error', detail: e.message });
+      }
     });
   });
 
@@ -281,8 +283,6 @@ async function fetchRecommendations() {
 
     recoRadiant = dR?.recommendations || [];
     recoDire = dD?.recommendations || [];
-    recoPickRadiant = dR?.recommendations || [];
-    recoPickDire = dD?.recommendations || [];
 
     setDraftLock(false);
     renderRecoPanel();
@@ -290,8 +290,6 @@ async function fetchRecommendations() {
   } catch (e) {
     recoRadiant = [];
     recoDire = [];
-    recoPickRadiant = [];
-    recoPickDire = [];
     setDraftLock(false);
     renderRecoPanel();
   } finally {
@@ -304,7 +302,7 @@ function renderRecoPanel() {
   const bansSection = panel.querySelector('.reco-section');
   const picksSection = panel.querySelectorAll('.reco-section')[1];
 
-  if (!recoRadiant.length && !recoDire.length && !recoPickRadiant.length && !recoPickDire.length) {
+  if (!recoRadiant.length && !recoDire.length) {
     panel.style.display = 'none';
     return;
   }
@@ -340,7 +338,7 @@ function renderRecoPanel() {
   const pickListD = document.getElementById('recoPickListD');
   pickTitleD.textContent = `Best picks for Dire`;
   pickListD.innerHTML = '';
-  recoPickDire.slice(0, 5).forEach((rec, i) => {
+  recoDire.slice(0, 5).forEach((rec, i) => {
     pickListD.appendChild(createRecoChip(rec, i, 'dire', currentTeam === 'dire' && !isBan));
   });
 
@@ -348,7 +346,7 @@ function renderRecoPanel() {
   const pickListR = document.getElementById('recoPickListR');
   pickTitleR.textContent = `Best picks for Radiant`;
   pickListR.innerHTML = '';
-  recoPickRadiant.slice(0, 5).forEach((rec, i) => {
+  recoRadiant.slice(0, 5).forEach((rec, i) => {
     pickListR.appendChild(createRecoChip(rec, i, 'radiant', currentTeam === 'radiant' && !isBan));
   });
 }
@@ -587,7 +585,6 @@ function pickHero(heroId) {
 
 function undoDraft() {
   if (draftIndex === 0) return;
-  if (recoAbort) recoAbort.abort();
   setDraftLock(false);
 
   draftIndex--;
@@ -600,15 +597,13 @@ function undoDraft() {
 }
 
 function resetDraft() {
-  if (recoAbort) recoAbort.abort();
   setDraftLock(false);
 
   draftIndex = 0;
   draftHistory = [];
   recoRadiant = [];
   recoDire = [];
-  recoPickRadiant = [];
-  recoPickDire = [];
+
   renderDraftBar();
   renderGrid(document.getElementById('search').value);
   updatePhaseInfo();

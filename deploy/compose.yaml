@@ -199,9 +199,10 @@ services:
         healthcheck:
             # Busybox wget --spider returns 0 for ANY HTTP response (even 5xx).
             # Use wget -qO- (capture body) + grep to verify actual "ok" content.
+            # Also verify proxy.txt exists and is non-empty.
             test:
                 - CMD-SHELL
-                - "wget -qO- http://localhost:${PROXY_METRICS_PORT:-9090}/healthz | grep -q '^ok$' || exit 1"
+                - "wget -qO- http://localhost:${PROXY_METRICS_PORT:-9090}/healthz | grep -q '^ok$' && test -s /app/proxy.txt || exit 1"
             interval: 15s
             timeout: 5s
             retries: 3
@@ -368,11 +369,9 @@ services:
                     cpus: "12"
         # trainer is a batch/CLI service — use `docker compose run --rm trainer ...`
         # to execute training commands. The Dockerfile entrypoint is "python -m trainer.main".
-        # Default: sleep so `docker compose up --profile train` keeps the container alive
-        # for exec debugging without exiting.
         # Runs as appuser (UID 1001) matching the API service — volume permissions
         # are handled by the entrypoint script which chowns /models on startup.
-        command: ["sleep", "infinity"]
+        # For debugging: `docker compose run --rm --entrypoint bash trainer`
     api:
         profiles:
             - all

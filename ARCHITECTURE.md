@@ -94,8 +94,9 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
   - Mean pooling over sequence dimension
 - **Tabular branch:** MLP for 59 continuous features
   - Input LayerNorm → Linear(59, 64) → ReLU → Dropout(0.3)
-- **Fusion head:** Linear(192, 64) → ReLU → Dropout(0.3) → Linear(64, 1)
+- **Fusion head (gated):** Linear(128, 128) gate on sequence → Linear(64, 128) gate on tabular → sigmoid gating → element-wise multiply → concat with sequence → Linear(192, 64) → ReLU → Dropout(0.3) → Linear(64, 1)
 - **Output:** Raw logit for P(Radiant wins) via BCEWithLogitsLoss
+- **Gated fusion mechanism**: Forces the model to learn which modality (sequence or tabular) to prioritize per-hero, improving robustness when one modality has weak signal (e.g., new heroes with few tabular stats but strong draft-position patterns)
 - **Parameter count:** ~639K
 
 **Training configuration (all from `deploy/.env`):**
@@ -203,6 +204,25 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 - Dual-column recommendation panels (bans + picks)
 - Hero image grid with highlighting and tooltip predictions
 
+
+### 8. Drafting Bots (Autonomous Draft Simulation)
+
+**Purpose**: Self-contained draft simulation agents for strategy evaluation. Bypass the API by loading the TorchScript model directly.
+
+| Component | File | Description |
+|-----------|------|-------------|
+| **Inference Cache** | `trainer/inference_cache.py` | Loads 7 `ml.*_agg` tables into Python dicts for O(1) feature lookups |
+| **Draft State** | `trainer/draft_state.py` | Builds 59-dim feature arrays for hypothetical picks in RAM (mirrors SQL logic) |
+| **Greedy Bot** | `trainer/bot_greedy.py` | Single-step lookahead via batched PyTorch (~5ms per 120 heroes) |
+| **MCTS Bot** | `trainer/bot_mcts.py` | Monte Carlo Tree Search with UCB1, DraftBERT as value network (AlphaZero-style) |
+| **Tests** | `trainer/test_bot.py` | Component integration tests passing in Docker |
+
+**Architecture**:
+- All 7 aggregate tables cached in memory at startup
+- Feature computation mirrors `build_feature_vector()` from the API but uses in-memory dicts instead of DB round-trips
+- MCTS uses DraftBERT as a value network — no random rollouts needed due to prefix-augmented training data
+- Both bots expose `predict()` returning ranked hero lists with scores
+
 ---
 
 ## Shared Library
@@ -225,10 +245,21 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 ### Migration Files
 
 | File | Description |
-|---|---|
+|------|-------------|
 | `001__init.sql` | Core schema: matches, players (RANGE-partitioned), event tables, indexes |
 | `002_ml.sql` | Analytics + ML: 7 aggregate tables + 7 PIT-safe snapshot tables |
 | `003_static.sql` | Static reference data: heroes, items, abilities, game modes |
+| `004_verify.sql` | Idempotent partition existence assertion |
+| `005_ml_tables.sql` | 6 initial ML aggregate tables (LOGGED after CRITICAL-5 fix) |
+| `006_postgres_fixes.sql` | Runtime fixes: ml schema grants, `grant_ml_access()` |
+| `007_enhanced_features.sql` | Adds firstblood_rate, camps_stacked, vision_placed to aggs |
+| `008_minute_stats.sql` | Adds gold_t/xp_t JSONB to player_minute_stats |
+| `009_gold_xp_10.sql` | Adds avg_gold_10 / avg_xp_10 to ML tables |
+| `010_team_id_bigint.sql` | Fixes team_id INT→BIGINT, PIT composite indexes |
+| `011_draft_slot_agg.sql` | ml.hero_draft_slot_agg table (pick-position win rates) |
+| `012_fix_ml_indexes.sql` | Drops redundant indexes, adds CHECK constraints |
+| `013_time_series_arrays.sql` | Moves gold_t/xp_t to dedicated table (PK conflict fix) |
+| `014_performance_optimization.sql` | Generated columns + composite indexes for GROUP BY performance |
 
 ### ML Schema (`ml`)
 
@@ -280,3 +311,42 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 8. **Monte Carlo rollouts** — 40 random draft completions per candidate, batch-evaluated
 9. **WebSocket MCTS streaming** — Queue-based async bridge for real-time progress updates
 10. **Configurable training** — All hyperparameters in `.env`, zero code changes needed
+
+---
+
+## Code Audit (July 2026)
+
+A comprehensive audit across ~100 source files found **55 items** — 9 blockers, 18 warnings, 28 info items across Go (9), Python (16), JavaScript (20), SQL (4), Shell (4), and Docker (2).
+
+| Severity | Found | Fixed | Deferred |
+|----------|-------|-------|----------|
+| 🔴 BLOCKER | 9 | 9 | 0 |
+| 🟡 WARNING | 18 | 10 | 8 |
+| ℹ️ INFO | 28 | 0 | 28 |
+| **Total** | **55** | **19** | **36** |
+
+**Key fixes**:
+- Feature vector now uses `self._max_hero_id + 1` instead of hardcoded `156` — new heroes no longer silently excluded (B2)
+- Trainer `command: ["sleep", "infinity"]` removed from compose.yaml — trainer actually trains (B3)
+- `features` variable computed before reference in live prediction path — no more `NameError` on cold start (B1)
+- Feature sign inversion in live prediction (`radiant - dire` polarity) fixed to match training (W1)
+- `asyncio.Semaphore(2)` limits concurrent WebSocket evaluations (W3)
+- All WebSocket cleanup paths clear orphaned Promise resolvers (B6, B5)
+- Ban/pick recommendations now properly segregated in frontend (B7)
+- `turnId` mechanism prevents stale WebSocket responses from overwriting current state (B8)
+- Aegis rolling window and entity rolling windows synchronized between training and inference (W6)
+- Go services handle channel closes and context cancellations without busy-wait (W15, W16)
+- Missing `-u` flag in RabbitMQ startup and proxy.txt validation added (W11, W12)
+- `engine.raw_connection()` call protected with try-catch fallback (W7)
+
+**36 deferred items** are documented design choices or bounded, non-critical issues. See [`errors.md`](errors.md) for the full per-item report.
+
+### Fixed performance improvements (pre-audit)
+- Sample-weighted loss averaging (fixes final-batch bias)
+- Generated columns `minute = time / 60` + composite indexes — replaces runtime division
+- Gated fusion mechanism for modality-adaptive feature combination
+- Prior-only combos now appear in all daily snapshots (prior-as-base approach)
+- Feature schema JSON exports explicit feature-type lists
+- NumPy `pad+from_numpy` replaces `torch.tensor()` loop
+- Single `groupby().cumsum()` for all tick columns
+- `num_workers=0` for pre-tensorized DataLoader

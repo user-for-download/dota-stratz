@@ -43,8 +43,8 @@ target "api" {
 }
 
 target "frontend" {
-  context = "../services/frontend"
-  dockerfile = "Dockerfile"
+  context = "../"
+  dockerfile = "services/frontend/Dockerfile"
   tags = ["deploy-frontend:latest"]
 }
 

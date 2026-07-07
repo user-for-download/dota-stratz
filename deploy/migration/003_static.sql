@@ -92,12 +92,11 @@ ON CONFLICT (id) DO NOTHING;
 
 -- 5. HEROES
 CREATE TABLE IF NOT EXISTS const_hero (
-    id INT PRIMARY KEY, name VARCHAR NOT NULL, localized_name VARCHAR, primary_attr VARCHAR, attack_type VARCHAR, roles TEXT[], img VARCHAR, icon VARCHAR,
+    id INT PRIMARY KEY, name VARCHAR NOT NULL UNIQUE, localized_name VARCHAR, primary_attr VARCHAR, attack_type VARCHAR, roles TEXT[], img VARCHAR, icon VARCHAR,
     base_health INT, base_health_regen FLOAT, base_mana INT, base_mana_regen FLOAT, base_armor FLOAT, base_mr FLOAT, base_attack_min INT, base_attack_max INT,
     base_str INT, base_agi INT, base_int INT, str_gain FLOAT, agi_gain FLOAT, int_gain FLOAT, attack_range INT, projectile_speed INT, attack_rate FLOAT,
     base_attack_time FLOAT, attack_point FLOAT, move_speed INT, turn_rate FLOAT, cm_enabled BOOLEAN, legs INT, day_vision INT, night_vision INT
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_const_hero_name ON const_hero(name);
 CREATE INDEX IF NOT EXISTS idx_const_hero_primary_attr ON const_hero(primary_attr);
 
 -- 6. ITEMS

@@ -397,189 +397,189 @@ async def ws_draft(websocket: WebSocket):
     await websocket.accept()
     predictor: Predictor = websocket.app.state.predictor
     import queue as _queue
+    _ws_semaphore = asyncio.Semaphore(2)  # Limit concurrent evaluations
 
     async def handle_message(raw: dict):
-        patch_id = raw.get("patch_id", 60)
-        draft_list = raw.get("draft", [])
-        for_team = raw.get("for_team", 0)
-        turn_id = raw.get("turn_id", 0)
-        first_pick_team = raw.get("first_pick_team", 0)
-        radiant_team_id = raw.get("radiant_team_id")
-        dire_team_id = raw.get("dire_team_id")
+        async with _ws_semaphore:
+            patch_id = raw.get("patch_id", 60)
+            draft_list = raw.get("draft", [])
+            for_team = raw.get("for_team", 0)
+            turn_id = raw.get("turn_id", 0)
+            first_pick_team = raw.get("first_pick_team", 0)
+            radiant_team_id = raw.get("radiant_team_id")
+            dire_team_id = raw.get("dire_team_id")
 
-        from .models import DraftSlot
-        draft_slots = [DraftSlot(**s) for s in draft_list]
+            from .models import DraftSlot
+            draft_slots = [DraftSlot(**s) for s in draft_list]
 
-        try:
-            ctx = build_draft_context(draft_slots, patch_id=patch_id, first_pick_team=first_pick_team)
-        except ValueError as e:
-            await websocket.send_json({"type": "error", "detail": str(e), "for_team": for_team})
-            return
+            try:
+                ctx = build_draft_context(draft_slots, patch_id=patch_id, first_pick_team=first_pick_team)
+            except ValueError as e:
+                await websocket.send_json({"type": "error", "detail": str(e), "for_team": for_team})
+                return
 
-        if for_team is not None:
-            ctx.recommending_team = for_team
-        elif ctx.recommending_team == -1:
-            ctx.recommending_team = 0
+            if for_team is not None:
+                ctx.recommending_team = for_team
+            elif ctx.recommending_team == -1:
+                ctx.recommending_team = 0
 
-        # Run base prediction in executor without triggering internal MCTS
-        try:
-            import asyncio
-            loop = asyncio.get_running_loop()
-            recommendations, reasoning = await loop.run_in_executor(
-                None,
-                lambda: predictor.predict(
-                    patch_id=patch_id, ctx=ctx, draft_slots=draft_slots,
-                    radiant_team_id=radiant_team_id,
-                    dire_team_id=dire_team_id,
-                    num_recommendations=10,
-                    run_mcts=False,
-                ),
-            )
-        except Exception as e:
-            await websocket.send_json({"type": "error", "detail": str(e), "for_team": for_team})
-            return
-
-        action_str = "Pick" if ctx.is_pick_turn else "Ban"
-
-        # Send base results immediately
-        await websocket.send_json({
-            "type": "mcts_progress",
-            "turn_id": turn_id,
-            "for_team": for_team,
-            "iteration": 0,
-            "total": 15,
-            "hero_id": 0,
-            "win_rate": 0.0,
-            "top_picks": [
-                {"hero_id": r["hero_id"], "win_rate": r.get("win_probability", 0),
-                 "visits": 0, "action": action_str}
-                for r in recommendations[:5]
-            ],
-            "reasoning_snippet": reasoning or "",
-        })
-
-        # Queue-based progress streaming: executor thread pushes, async loop drains
-        from .lookahead import run_monte_carlo_rollouts
-        top_candidates = recommendations[:15]
-        eligible = [h for h in range(1, 156) if h not in ctx.all_taken]
-        progress_queue: _queue.Queue = _queue.Queue()
-        SENTINEL = object()
-
-        def on_progress(data):
-            progress_queue.put(data)
-
-        async def drain_queue():
-            """Read from the thread-safe queue and send WebSocket messages."""
-            while True:
-                data = await loop.run_in_executor(None, progress_queue.get)
-                if data is SENTINEL:
-                    break
-                await websocket.send_json({
-                    "type": "mcts_progress",
-                    "turn_id": turn_id,
-                    "for_team": for_team,
-                    "action": action_str,
-                    **data,
-                })
-
-        # Run MCTS in executor and drain queue concurrently
-        async def run_mcts_async():
-            eval_team = ctx.recommending_team if ctx.is_pick_turn else (1 - ctx.recommending_team)
-            eval_ctx = DraftContext(
-                turn=ctx.turn,
-                recommending_team=eval_team,
-                is_pick_turn=True,
-                radiant_picks=list(ctx.radiant_picks),
-                dire_picks=list(ctx.dire_picks),
-                radiant_bans=list(ctx.radiant_bans),
-                dire_bans=list(ctx.dire_bans),
-            )
-            return await loop.run_in_executor(
-                None,
-                lambda: run_monte_carlo_rollouts(
-                    predictor, patch_id, eval_ctx, top_candidates, eligible,
-                    radiant_team_id, dire_team_id,
-                    num_simulations=40, progress_cb=on_progress,
-                ),
-            )
-
-        try:
-            mcts_task = asyncio.create_task(run_mcts_async())
-            drain_task = asyncio.create_task(drain_queue())
-
-            final_recs = await mcts_task
-            progress_queue.put(SENTINEL)  # Signal drain to stop
-            await drain_task
-
-            # Sort MCTS output by lookahead score
-            final_recs.sort(key=lambda r: r.get("lookahead_score", r.get("score", 0)), reverse=True)
-            final_recs = final_recs[:10]
-
-            # Convert enemy WR back to acting team WR for display if banning
-            if not ctx.is_pick_turn:
-                for r in final_recs:
-                    if "mc_win_probability" in r:
-                        r["mc_win_probability"] = 1.0 - r["mc_win_probability"]
-                    if "worst_case_nemesis_wr" in r:
-                        r["worst_case_nemesis_wr"] = 1.0 - r["worst_case_nemesis_wr"]
-
-            if final_recs:
-                top = final_recs[0]
-                final_reasoning = await loop.run_in_executor(
+            # Run base prediction in executor without triggering internal MCTS
+            try:
+                loop = asyncio.get_running_loop()
+                recommendations, reasoning = await loop.run_in_executor(
                     None,
-                    lambda: predictor._build_reasoning(
-                        top["hero_id"], top.get("lookahead_score", top.get("score", 0)),
-                        ctx, patch_id, radiant_team_id, dire_team_id,
+                    lambda: predictor.predict(
+                        patch_id=patch_id, ctx=ctx, draft_slots=draft_slots,
+                        radiant_team_id=radiant_team_id,
+                        dire_team_id=dire_team_id,
+                        num_recommendations=10,
+                        run_mcts=False,
                     ),
                 )
-                mc_prob = top.get("mc_win_probability")
-                if mc_prob:
-                    final_reasoning = (final_reasoning or "") + f" | MCTS Rollout WR: {mc_prob*100:.1f}%"
-            else:
-                final_reasoning = reasoning
+            except Exception as e:
+                await websocket.send_json({"type": "error", "detail": str(e), "for_team": for_team})
+                return
 
+            action_str = "Pick" if ctx.is_pick_turn else "Ban"
+
+            # Send base results immediately
             await websocket.send_json({
-                "type": "mcts_complete",
+                "type": "mcts_progress",
                 "turn_id": turn_id,
                 "for_team": for_team,
-                "recommendations": [
-                    {
-                        "hero_id": r["hero_id"],
-                        "score": r.get("lookahead_score", r.get("score", 0)),
-                        "win_probability": r.get("win_probability", 0),
-                        "mc_win_probability": r.get("mc_win_probability"),
-                        "team_games": r.get("team_games", 0),
-                        "team_win_rate": r.get("team_win_rate"),
-                        "boosted": r.get("boosted", False),
-                    }
-                    for r in final_recs
+                "iteration": 0,
+                "total": 15,
+                "hero_id": 0,
+                "win_rate": 0.0,
+                "top_picks": [
+                    {"hero_id": r["hero_id"], "win_rate": r.get("win_probability", 0),
+                     "visits": 0, "action": action_str}
+                    for r in recommendations[:5]
                 ],
-                "reasoning": final_reasoning,
+                "reasoning_snippet": reasoning or "",
             })
 
-        except Exception as e:
-            logger.warning("MCTS streaming failed: %s", e)
-            progress_queue.put(SENTINEL)
-            await websocket.send_json({
-                "type": "mcts_complete",
-                "turn_id": turn_id,
-                "for_team": for_team,
-                "recommendations": [
-                    {
-                        "hero_id": r["hero_id"],
-                        "score": r.get("score", 0),
-                        "win_probability": r.get("win_probability", 0),
-                        "team_games": r.get("team_games", 0),
-                        "team_win_rate": r.get("team_win_rate"),
-                        "boosted": r.get("boosted", False),
-                    }
-                    for r in recommendations
-                ],
-                "reasoning": reasoning,
-            })
+            # Queue-based progress streaming: executor thread pushes, async loop drains
+            from .lookahead import run_monte_carlo_rollouts
+            top_candidates = recommendations[:15]
+            eligible = [h for h in range(1, 156) if h not in ctx.all_taken]
+            progress_queue: _queue.Queue = _queue.Queue()
+            SENTINEL = object()
+
+            def on_progress(data):
+                progress_queue.put(data)
+
+            async def drain_queue():
+                """Read from the thread-safe queue and send WebSocket messages."""
+                while True:
+                    data = await loop.run_in_executor(None, progress_queue.get)
+                    if data is SENTINEL:
+                        break
+                    await websocket.send_json({
+                        "type": "mcts_progress",
+                        "turn_id": turn_id,
+                        "for_team": for_team,
+                        "action": action_str,
+                        **data,
+                    })
+
+            # Run MCTS in executor and drain queue concurrently
+            async def run_mcts_async():
+                eval_team = ctx.recommending_team if ctx.is_pick_turn else (1 - ctx.recommending_team)
+                eval_ctx = DraftContext(
+                    turn=ctx.turn,
+                    recommending_team=eval_team,
+                    is_pick_turn=True,
+                    radiant_picks=list(ctx.radiant_picks),
+                    dire_picks=list(ctx.dire_picks),
+                    radiant_bans=list(ctx.radiant_bans),
+                    dire_bans=list(ctx.dire_bans),
+                )
+                return await loop.run_in_executor(
+                    None,
+                    lambda: run_monte_carlo_rollouts(
+                        predictor, patch_id, eval_ctx, top_candidates, eligible,
+                        radiant_team_id, dire_team_id,
+                        num_simulations=40, progress_cb=on_progress,
+                    ),
+                )
+
+            try:
+                mcts_task = asyncio.create_task(run_mcts_async())
+                drain_task = asyncio.create_task(drain_queue())
+
+                final_recs = await mcts_task
+                progress_queue.put(SENTINEL)  # Signal drain to stop
+                await drain_task
+
+                # Sort MCTS output by lookahead score
+                final_recs.sort(key=lambda r: r.get("lookahead_score", r.get("score", 0)), reverse=True)
+                final_recs = final_recs[:10]
+
+                # Convert enemy WR back to acting team WR for display if banning
+                if not ctx.is_pick_turn:
+                    for r in final_recs:
+                        if "mc_win_probability" in r:
+                            r["mc_win_probability"] = 1.0 - r["mc_win_probability"]
+                        if "worst_case_nemesis_wr" in r:
+                            r["worst_case_nemesis_wr"] = 1.0 - r["worst_case_nemesis_wr"]
+
+                if final_recs:
+                    top = final_recs[0]
+                    final_reasoning = await loop.run_in_executor(
+                        None,
+                        lambda: predictor._build_reasoning(
+                            top["hero_id"], top.get("lookahead_score", top.get("score", 0)),
+                            ctx, patch_id, radiant_team_id, dire_team_id,
+                        ),
+                    )
+                    mc_prob = top.get("mc_win_probability")
+                    if mc_prob:
+                        final_reasoning = (final_reasoning or "") + f" | MCTS Rollout WR: {mc_prob*100:.1f}%"
+                else:
+                    final_reasoning = reasoning
+
+                await websocket.send_json({
+                    "type": "mcts_complete",
+                    "turn_id": turn_id,
+                    "for_team": for_team,
+                    "recommendations": [
+                        {
+                            "hero_id": r["hero_id"],
+                            "score": r.get("lookahead_score", r.get("score", 0)),
+                            "win_probability": r.get("win_probability", 0),
+                            "mc_win_probability": r.get("mc_win_probability"),
+                            "team_games": r.get("team_games", 0),
+                            "team_win_rate": r.get("team_win_rate"),
+                            "boosted": r.get("boosted", False),
+                        }
+                        for r in final_recs
+                    ],
+                    "reasoning": final_reasoning,
+                })
+
+            except Exception as e:
+                logger.warning("MCTS streaming failed: %s", e)
+                progress_queue.put(SENTINEL)
+                await websocket.send_json({
+                    "type": "mcts_complete",
+                    "turn_id": turn_id,
+                    "for_team": for_team,
+                    "recommendations": [
+                        {
+                            "hero_id": r["hero_id"],
+                            "score": r.get("score", 0),
+                            "win_probability": r.get("win_probability", 0),
+                            "team_games": r.get("team_games", 0),
+                            "team_win_rate": r.get("team_win_rate"),
+                            "boosted": r.get("boosted", False),
+                        }
+                        for r in recommendations
+                    ],
+                    "reasoning": reasoning,
+                })
 
     try:
-        import asyncio
         while True:
             raw = await websocket.receive_json()
             asyncio.create_task(handle_message(raw))
@@ -661,6 +661,11 @@ async def ws_live(websocket: WebSocket):
                         actions_list = []
 
                     static_feats = [0.0] * 59
+
+                    # Compute dynamic features first (needed for dyn_feats below)
+                    features = await loop.run_in_executor(
+                        None, compute_dynamic_features, match_data, minute
+                    )
                     dyn_feats = [features[col] for col in DYNAMIC_FEATURE_COLUMNS]
 
                     # Encode draft once, cache transformer + static embeddings
@@ -670,11 +675,6 @@ async def ws_live(websocket: WebSocket):
                         cached_seq, cached_static = await loop.run_in_executor(None, _encode)
                         cached_match = match_id
                         cached_patch = patch_id
-
-                    features = await loop.run_in_executor(
-                        None, compute_dynamic_features, match_data, minute
-                    )
-                    dyn_feats = [features[col] for col in DYNAMIC_FEATURE_COLUMNS]
 
                     # Fast path: only Dynamic MLP + Fusion runs
                     pred = await loop.run_in_executor(

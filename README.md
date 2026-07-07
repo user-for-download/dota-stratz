@@ -90,6 +90,7 @@ make downv                # Stop and remove volumes (destructive)
 | **Calibration** | BCEWithLogitsLoss | Direct logit training, sigmoid output |
 | **Early Stopping** | Patience-based | Stops training when validation loss plateaus (patience=5) |
 | **Label Fix** | make_target() | Correctly handles Dire team labels (1 - radiant_win) |
+| **Drafting Bots** | PyTorch MCTS | Greedy + MCTS bots using DraftBERT as value network |
 
 ## Configuration
 
@@ -138,6 +139,21 @@ Configuration is managed through `deploy/.env`. See `deploy/.env.example` for al
 | ML API | 8080 | `/metrics` |
 
 Grafana at `http://localhost:3000` (admin/admin). Prometheus at `http://localhost:9092`.
+
+## Code Audit
+
+A comprehensive audit across ~100 source files found **55 items** across Go, Python, JS, SQL, shell scripts, and Docker configs.
+
+| Severity | Found | Fixed | Deferred |
+|----------|-------|-------|----------|
+| 🔴 **BLOCKER** | 9 | 9 | 0 |
+| 🟡 **WARNING** | 18 | 10 | 8 |
+| ℹ️ INFO | 28 | 0 | 28 |
+| **Total** | **55** | **19** | **36** |
+
+All 9 blockers and 10 high-impact warnings are fixed. 36 remaining items are either accepted design choices or bounded, non-critical issues.
+
+See [`errors.md`](errors.md) for the complete audit report with per-item status.
 
 ## License
 

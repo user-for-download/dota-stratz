@@ -8,7 +8,7 @@
 # and runs init.sh to create per-service users automatically.
 # ==============================================================================
 
-set -eo pipefail
+set -euo pipefail
 
 # 1. Fix data directory ownership — fresh volumes are root-owned, and the
 #    official entrypoint only does this when CMD is exactly "rabbitmq-server".

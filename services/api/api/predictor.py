@@ -123,7 +123,7 @@ class Predictor:
             schema = self._schemas[patch_id]
 
         taken_heroes = ctx.all_taken
-        eligible = [h for h in range(1, 156) if h not in taken_heroes and h in VALID_HERO_IDS]
+        eligible = [h for h in range(1, self._max_hero_id + 1) if h not in taken_heroes and h in VALID_HERO_IDS]
         if not eligible:
             return [], None
 

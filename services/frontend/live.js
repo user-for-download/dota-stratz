@@ -129,10 +129,8 @@ function updatePredictionDisplay(data) {
     probText.style.color = prob >= 0.55 ? 'var(--green)' : prob <= 0.45 ? 'var(--red)' : 'var(--gold)';
   }
 
-  // Team percentages
-  const rPct = document.getElementById('liveRadiantPct');
+  // Team percentages (liveDirePct exists; liveWinProb already shows Radiant %)
   const dPct = document.getElementById('liveDirePct');
-  if (rPct) rPct.textContent = `${(prob * 100).toFixed(0)}%`;
   if (dPct) dPct.textContent = `${((1 - prob) * 100).toFixed(0)}%`;
 
   // Game time

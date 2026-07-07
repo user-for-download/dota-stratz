@@ -66,8 +66,14 @@ def run_monte_carlo_rollouts(
         d_need = max(0, 5 - len(c_dire))
 
         # 1. AVERAGE CASE: Random Rollouts
+        needed = r_need + d_need
         for _ in range(num_simulations):
-            sampled = random.sample(local_eligible, min(r_need + d_need, len(local_eligible)))
+            if needed > 0 and len(local_eligible) >= needed:
+                sampled = random.sample(local_eligible, needed)
+            elif len(local_eligible) > 0:
+                sampled = random.sample(local_eligible, len(local_eligible))
+            else:
+                sampled = []
             sim_rad = c_rad + sampled[:r_need]
             sim_dire = c_dire + sampled[r_need:]
 

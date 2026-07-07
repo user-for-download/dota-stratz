@@ -253,6 +253,7 @@ func consumeWithReconnect(ctx context.Context, cfg *config.Config) (<-chan amqp.
 	}
 
 	go func() {
+		defer close(outCh) // Close channel on exit so workers unblock
 		backoff := 1 * time.Second
 
 		for {

@@ -172,12 +172,18 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
 
 
 def _upsert_model_meta(cfg: TrainerConfig, patch_id: int, meta: dict, engine=None):
-    if engine is not None:
-        conn = engine.raw_connection()
-    else:
-        import psycopg2
-        conn = psycopg2.connect(cfg.pg_dsn)
+    conn = None
     try:
+        if engine is not None:
+            try:
+                conn = engine.raw_connection()
+            except (AttributeError, TypeError):
+                import psycopg2
+                conn = psycopg2.connect(cfg.pg_dsn)
+        else:
+            import psycopg2
+            conn = psycopg2.connect(cfg.pg_dsn)
+
         with conn.cursor() as cur:
             cur.execute(
                 """INSERT INTO live_prediction_models

@@ -18,6 +18,7 @@
 | `011_hero_draft_slot_agg.sql` | Adds `ml.hero_draft_slot_agg` table (7th ML table) for hero pick-position win rates (ordinal 1-5) |
 | `012_fix_ml_indexes.sql` | Drops redundant indexes; CHECK constraint on `team_pick_ordinal` (guarded — 011 already creates it) |
 | `013_separate_time_series_arrays.sql` | Moves `gold_t`/`xp_t` JSONB from `player_minute_stats` (minute=0 sentinel) into dedicated `player_time_series_arrays` table to eliminate PK conflict with real minute-zero rows |
+| `014_performance_optimization.sql` | Adds generated columns (`minute = time / 60`) + composite indexes `(match_id, minute)` to 7 event tables for accelerated GROUP BY queries. Created in response to audit finding W4. |
 
 ## Key Tables
 - **`matches`** — Match header: duration, game_mode, lobby_type, region, patch_id, scores
@@ -38,7 +39,7 @@
 - avg_gold_10 / avg_xp_10 computed from `gold_t`/`xp_t` JSONB arrays now stored in `player_time_series_arrays` (separated from `player_minute_stats` minute=0 sentinel by migration `013` to avoid PK conflict)
 - **Stale row protection**: `_clean_patch_rows` deletes rows for the current patch_id before re-inserting (so disappeared rows don't persist), and `_analyze_ml_tables()` runs `VACUUM ANALYZE` on all 7 tables after every full populate cycle to reclaim bloat and update query planner stats
 - **Configurable match filtering**: All seven populators apply the same `TRAINER_LEAGUE_ONLY` / `TRAINER_LOBBY_TYPES` filter (replaces old hardcoded `leagueid > 0` that was only in `populate_h2h`)
-- Trainer's `TRAINING_FEATURES_SQL` computes **58 aggregate + 160 one-hot hero ID = 218-dim feature vectors** via a single query with `LEAST`/`GREATEST` index-friendly joins on synergy aggregates, and `LATERAL` subqueries for PIT synergy/counter lookups. Player-hero features use real data when `account_id` is available at inference time, otherwise fall back to hardcoded defaults to avoid train-serving skew.
+- Trainer's `TRAINING_FEATURES_SQL` computes **59 aggregate + 160 one-hot hero ID = 219-dim feature vectors** via a single query with `LEAST`/`GREATEST` index-friendly joins on synergy aggregates, and `LATERAL` subqueries for PIT synergy/counter lookups. The feature schema is exported to JSON (`feature_schema_patch_{patch_id}.json`) with explicit `continuous_features`, `categorical_features`, and `embedding_features` lists for API contract enforcement. Player-hero features use real data when `account_id` is available at inference time, otherwise fall back to hardcoded defaults to avoid train-serving skew.
 
 ### ML Aggregate Tables
 | Table | Rows (patch 58) | Purpose |
@@ -50,6 +51,8 @@
 | `team_h2h_agg` | 4,846 | Team head-to-head win rates |
 | `hero_baseline_agg` | 126 | Global hero pick/ban rates and avg stats per patch (incl. avg_gold_10, avg_xp_10) |
 | `hero_draft_slot_agg` | ~1,200 | Hero win rate per team-pick ordinal (1st–5th pick position) |
+
+> **Perf fix**: `player_purchase_log` and 6 other event tables now have `minute = time / 60` generated columns with composite `(match_id, minute)` indexes, reducing GROUP BY query time during training data extraction (migration `014`).
 
 ### Snapshot Function
 `analytics.update_feature_snapshots()` iterates over ALL distinct dates since the last run (not just `MAX(DATE(...))`) — previously, if multiple days' matches were ingested between cron runs, only the most recent day was captured and intermediate days were permanently lost.

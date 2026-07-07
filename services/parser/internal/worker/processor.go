@@ -110,6 +110,13 @@ func (p *Processor) Run(ctx context.Context) (err error) {
 
 		batch := p.fetchBatch(ctx)
 		if len(batch) == 0 {
+			// Brief sleep to prevent CPU spin when channel is closed during
+			// shutdown but ctx is not yet cancelled.
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(10 * time.Millisecond):
+			}
 			continue
 		}
 		currentBatch = batch // track raw batch during unmarshal phase

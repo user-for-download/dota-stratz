@@ -339,7 +339,7 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
         if obj.get("type") != "roshan_kill":
             continue
         rosh_time = obj.get("time", 0)
-        if rosh_time <= current_minute * 60 and rosh_time > (current_minute - 5) * 60:
+        if rosh_time <= current_minute * 60 and rosh_time >= (current_minute - 4) * 60:
             if obj.get("team") == 0: radiant_aegis = 1
             else: dire_aegis = 1
 
@@ -396,14 +396,14 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
         "minute_sq": float(current_minute ** 2),
         "radiant_dead_now": float(radiant_dead_now),
         "dire_dead_now": float(dire_dead_now),
-        "buyback_diff": float(dire_buybacks - radiant_buybacks),
+        "buyback_diff": float(radiant_buybacks - dire_buybacks),
         "bkb_diff": float(radiant_bkb - dire_bkb),
         "blink_diff": float(radiant_blink - dire_blink),
         "aghs_diff": float(radiant_aghs - dire_aghs),
         "rapier_diff": float(radiant_rapier - dire_rapier),
         "mega_creeps_radiant": mega_radiant,
         "mega_creeps_dire": mega_dire,
-        "courier_lost_diff": float(dire_couriers_lost - radiant_couriers_lost),
+        "courier_lost_diff": float(radiant_couriers_lost - dire_couriers_lost),
         "aegis_diff": float(radiant_aegis - dire_aegis),
         "barracks_diff": float(radiant_barracks - dire_barracks),
     }

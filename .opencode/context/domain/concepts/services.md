@@ -50,7 +50,7 @@
 - Cooldown checks ZScore before re-adding proxy to prevent race with concurrent remove()
 
 ## Inference API
-**Purpose**: Serves draft predictions via PyTorch DraftBERT (TorchScript JIT) on HTTP :8080 with Monte Carlo rollouts.
+**Purpose**: Serves draft predictions and live match analysis via PyTorch DraftBERT (TorchScript JIT) on HTTP :8080 with Monte Carlo rollouts.
 
 **Key behaviors**:
 - Threaded connection pool (psycopg2 `ThreadedConnectionPool`) guarded by `threading.Lock`
@@ -59,6 +59,32 @@
 - Model loading (file I/O) happens outside the lock to avoid blocking all threads during lazy load
 - Six pre-fetched batch queries replace hundreds of individual lookups: baselines, team-hero, player-hero, synergy, counter, h2h
 - NULL-safe: `.get()` defaults use `or 0` to handle NULL DB values (prevents `TypeError` on `int(None)`)
+- **WebSocket streaming** (`/ws/draft`): Queue-based async bridge between sync executor (MCTS) and async WebSocket. Progress packets streamed per-candidate during MCTS evaluation. Frontend shows real-time MCTS overlay with progress bar and top picks.
+- **Semaphore-limited concurrency**: `asyncio.Semaphore(2)` limits concurrent WS evaluations to prevent resource exhaustion.
 - **`POST /predict`** accepts `patch_id`, `first_pick_team`, `draft[]`, `radiant_team_id`, `dire_team_id`, `account_id` (optional, enables player-hero features), `num_recommendations`; returns top-5 hero scores + **reasoning** string explaining top picks
 - **`POST /reload/{patch_id}`** — hot-reload a model without restart (requires `STRATZ_ADMIN_TOKEN` in Bearer auth header)
 - `GET /health` — Returns `{"status":"ok","patch_models_loaded":[...]}`
+- **`WS /ws/draft`** — Real-time MCTS streaming per the queue-based async bridge
+- **Live prediction**: `GET /live/{match_id}` endpoint and `WS /ws/live` for live match win probability streaming with per-tick updates
+- **`POST /predict-match`** — 5v5 composition evaluation endpoint
+
+## Drafting Bot
+
+**Purpose**: Autonomous draft simulation agents for strategy evaluation, built on the Inference API's ML backend.
+
+**Components** (all in `services/trainer/trainer/`):
+
+- **`inference_cache.py`** — Loads 7 `ml.*_agg` tables into Python dicts for O(1) feature lookups during simulated drafts. Mirrors the API's `pre_fetch_batch()` approach but fully self-contained.
+
+- **`draft_state.py`** — Builds 59-dim feature arrays for hypothetical picks entirely in RAM. Mirrors the SQL aggregate logic that the API runs in `build_feature_vector()`.
+
+- **`bot_greedy.py`** — Single-step lookahead. Scores all eligible heroes via batched TorchScript inference (~5ms per 120 heroes), picks the highest-scored. Used as baseline / fast-mode.
+
+- **`bot_mcts.py`** — Monte Carlo Tree Search with UCB1 selection. Uses DraftBERT as a value network (AlphaZero-style — no random rollouts needed due to the draft-augmented training data). Simulates complete draft trajectories by treating the model's win probability as the game outcome.
+
+- **`test_bot.py`** — Integration tests for all bot components. Runs in Docker with mock model.
+
+**Bot architecture**:
+- Bots bypass the API entirely — they load the same TorchScript model directly
+- Feature computation mirrors the API's `build_feature_vector()` but uses in-memory cache instead of DB queries
+- Cache is populated once at startup from the 7 `ml.*_agg` tables
