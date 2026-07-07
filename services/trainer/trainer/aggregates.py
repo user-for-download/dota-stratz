@@ -51,6 +51,11 @@ def _batched(rows: list[tuple], batch_size: int):
         yield rows[i : i + batch_size]
 
 
+def _wavg(c_val: float, c_w: float, p_val: float, p_w: float, total_g: float) -> float:
+    """Weighted average of current and prior values."""
+    return (c_val * c_w + p_val * p_w) / total_g
+
+
 _VALID_TABLES = frozenset({
     "ml.team_hero_agg", "ml.player_hero_agg",
     "ml.hero_synergy_agg", "ml.hero_counter_agg",
@@ -815,6 +820,7 @@ def populate_team_hero_snapshot(cfg: TrainerConfig, conn) -> int:
 
       1. Pre-compute prior-patch aggregate (same for every as_of_date).
       2. For each date, compute current-patch PIT aggregate and merge with prior.
+         Prior-only combos are preserved by using prior as the base.
     """
     patch_id = cfg.patch_id
     pg = cfg.prior_games
@@ -831,28 +837,24 @@ def populate_team_hero_snapshot(cfg: TrainerConfig, conn) -> int:
     bans_prior = _team_hero_bans_prior(cfg, conn, extra, min_patch)
 
     # Phase 2: for each date, compute current-patch PIT and merge with prior.
+    # Use prior as base so prior-only combos are preserved.
     rows = []
     with conn.cursor() as cur:
+        # Get all dates for the current patch
         cur.execute(f"""
-            WITH dates AS (
-                SELECT generate_series(
-                    date_trunc('day', to_timestamp(MIN(start_time)))::date,
-                    date_trunc('day', to_timestamp(MAX(start_time)))::date,
-                    '1 day'::interval
-                )::date AS as_of_date
-                FROM matches
-                WHERE patch = %s AND radiant_win IS NOT NULL{extra}
-            )
-            SELECT
-                d.as_of_date,
-                sub.team_id, sub.hero_id,
-                sub.games, sub.wins,
-                sub.avg_gpm, sub.avg_xpm,
-                sub.avg_kills, sub.avg_deaths, sub.avg_assists,
-                sub.firstblood_rate, sub.avg_camps_stacked, sub.avg_vision_placed,
-                sub.avg_gold_10, sub.avg_xp_10, sub.last_played
-            FROM dates d
-            CROSS JOIN LATERAL (
+            SELECT generate_series(
+                date_trunc('day', to_timestamp(MIN(start_time)))::date,
+                date_trunc('day', to_timestamp(MAX(start_time)))::date,
+                '1 day'::interval
+            )::date AS as_of_date
+            FROM matches
+            WHERE patch = %s AND radiant_win IS NOT NULL{extra}
+        """, (patch_id,))
+        dates = [r[0] for r in cur.fetchall()]
+
+        # For each date, compute current-patch aggregates
+        for as_of in dates:
+            cur.execute(f"""
                 SELECT
                     CASE WHEN p.is_radiant THEN m.radiant_team_id ELSE m.dire_team_id END AS team_id,
                     p.hero_id,
@@ -883,47 +885,72 @@ def populate_team_hero_snapshot(cfg: TrainerConfig, conn) -> int:
                 ) x10 ON TRUE
                 WHERE m.radiant_win IS NOT NULL{extra}
                   AND m.patch = %s
-                  AND to_timestamp(m.start_time) < d.as_of_date
+                  AND to_timestamp(m.start_time) < %s
                   AND CASE WHEN p.is_radiant THEN m.radiant_team_id ELSE m.dire_team_id END IS NOT NULL
                 GROUP BY team_id, p.hero_id
-            ) sub
-            ORDER BY d.as_of_date, sub.team_id, sub.hero_id
-        """, (patch_id, patch_id))
+            """, (patch_id, as_of))
 
-        def _wavg(c_val: float, c_w: float, p_val: float, p_w: float, total_g: float) -> float:
-            return (c_val * c_w + p_val * p_w) / total_g
+            # Build current-patch data for this date
+            current: dict[tuple, dict] = {}
+            for r in cur.fetchall():
+                tid, hid, c_games, c_wins, agpm, axpm, ak_, ad_, aa_, fbr, acs, avp, ag10, ax10, lp = r
+                current[(tid, hid)] = {
+                    "games": c_games, "wins": c_wins,
+                    "avg_gpm": agpm, "avg_xpm": axpm,
+                    "avg_kills": ak_, "avg_deaths": ad_, "avg_assists": aa_,
+                    "firstblood_rate": fbr, "avg_camps_stacked": acs, "avg_vision_placed": avp,
+                    "avg_gold_10": ag10, "avg_xp_10": ax10,
+                    "last_played": lp,
+                }
 
-        for r in cur.fetchall():
-            (as_of, team_id, hero_id, c_games, c_wins,
-             ag, ax, ak_, ad_, aa_, fbr, acs, avp, ag10, ax10, lp) = r
+            # Merge: start with prior, overlay current
+            all_combos = set(prior.keys()) | set(current.keys())
+            for combo in all_combos:
+                p = prior.get(combo)
+                c = current.get(combo)
 
-            # Merge with prior-patch data.
-            p = prior.get((team_id, hero_id))
-            if p is not None:
-                games = c_games + p["games"]
-                wins = c_wins + p["wins"]
-                # Weighted averages — approximate but consistent.
-                total_g = games if games > 0 else 1.0
-                ag   = _wavg(ag, c_games, p["avg_gpm"], p["games"], total_g)
-                ax   = _wavg(ax, c_games, p["avg_xpm"], p["games"], total_g)
-                ak_  = _wavg(ak_, c_games, p["avg_kills"], p["games"], total_g)
-                ad_  = _wavg(ad_, c_games, p["avg_deaths"], p["games"], total_g)
-                aa_  = _wavg(aa_, c_games, p["avg_assists"], p["games"], total_g)
-                fbr  = _wavg(fbr, c_games, p["firstblood_rate"], p["games"], total_g)
-                acs  = _wavg(acs, c_games, p["avg_camps_stacked"], p["games"], total_g)
-                avp  = _wavg(avp, c_games, p["avg_vision_placed"], p["games"], total_g)
-                ag10 = _wavg(ag10, c_games, p["avg_gold_10"], p["games"], total_g)
-                ax10 = _wavg(ax10, c_games, p["avg_xp_10"], p["games"], total_g)
-                lp   = max(lp, p["last_played"])
-            else:
-                games, wins = c_games, c_wins
+                if p is not None and c is not None:
+                    # Both prior and current exist — merge
+                    tid, hid = combo
+                    games = c["games"] + p["games"]
+                    wins = c["wins"] + p["wins"]
+                    total_g = games if games > 0 else 1.0
+                    ag   = _wavg(c["avg_gpm"], c["games"], p["avg_gpm"], p["games"], total_g)
+                    ax   = _wavg(c["avg_xpm"], c["games"], p["avg_xpm"], p["games"], total_g)
+                    ak_  = _wavg(c["avg_kills"], c["games"], p["avg_kills"], p["games"], total_g)
+                    ad_  = _wavg(c["avg_deaths"], c["games"], p["avg_deaths"], p["games"], total_g)
+                    aa_  = _wavg(c["avg_assists"], c["games"], p["avg_assists"], p["games"], total_g)
+                    fbr  = _wavg(c["firstblood_rate"], c["games"], p["firstblood_rate"], p["games"], total_g)
+                    acs  = _wavg(c["avg_camps_stacked"], c["games"], p["avg_camps_stacked"], p["games"], total_g)
+                    avp  = _wavg(c["avg_vision_placed"], c["games"], p["avg_vision_placed"], p["games"], total_g)
+                    ag10 = _wavg(c["avg_gold_10"], c["games"], p["avg_gold_10"], p["games"], total_g)
+                    ax10 = _wavg(c["avg_xp_10"], c["games"], p["avg_xp_10"], p["games"], total_g)
+                    lp   = max(c["last_played"], p["last_played"])
+                elif c is not None:
+                    # Current-only (no prior)
+                    tid, hid = combo
+                    games, wins = c["games"], c["wins"]
+                    ag, ax = c["avg_gpm"], c["avg_xpm"]
+                    ak_, ad_, aa_ = c["avg_kills"], c["avg_deaths"], c["avg_assists"]
+                    fbr, acs, avp = c["firstblood_rate"], c["avg_camps_stacked"], c["avg_vision_placed"]
+                    ag10, ax10 = c["avg_gold_10"], c["avg_xp_10"]
+                    lp = c["last_played"]
+                else:
+                    # Prior-only (no current matches for this date)
+                    tid, hid = combo
+                    games, wins = p["games"], p["wins"]
+                    ag, ax = p["avg_gpm"], p["avg_xpm"]
+                    ak_, ad_, aa_ = p["avg_kills"], p["avg_deaths"], p["avg_assists"]
+                    fbr, acs, avp = p["firstblood_rate"], p["avg_camps_stacked"], p["avg_vision_placed"]
+                    ag10, ax10 = p["avg_gold_10"], p["avg_xp_10"]
+                    lp = p["last_played"]
 
-            rows.append((
-                patch_id, as_of, team_id, hero_id, games, wins,
-                bans_prior.get((team_id, hero_id), 0),
-                _shrunk_wr(wins, games, pg, pw),
-                ag, ax, ak_, ad_, aa_, fbr, acs, avp, ag10, ax10, lp,
-            ))
+                rows.append((
+                    patch_id, as_of, tid, hid, games, wins,
+                    bans_prior.get(combo, 0),
+                    _shrunk_wr(wins, games, pg, pw),
+                    ag, ax, ak_, ad_, aa_, fbr, acs, avp, ag10, ax10, lp,
+                ))
 
     total = 0
     with conn.cursor() as cur:

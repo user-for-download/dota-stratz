@@ -82,15 +82,15 @@ gold_xp AS (
     WHERE g.match_id IN (SELECT match_id FROM match_minutes)
 ),
 kills AS (
-    SELECT match_id, (time / 60) AS minute,
+    SELECT match_id, minute,
            SUM(CASE WHEN player_slot < 128 THEN 1 ELSE 0 END) AS r_kills,
            SUM(CASE WHEN player_slot >= 128 THEN 1 ELSE 0 END) AS d_kills
     FROM player_kills_log
     WHERE match_id IN (SELECT DISTINCT match_id FROM match_minutes)
-    GROUP BY match_id, (time / 60)
+    GROUP BY match_id, minute
 ),
 objs AS (
-    SELECT match_id, (time / 60) AS minute,
+    SELECT match_id, minute,
            SUM(CASE WHEN team = 0 AND type = 'tower_kill' THEN 1 ELSE 0 END) AS r_towers,
            SUM(CASE WHEN team = 1 AND type = 'tower_kill' THEN 1 ELSE 0 END) AS d_towers,
            SUM(CASE WHEN team = 0 AND type = 'barracks_kill' THEN 1 ELSE 0 END) AS r_barracks,
@@ -101,28 +101,28 @@ objs AS (
            SUM(CASE WHEN type = 'CHAT_MESSAGE_COURIER_LOST' AND team = 3 THEN 1 ELSE 0 END) AS d_couriers_lost
     FROM objectives
     WHERE match_id IN (SELECT DISTINCT match_id FROM match_minutes)
-    GROUP BY match_id, (time / 60)
+    GROUP BY match_id, minute
 ),
 wards AS (
-    SELECT match_id, (time / 60) AS minute,
+    SELECT match_id, minute,
            SUM(CASE WHEN player_slot < 128 THEN 1 ELSE 0 END) AS r_obs,
            SUM(CASE WHEN player_slot >= 128 THEN 1 ELSE 0 END) AS d_obs
     FROM player_obs_log
     WHERE match_id IN (SELECT DISTINCT match_id FROM match_minutes)
-    GROUP BY match_id, (time / 60)
+    GROUP BY match_id, minute
 ),
 tf AS (
-    SELECT tf2.match_id, (tf2.start_time / 60) AS minute,
+    SELECT tf2.match_id, tf2.minute,
            SUM(CASE WHEN tp.gold_delta > 0 THEN 1 ELSE 0 END) AS r_wins,
            SUM(CASE WHEN tp.gold_delta < 0 THEN 1 ELSE 0 END) AS d_wins
     FROM teamfights tf2
     JOIN teamfight_players tp ON tf2.match_id = tp.match_id AND tf2.start_time = tp.start_time
     WHERE tf2.match_id IN (SELECT DISTINCT match_id FROM match_minutes)
       AND tp.player_slot < 128
-    GROUP BY tf2.match_id, (tf2.start_time / 60)
+    GROUP BY tf2.match_id, tf2.minute
 ),
 items AS (
-    SELECT match_id, (time / 60) AS minute,
+    SELECT match_id, minute,
            SUM(CASE WHEN player_slot < 128 AND key = 'black_king_bar' THEN 1 ELSE 0 END) AS r_bkb,
            SUM(CASE WHEN player_slot >= 128 AND key = 'black_king_bar' THEN 1 ELSE 0 END) AS d_bkb,
            SUM(CASE WHEN player_slot < 128 AND key = 'blink' THEN 1 ELSE 0 END) AS r_blink,
@@ -134,15 +134,15 @@ items AS (
     FROM player_purchase_log
     WHERE match_id IN (SELECT DISTINCT match_id FROM match_minutes)
       AND key IN ('black_king_bar', 'blink', 'ultimate_scepter', 'aghanims_shard', 'rapier')
-    GROUP BY match_id, (time / 60)
+    GROUP BY match_id, minute
 ),
 bbs AS (
-    SELECT match_id, (time / 60) AS minute,
+    SELECT match_id, minute,
            SUM(CASE WHEN player_slot < 128 THEN 1 ELSE 0 END) AS r_buybacks,
            SUM(CASE WHEN player_slot >= 128 THEN 1 ELSE 0 END) AS d_buybacks
     FROM player_buyback_log
     WHERE match_id IN (SELECT DISTINCT match_id FROM match_minutes)
-    GROUP BY match_id, (time / 60)
+    GROUP BY match_id, minute
 )
 SELECT
     mm.match_id, mm.minute, mm.radiant_win,
