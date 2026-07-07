@@ -153,8 +153,6 @@ A comprehensive audit across ~100 source files found **55 items** across Go, Pyt
 
 All 9 blockers and 10 high-impact warnings are fixed. 36 remaining items are either accepted design choices or bounded, non-critical issues.
 
-See [`errors.md`](errors.md) for the complete audit report with per-item status.
-
 ## License
 
 See `LICENSE` (if applicable).
