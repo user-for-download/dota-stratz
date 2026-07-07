@@ -140,19 +140,6 @@ Configuration is managed through `deploy/.env`. See `deploy/.env.example` for al
 
 Grafana at `http://localhost:3000` (admin/admin). Prometheus at `http://localhost:9092`.
 
-## Code Audit
-
-A comprehensive audit across ~100 source files found **55 items** across Go, Python, JS, SQL, shell scripts, and Docker configs.
-
-| Severity | Found | Fixed | Deferred |
-|----------|-------|-------|----------|
-| 🔴 **BLOCKER** | 9 | 9 | 0 |
-| 🟡 **WARNING** | 18 | 10 | 8 |
-| ℹ️ INFO | 28 | 0 | 28 |
-| **Total** | **55** | **19** | **36** |
-
-All 9 blockers and 10 high-impact warnings are fixed. 36 remaining items are either accepted design choices or bounded, non-critical issues.
-
 ## License
 
 See `LICENSE` (if applicable).
