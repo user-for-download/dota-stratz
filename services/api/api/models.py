@@ -47,6 +47,11 @@ class PredictRequest(BaseModel):
                     "When set, recommendations are computed for this team regardless "
                     "of whose turn it is in the draft order.",
     )
+    run_mcts: bool = Field(
+        True,
+        description="Whether to run Monte Carlo Tree Search rollouts. "
+                    "Set to False for instant tooltip predictions.",
+    )
 
 
 class HeroScore(BaseModel):

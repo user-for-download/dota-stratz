@@ -112,6 +112,7 @@ class Predictor:
         dire_team_id: int | None,
         num_recommendations: int = 5,
         account_id: int | None = None,
+        run_mcts: bool = True,
     ) -> tuple[list[dict[str, Any]], str | None]:
         """Score all eligible heroes using batched TorchScript inference."""
         with self._lock:
@@ -126,10 +127,23 @@ class Predictor:
         if not eligible:
             return [], None
 
-        team_id = radiant_team_id if ctx.recommending_team == 0 else dire_team_id
-        enemy_team_id = dire_team_id if ctx.recommending_team == 0 else radiant_team_id
+        # If it's a ban turn, evaluate from the enemy's perspective to find their best heroes
+        eval_team = ctx.recommending_team if ctx.is_pick_turn else (1 - ctx.recommending_team)
 
-        batch = pre_fetch_batch(patch_id, eligible, team_id, enemy_team_id, ctx, account_id)
+        eval_ctx = DraftContext(
+            turn=ctx.turn,
+            recommending_team=eval_team,
+            is_pick_turn=True,  # Evaluate as if they are picking
+            radiant_picks=list(ctx.radiant_picks),
+            dire_picks=list(ctx.dire_picks),
+            radiant_bans=list(ctx.radiant_bans),
+            dire_bans=list(ctx.dire_bans),
+        )
+
+        team_id = radiant_team_id if eval_team == 0 else dire_team_id
+        enemy_team_id = dire_team_id if eval_team == 0 else radiant_team_id
+
+        batch = pre_fetch_batch(patch_id, eligible, team_id, enemy_team_id, eval_ctx, account_id)
 
         # Build base sequence from draft history
         sorted_draft = sorted(draft_slots, key=lambda x: x.order)
@@ -143,12 +157,12 @@ class Predictor:
 
         for hid in eligible:
             h_seq = base_heroes + [hid]
-            a_seq = base_actions + [ctx.recommending_team * 1 + 2 + 1]
+            a_seq = base_actions + [eval_team * 1 + 2 + 1]
             pad = max_seq_len - len(h_seq)
             batch_h.append(h_seq + [0] * pad)
             batch_a.append(a_seq + [0] * pad)
 
-            fv = build_feature_vector(hid, ctx, patch_id, batch, schema, {}, schema["max_hero_id"])
+            fv = build_feature_vector(hid, eval_ctx, patch_id, batch, schema, {}, schema["max_hero_id"])
             batch_f.append(fv[:num_continuous])
 
         # Single batched forward pass
@@ -160,42 +174,60 @@ class Predictor:
             logits = model(t_h, t_a, t_f)
             probs = torch.sigmoid(logits).numpy()
 
-        if ctx.recommending_team == 1:
+        if eval_team == 1:
             probs = 1.0 - probs
 
         # Build recommendations with team-hero boost
         recs = []
         for i, hid in enumerate(eligible):
-            sc = float(probs[i])
+            eval_team_wr = float(probs[i])
+            sc = eval_team_wr
+            display_wr = eval_team_wr if ctx.is_pick_turn else (1.0 - eval_team_wr)
+
             th = batch.team_hero_agg.get(hid)
             boosted = False
-            if th and th.get("games", 0) >= 3:
+
+            # Only apply team-hero boost if evaluating a pick for ourselves
+            if ctx.is_pick_turn and th and th.get("games", 0) >= 3:
                 twr, tg = th["win_rate"], th["games"]
                 if twr >= 0.80 and tg >= 5: sc = min(1.0, sc + 0.25); boosted = True
                 elif twr >= 0.75 and tg >= 4: sc = min(1.0, sc + 0.20); boosted = True
                 elif twr >= 0.70 and tg >= 3: sc = min(1.0, sc + 0.15); boosted = True
                 elif twr >= 0.65 and tg >= 3: sc = min(1.0, sc + 0.10); boosted = True
 
+            if boosted:
+                display_wr = sc
+
             recs.append({
-                "hero_id": hid, "score": float(probs[i]),
-                "pick_probability": round(sc, 4), "win_probability": round(sc, 4),
+                "hero_id": hid, "score": sc,
+                "pick_probability": round(sc, 4), "win_probability": round(display_wr, 4),
                 "team_games": int(th.get("games") or 0) if th else 0,
                 "team_win_rate": round(th.get("win_rate") or 0, 4) if th else None,
                 "boosted": boosted,
             })
 
-        recs.sort(key=lambda r: r["win_probability"], reverse=True)
+        recs.sort(key=lambda r: r["score"], reverse=True)
 
-        # Monte Carlo Rollouts: simulate draft completions to re-rank
-        try:
-            from .lookahead import run_monte_carlo_rollouts
-            top_candidates = recs[:15]
-            recs = run_monte_carlo_rollouts(
-                self, patch_id, ctx, top_candidates, eligible,
-                radiant_team_id, dire_team_id, num_simulations=40,
-            )
-        except Exception as e:
-            logger.warning("MCTS rollouts failed, using base policy: %s", e)
+        if run_mcts:
+            # Monte Carlo Rollouts: simulate draft completions to re-rank
+            try:
+                from .lookahead import run_monte_carlo_rollouts
+                top_candidates = recs[:15]
+                recs = run_monte_carlo_rollouts(
+                    self, patch_id, eval_ctx, top_candidates, eligible,
+                    radiant_team_id, dire_team_id, num_simulations=40,
+                )
+                recs.sort(key=lambda r: r.get("lookahead_score", r["score"]), reverse=True)
+
+                # Convert enemy WR back to acting team WR for display if banning
+                if not ctx.is_pick_turn:
+                    for r in recs:
+                        if "mc_win_probability" in r:
+                            r["mc_win_probability"] = 1.0 - r["mc_win_probability"]
+                        if "worst_case_nemesis_wr" in r:
+                            r["worst_case_nemesis_wr"] = 1.0 - r["worst_case_nemesis_wr"]
+            except Exception as e:
+                logger.warning("MCTS rollouts failed, using base policy: %s", e)
 
         recs = recs[:num_recommendations]
 

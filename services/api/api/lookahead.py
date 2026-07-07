@@ -139,7 +139,7 @@ def run_monte_carlo_rollouts(
         worst_case_win_rate = min(wc) if wc else mc_avg
 
         # 40% Base + 40% Average Rollouts + 20% Worst-Case Paranoia
-        blended = (cand["win_probability"] * 0.40) + (mc_avg * 0.40) + (worst_case_win_rate * 0.20)
+        blended = (cand["score"] * 0.40) + (mc_avg * 0.40) + (worst_case_win_rate * 0.20)
 
         # Hard-veto if worst-case enemy counter drops WR below 35%
         if worst_case_win_rate < 0.35:

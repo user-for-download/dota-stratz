@@ -119,32 +119,32 @@ function ensureWsConnected() {
       if (data.type === 'error') return;
 
       if (data.type === 'mcts_progress') {
-        const progressFill = document.getElementById('mctsProgressFill');
-        const progressText = document.getElementById('mctsProgressText');
-        const topPicks = document.getElementById('mctsTopPicks');
-        if (progressFill && data.total > 0) {
-          progressFill.style.width = `${(data.iteration / data.total) * 100}%`;
-        }
-        if (progressText) {
-          progressText.textContent = `Evaluating hero ${data.hero_id} (${data.iteration}/${data.total})`;
-        }
-        if (topPicks && data.top_picks) {
-          topPicks.innerHTML = data.top_picks.map(p =>
-            `<li><span>${p.action} Hero ${p.hero_id}</span><span>${(p.win_rate * 100).toFixed(1)}%</span></li>`
-          ).join('');
+        const phase = draftIndex < DRAFT_PHASES.length ? DRAFT_PHASES[draftIndex] : null;
+        const currentTeamInt = phase?.team === 'radiant' ? 0 : 1;
+
+        if (data.for_team === currentTeamInt) {
+          const progressFill = document.getElementById('mctsProgressFill');
+          const progressText = document.getElementById('mctsProgressText');
+          const topPicks = document.getElementById('mctsTopPicks');
+          if (progressFill && data.total > 0) {
+            progressFill.style.width = `${(data.iteration / data.total) * 100}%`;
+          }
+          if (progressText) {
+            progressText.textContent = `Evaluating hero ${data.hero_id} (${data.iteration}/${data.total})`;
+          }
+          if (topPicks && data.top_picks) {
+            topPicks.innerHTML = data.top_picks.map(p =>
+              `<li><span>${p.action} Hero ${p.hero_id}</span><span>${(p.win_rate * 100).toFixed(1)}%</span></li>`
+            ).join('');
+          }
         }
       }
 
       if (data.type === 'mcts_complete') {
-        const key = `${data.turn_id}_0`;
-        const keyD = `${data.turn_id}_1`;
+        const key = `${data.turn_id}_${data.for_team}`;
         if (draftWsResolvers[key]) {
           draftWsResolvers[key](data);
           delete draftWsResolvers[key];
-        }
-        if (draftWsResolvers[keyD]) {
-          draftWsResolvers[keyD](data);
-          delete draftWsResolvers[keyD];
         }
       }
     };
@@ -765,6 +765,7 @@ async function fetchTooltipPrediction(heroId, nextAction, suggestedTeam) {
         dire_team_id: parseInt(document.getElementById('dire-team').value) || null,
         for_team: nextAction.team === 'radiant' ? 0 : 1,
         num_recommendations: 50,
+        run_mcts: false,
       }),
       signal: predictAbort.signal
     });
