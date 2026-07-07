@@ -389,6 +389,12 @@ def write_schema(model_dir: str | Path, patch_id: int, max_hero_id: int = 160, n
     """
     cols = feature_column_names(include_onehot=True, max_hero_id=max_hero_id, n_embeddings=n_embeddings)
     agg_cols = feature_column_names(include_onehot=False)
+
+    # Separate feature lists for explicit API contract
+    continuous_features = agg_cols  # Features for tabular MLP
+    categorical_features = ["hero_id"]  # Features for embedding layers
+    embedding_features = [f"emb_{i}" for i in range(n_embeddings)]  # SVD embeddings
+
     schema = {
         "columns": cols,
         "n_features": len(cols),
@@ -396,6 +402,9 @@ def write_schema(model_dir: str | Path, patch_id: int, max_hero_id: int = 160, n
         "n_embeddings": n_embeddings,
         "max_hero_id": max_hero_id,
         "aggregate_columns": agg_cols,
+        "continuous_features": continuous_features,
+        "categorical_features": categorical_features,
+        "embedding_features": embedding_features,
         "embedding_prefix": "emb_",
         "max_seq_len": max_seq_len,
     }

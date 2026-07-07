@@ -34,8 +34,10 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
     # 1. Load Data
     train_ds, val_ds, metadata = load_sequence_dataset(cfg, engine, max_len=cfg.max_seq_len)
 
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True, drop_last=False, num_workers=min(cfg.num_threads, 4))
-    val_loader = DataLoader(val_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=min(cfg.num_threads, 4))
+    # num_workers=0: Dataset is pre-tensorized, so no GIL overhead.
+    # Using num_workers > 0 would duplicate tensor memory across workers.
+    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True, drop_last=False, num_workers=0)
+    val_loader = DataLoader(val_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=0)
 
     num_continuous = metadata["n_continuous_features"]
     logger.info("Sequence max_len=%d, Continuous features=%d", cfg.max_seq_len, num_continuous)
@@ -69,6 +71,7 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
         # Training
         model.train()
         train_loss = 0.0
+        train_samples = 0
         for heroes, actions, tabular, labels in train_loader:
             heroes, actions = heroes.to(device), actions.to(device)
             tabular, labels = tabular.to(device), labels.to(device)
@@ -79,21 +82,24 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             optimizer.step()
-            train_loss += loss.item()
+            train_loss += loss.item() * heroes.size(0)
+            train_samples += heroes.size(0)
 
         # Validation
         model.eval()
         val_loss = 0.0
+        val_samples = 0
         with torch.no_grad():
             for heroes, actions, tabular, labels in val_loader:
                 heroes, actions = heroes.to(device), actions.to(device)
                 tabular, labels = tabular.to(device), labels.to(device)
                 logits = model(heroes, actions, tabular)
                 loss = criterion(logits, labels)
-                val_loss += loss.item()
+                val_loss += loss.item() * heroes.size(0)
+                val_samples += heroes.size(0)
 
-        avg_train = train_loss / max(len(train_loader), 1)
-        avg_val = val_loss / max(len(val_loader), 1)
+        avg_train = train_loss / max(train_samples, 1)
+        avg_val = val_loss / max(val_samples, 1)
 
         scheduler.step(avg_val)
         current_lr = optimizer.param_groups[0]['lr']

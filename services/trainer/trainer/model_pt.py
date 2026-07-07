@@ -48,9 +48,15 @@ class MultiModalDraftBERT(nn.Module):
             nn.Dropout(dropout),
         )
 
-        # --- 3. Fusion Head ---
+        # --- 3. Gated Fusion Head ---
+        # Gating mechanism to learn which modality to prioritize
+        fusion_dim = d_model + fusion_hidden
+        self.gate = nn.Sequential(
+            nn.Linear(fusion_dim, fusion_dim),
+            nn.Sigmoid(),
+        )
         self.fusion_head = nn.Sequential(
-            nn.Linear(d_model + fusion_hidden, fusion_hidden),
+            nn.Linear(fusion_dim, fusion_hidden),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(fusion_hidden, 1),
@@ -82,7 +88,9 @@ class MultiModalDraftBERT(nn.Module):
         # Tabular processing
         tab_repr = self.tabular_mlp(continuous_features)
 
-        # Fusion and prediction
+        # Gated fusion: learn which modality to prioritize
         fused = torch.cat([seq_repr, tab_repr], dim=1)
-        logits = self.fusion_head(fused).view(-1)
+        gate_weights = self.gate(fused)
+        gated_fused = fused * gate_weights
+        logits = self.fusion_head(gated_fused).view(-1)
         return logits

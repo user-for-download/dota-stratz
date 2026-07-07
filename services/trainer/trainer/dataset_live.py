@@ -44,17 +44,20 @@ class LiveDraftDataset(Dataset):
         max_len=50,
     ):
         n = len(labels)
-        self.heroes = torch.zeros((n, max_len), dtype=torch.long)
-        self.actions = torch.zeros((n, max_len), dtype=torch.long)
-        self.static = torch.tensor(np.array(static_feats), dtype=torch.float32)
-        self.dynamic = torch.tensor(np.array(dynamic_feats), dtype=torch.float32)
-        self.labels = torch.tensor(labels, dtype=torch.float32)
 
-        for i in range(n):
-            h = heroes_seqs[i][:max_len]
-            a = actions_seqs[i][:max_len]
-            self.heroes[i, : len(h)] = torch.tensor(h, dtype=torch.long)
-            self.actions[i, : len(a)] = torch.tensor(a, dtype=torch.long)
+        # Pad sequences using NumPy (much faster than torch.tensor in loop)
+        def pad_sequence(seq, max_len):
+            return seq[:max_len] + [0] * max(0, max_len - len(seq))
+
+        h_padded = [pad_sequence(h, max_len) for h in heroes_seqs]
+        a_padded = [pad_sequence(a, max_len) for a in actions_seqs]
+
+        # Instantiate tensor memory exactly once
+        self.heroes = torch.from_numpy(np.array(h_padded, dtype=np.int64))
+        self.actions = torch.from_numpy(np.array(a_padded, dtype=np.int64))
+        self.static = torch.from_numpy(np.array(static_feats, dtype=np.float32))
+        self.dynamic = torch.from_numpy(np.array(dynamic_feats, dtype=np.float32))
+        self.labels = torch.tensor(labels, dtype=torch.float32)
 
     def __len__(self):
         return len(self.labels)

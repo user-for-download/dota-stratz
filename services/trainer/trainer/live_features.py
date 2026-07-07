@@ -202,9 +202,10 @@ def extract_dynamic_features(engine, patch_id: int, lookback: int = 2) -> pd.Dat
 
     # --- Cumulative states from tick events ---
     tick_cols = [c for c in df.columns if c.endswith("_tick")]
-    for col in tick_cols:
-        cum_col = col.replace("_tick", "")
-        df[cum_col] = df.groupby("match_id")[col].cumsum()
+    cum_cols = [c.replace("_tick", "") for c in tick_cols]
+
+    # Single groupby for all tick columns (much faster than looping)
+    df[cum_cols] = df.groupby("match_id")[tick_cols].cumsum()
 
     # --- Win Conditions: Mega Creeps ---
     df["mega_creeps_radiant"] = (df["dire_barracks"] >= 6).astype(float)

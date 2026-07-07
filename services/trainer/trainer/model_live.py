@@ -66,9 +66,15 @@ class LiveDraftBERT(nn.Module):
             nn.Dropout(dropout),
         )
 
-        # --- Fusion Head ---
+        # --- Gated Fusion Head ---
+        # Gating mechanism to learn which modality to prioritize
+        fusion_dim = d_model + static_hidden + dynamic_hidden
+        self.gate = nn.Sequential(
+            nn.Linear(fusion_dim, fusion_dim),
+            nn.Sigmoid(),
+        )
         self.fusion_head = nn.Sequential(
-            nn.Linear(d_model + static_hidden + dynamic_hidden, fusion_hidden),
+            nn.Linear(fusion_dim, fusion_hidden),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(fusion_hidden, 1),
@@ -105,9 +111,11 @@ class LiveDraftBERT(nn.Module):
         # Branch 3: Dynamic MLP
         dynamic_repr = self.dynamic_mlp(dynamic_features)  # (B, 32)
 
-        # Fusion
+        # Gated fusion: learn which modality to prioritize
         fused = torch.cat([seq_repr, static_repr, dynamic_repr], dim=1)  # (B, 224)
-        logits = self.fusion_head(fused).squeeze(-1)  # (B,)
+        gate_weights = self.gate(fused)
+        gated_fused = fused * gate_weights
+        logits = self.fusion_head(gated_fused).squeeze(-1)  # (B,)
         return logits
 
     def forward_dynamic(self, seq_repr, static_repr, dynamic_features):
@@ -120,7 +128,9 @@ class LiveDraftBERT(nn.Module):
         """
         dynamic_repr = self.dynamic_mlp(dynamic_features)  # (B, 32)
         fused = torch.cat([seq_repr, static_repr, dynamic_repr], dim=1)  # (B, 224)
-        logits = self.fusion_head(fused).squeeze(-1)  # (B,)
+        gate_weights = self.gate(fused)
+        gated_fused = fused * gate_weights
+        logits = self.fusion_head(gated_fused).squeeze(-1)  # (B,)
         return logits
 
     def encode_draft(self, heroes, actions, static_features):
