@@ -132,13 +132,13 @@ def load_live_dataset(cfg: TrainerConfig, engine, max_len: int = 50):
     minutes_arr = dynamic_df["minute"].values
     dyn_matrix = dynamic_df[DYNAMIC_FEATURE_COLUMNS].values.astype(np.float32)
 
-    for i in range(len(dynamic_df)):
+    # Vectorized filtering: skip minute 0 and missing draft_lookup entries
+    # Skip minute 0 — no dynamic game state yet (gold/xp advantages are 0)
+    valid_mask = (minutes_arr != 0) & np.array([mid in draft_lookup for mid in mids])
+    valid_indices = np.where(valid_mask)[0]
+
+    for i in valid_indices:
         mid = mids[i]
-        minute = minutes_arr[i]
-
-        if minute == 0 or mid not in draft_lookup:
-            continue
-
         mh, ma, mt, ml = draft_lookup[mid]
         dyn = dyn_matrix[i]
 

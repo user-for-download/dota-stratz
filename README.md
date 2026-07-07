@@ -88,6 +88,8 @@ make downv                # Stop and remove volumes (destructive)
 | **Lookahead** | Monte Carlo Rollouts | 40 simulations per top-15 candidate, batch-evaluated |
 | **Features** | 59 aggregate + sequence | Team/player hero stats, synergy, counter, H2H, draft-slot |
 | **Calibration** | BCEWithLogitsLoss | Direct logit training, sigmoid output |
+| **Early Stopping** | Patience-based | Stops training when validation loss plateaus (patience=5) |
+| **Label Fix** | make_target() | Correctly handles Dire team labels (1 - radiant_win) |
 
 ## Configuration
 

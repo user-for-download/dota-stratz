@@ -84,5 +84,5 @@ class MultiModalDraftBERT(nn.Module):
 
         # Fusion and prediction
         fused = torch.cat([seq_repr, tab_repr], dim=1)
-        logits = self.fusion_head(fused).squeeze(-1)
+        logits = self.fusion_head(fused).view(-1)
         return logits

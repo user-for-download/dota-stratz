@@ -34,8 +34,8 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
     # 1. Load Data
     train_ds, val_ds, metadata = load_sequence_dataset(cfg, engine, max_len=cfg.max_seq_len)
 
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True, drop_last=False)
-    val_loader = DataLoader(val_ds, batch_size=cfg.batch_size, shuffle=False)
+    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True, drop_last=False, num_workers=min(cfg.num_threads, 4))
+    val_loader = DataLoader(val_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=min(cfg.num_threads, 4))
 
     num_continuous = metadata["n_continuous_features"]
     logger.info("Sequence max_len=%d, Continuous features=%d", cfg.max_seq_len, num_continuous)
@@ -61,6 +61,7 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
 
     # 3. Training Loop
     best_val_loss = float("inf")
+    patience_counter = 0
     model_dir = Path(cfg.model_dir)
     model_dir.mkdir(parents=True, exist_ok=True)
 
@@ -104,6 +105,7 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
 
         if avg_val < best_val_loss:
             best_val_loss = avg_val
+            patience_counter = 0
 
             # Save weights (for resume)
             torch.save(model.state_dict(), model_dir / f"draftbert_weights_{cfg.patch_id}.pt")
@@ -119,6 +121,11 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
                 dummy_f = torch.zeros((1, num_continuous), dtype=torch.float32)
                 traced = torch.jit.trace(model_eval, (dummy_h, dummy_a, dummy_f))
                 traced.save(model_dir / f"draftbert_compiled_{cfg.patch_id}.pt")
+        else:
+            patience_counter += 1
+            if patience_counter >= cfg.early_stop_patience:
+                logger.info("Early stopping at epoch %d", epoch + 1)
+                break
 
     logger.info("Best Val Loss: %.4f", best_val_loss)
 

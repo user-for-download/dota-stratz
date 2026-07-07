@@ -9,6 +9,14 @@
 | Trainer | `services/trainer/` | Python | — | PostgreSQL | Env vars | Batch CLI; needs ~2G memory; writes models to `/models` |
 | API | `services/api/` | Python | 8080 | PostgreSQL | Env vars | Loads models from `/models`; health endpoint at `/health` |
 
+### Trainer Details
+- **Framework**: PyTorch 2.2+ (CPU-only in Docker)
+- **Model**: MultiModalDraftBERT (Transformer + MLP)
+- **Features**: 59 aggregate columns + sequence data
+- **Output**: TorchScript JIT models for fast CPU inference
+- **Training**: Early stopping with patience, chronological train/val split
+- **Labels**: Uses `make_target()` for correct Dire team label handling
+
 ## Shared Library
 **Module**: `github.com/dota-stratz/shared/go-common` at `shared/go-common/`
 

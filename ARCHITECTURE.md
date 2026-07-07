@@ -111,11 +111,16 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 | Transformer dim | `TRAINER_D_MODEL` | 128 | Embedding dimension |
 | Attention heads | `TRAINER_NHEAD` | 4 | Multi-head attention |
 | Transformer layers | `TRAINER_NUM_LAYERS` | 3 | Encoder depth |
+| Early stop patience | `TRAINER_EARLY_STOP_PATIENCE` | 5 | Epochs to wait before stopping |
+| LR scheduler patience | `TRAINER_LR_SCHEDULER_PATIENCE` | 2 | Epochs before reducing LR |
+| LR scheduler factor | `TRAINER_LR_SCHEDULER_FACTOR` | 0.5 | LR reduction factor |
 
 **Key behaviors:**
 - TorchScript export uses `copy.deepcopy()` before `.cpu()` to avoid severing optimizer references
 - Dummy tensors use non-zero hero IDs (5, 10, 15) to prevent `to_padded_tensor` crash
 - `ReduceLROnPlateau(patience=2, factor=0.5)` for adaptive learning rate
+- **Early stopping** with configurable patience (`TRAINER_EARLY_STOP_PATIENCE=5`)
+- **Correct label handling** via `make_target()` — Dire picks labeled as success when Dire wins
 - Chronological train/val split (oldest → train, newest → val)
 - All hyperparameters configurable via `.env` — zero code changes needed
 

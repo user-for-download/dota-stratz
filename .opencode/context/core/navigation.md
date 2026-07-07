@@ -1,7 +1,7 @@
 # Core — AI Agent Standards
 
 ## Standards
-- `standards/code-quality.md` — Go conventions, error handling, review criteria
+- `standards/code-quality.md` — Go + Python conventions, error handling, review criteria
 - `standards/documentation.md` — Doc style, required sections, tone
 - `standards/test-coverage.md` — Test patterns, coverage requirements, TDD approach
 

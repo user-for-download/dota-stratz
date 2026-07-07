@@ -890,6 +890,9 @@ def populate_team_hero_snapshot(cfg: TrainerConfig, conn) -> int:
             ORDER BY d.as_of_date, sub.team_id, sub.hero_id
         """, (patch_id, patch_id))
 
+        def _wavg(c_val: float, c_w: float, p_val: float, p_w: float, total_g: float) -> float:
+            return (c_val * c_w + p_val * p_w) / total_g
+
         for r in cur.fetchall():
             (as_of, team_id, hero_id, c_games, c_wins,
              ag, ax, ak_, ad_, aa_, fbr, acs, avp, ag10, ax10, lp) = r
@@ -901,18 +904,16 @@ def populate_team_hero_snapshot(cfg: TrainerConfig, conn) -> int:
                 wins = c_wins + p["wins"]
                 # Weighted averages — approximate but consistent.
                 total_g = games if games > 0 else 1.0
-                def wavg(c_val: float, c_w: float, p_val: float, p_w: float) -> float:
-                    return (c_val * c_w + p_val * p_w) / total_g
-                ag   = wavg(ag, c_games, p["avg_gpm"], p["games"])
-                ax   = wavg(ax, c_games, p["avg_xpm"], p["games"])
-                ak_  = wavg(ak_, c_games, p["avg_kills"], p["games"])
-                ad_  = wavg(ad_, c_games, p["avg_deaths"], p["games"])
-                aa_  = wavg(aa_, c_games, p["avg_assists"], p["games"])
-                fbr  = wavg(fbr, c_games, p["firstblood_rate"], p["games"])
-                acs  = wavg(acs, c_games, p["avg_camps_stacked"], p["games"])
-                avp  = wavg(avp, c_games, p["avg_vision_placed"], p["games"])
-                ag10 = wavg(ag10, c_games, p["avg_gold_10"], p["games"])
-                ax10 = wavg(ax10, c_games, p["avg_xp_10"], p["games"])
+                ag   = _wavg(ag, c_games, p["avg_gpm"], p["games"], total_g)
+                ax   = _wavg(ax, c_games, p["avg_xpm"], p["games"], total_g)
+                ak_  = _wavg(ak_, c_games, p["avg_kills"], p["games"], total_g)
+                ad_  = _wavg(ad_, c_games, p["avg_deaths"], p["games"], total_g)
+                aa_  = _wavg(aa_, c_games, p["avg_assists"], p["games"], total_g)
+                fbr  = _wavg(fbr, c_games, p["firstblood_rate"], p["games"], total_g)
+                acs  = _wavg(acs, c_games, p["avg_camps_stacked"], p["games"], total_g)
+                avp  = _wavg(avp, c_games, p["avg_vision_placed"], p["games"], total_g)
+                ag10 = _wavg(ag10, c_games, p["avg_gold_10"], p["games"], total_g)
+                ax10 = _wavg(ax10, c_games, p["avg_xp_10"], p["games"], total_g)
                 lp   = max(lp, p["last_played"])
             else:
                 games, wins = c_games, c_wins

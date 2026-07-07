@@ -201,4 +201,5 @@ def _upsert_model_meta(cfg: TrainerConfig, patch_id: int, meta: dict, engine=Non
     except Exception as e:
         logger.warning("Could not save model metadata to DB: %s", e)
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()

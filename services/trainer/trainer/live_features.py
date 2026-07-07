@@ -238,9 +238,9 @@ def extract_dynamic_features(engine, patch_id: int, lookback: int = 2) -> pd.Dat
     df["aghs_diff"] = df["radiant_aghs"] - df["dire_aghs"]
     df["rapier_diff"] = df["radiant_rapier"] - df["dire_rapier"]
 
-    # --- Buyback & Courier ---
-    df["buyback_diff"] = df["dire_buybacks"] - df["radiant_buybacks"]
-    df["courier_lost_diff"] = df["dire_couriers_lost"] - df["radiant_couriers_lost"]
+    # --- Buyback & Courier (positive = Radiant advantage) ---
+    df["buyback_diff"] = df["radiant_buybacks"] - df["dire_buybacks"]
+    df["courier_lost_diff"] = df["radiant_couriers_lost"] - df["dire_couriers_lost"]
 
     # --- Objectives Differentials ---
     df["tower_diff"] = df["radiant_towers"] - df["dire_towers"]

@@ -308,6 +308,9 @@ def feature_column_names(include_onehot: bool = True, max_hero_id: int = 160, n_
     This is the source of truth for the training/API column contract.
     When include_onehot=True, appends hero_id (categorical) + 32 embedding
     columns instead of 160 one-hot columns.
+
+    NOTE: include_onehot=True is for API/inference schema only; training uses
+    include_onehot=False (no embeddings needed for PyTorch DraftBERT).
     """
     cols = [
         # Draft context (side + pick-vs-ban) — critical context for the model

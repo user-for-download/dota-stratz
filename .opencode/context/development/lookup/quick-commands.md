@@ -35,6 +35,12 @@ make reload-api PATCH=60                # Hot-reload model (no restart, requires
 
 **Note**: Model uses **59 aggregate features** + sequence data (draft picks/bans). PyTorch DraftBERT with BCEWithLogitsLoss provides direct logit training. All hyperparameters configurable via `deploy/.env`.
 
+**Training Features**:
+- Early stopping with configurable patience (`TRAINER_EARLY_STOP_PATIENCE=5`)
+- Correct Dire team label handling via `make_target()`
+- Chronological train/val split
+- TorchScript JIT export for fast CPU inference
+
 ## RabbitMQ
 ```bash
 make replay-dlq           # Replay up to 500 DLQ messages

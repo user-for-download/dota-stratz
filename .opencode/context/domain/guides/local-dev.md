@@ -36,6 +36,12 @@ make test-api                # Smoke test health + /predict
 Models are trained per-patch. Available patches with data: 58 (15.5k matches), 59 (6.8k), 60 (4.5k).
 The trainer container needs ~2G memory for patch 58 (372k draft slots).
 
+**Training Features**:
+- Early stopping with patience (stops when validation loss plateaus)
+- Correct Dire team label handling via `make_target()`
+- Chronological train/val split (oldest → train, newest → val)
+- All hyperparameters configurable via `deploy/.env`
+
 ## Monitoring
 ```bash
 make up-mon                  # Start Prometheus + Grafana

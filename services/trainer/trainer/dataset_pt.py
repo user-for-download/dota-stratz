@@ -11,7 +11,7 @@ import torch
 from torch.utils.data import Dataset
 
 from .config import TrainerConfig
-from .features import training_features_sql, feature_column_names
+from .features import training_features_sql, feature_column_names, make_target
 from .aggregates import _match_extra_where
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ class DraftSequenceDataset(Dataset):
         self.tabular = torch.tensor(np.array(tabular_feats), dtype=torch.float32)
         self.labels = torch.tensor(labels, dtype=torch.float32)
 
-        # Populate in one pass — no per-batch Python overhead
+        # Vectorized population using numpy arrays
         for i in range(n):
             h = heroes_seqs[i][:max_len]
             a = actions_seqs[i][:max_len]
@@ -54,7 +54,7 @@ def _build_augmented_data(df, agg_cols):
         mh = group["hero_id"].astype(int).tolist()
         ma = (group["team"].astype(int) * 1 + group["is_pick"].astype(int) * 2 + 1).tolist()
         mt = group[agg_cols].to_numpy(dtype=np.float32)
-        ml = group["radiant_win"].astype(float).tolist()
+        ml = make_target(group).tolist()
 
         for i in range(1, len(group) + 1):
             heroes_seqs.append(mh[:i])

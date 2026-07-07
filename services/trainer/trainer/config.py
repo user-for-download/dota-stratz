@@ -70,9 +70,9 @@ class TrainerConfig:
     transformer_dropout: float = float(os.getenv("TRAINER_TRANSFORMER_DROPOUT", "0.1"))
     """Dropout rate inside TransformerEncoderLayer."""
     static_hidden: int = int(os.getenv("TRAINER_STATIC_HIDDEN", "64"))
-    """Hidden dim for the static MLP branch."""
+    """Hidden dim for the static MLP branch. Only used by LiveDraftBERT."""
     dynamic_hidden: int = int(os.getenv("TRAINER_DYNAMIC_HIDDEN", "32"))
-    """Hidden dim for the dynamic MLP branch."""
+    """Hidden dim for the dynamic MLP branch. Only used by LiveDraftBERT."""
     fusion_hidden: int = int(os.getenv("TRAINER_FUSION_HIDDEN", "64"))
     """Hidden dim for the fusion head."""
 

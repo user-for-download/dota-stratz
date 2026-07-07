@@ -1,4 +1,4 @@
-# Development — Go Patterns, Git Workflow, Commands
+# Development — Go + Python Patterns, Git Workflow, Commands
 
 ## Concepts
 - `concepts/go-patterns.md` — Shared library, proxypool, reconnection patterns
