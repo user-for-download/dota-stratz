@@ -222,7 +222,7 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
         SELECT * FROM ml.team_hero_snapshot ths
         WHERE ths.team_id = CASE ds.team WHEN 0 THEN ds.radiant_team_id ELSE ds.dire_team_id END
           AND ths.hero_id = ds.hero_id
-          AND ths.patch_id = ds.patch_id
+          AND ths.patch_id = %(patch_id)s
           AND ths.as_of_date <= to_timestamp(ds.start_time)::DATE
         ORDER BY ths.as_of_date DESC
         LIMIT 1
@@ -234,7 +234,7 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
         SELECT * FROM ml.player_hero_snapshot phs
         WHERE phs.account_id = ds.account_id
           AND phs.hero_id = ds.hero_id
-          AND phs.patch_id = ds.patch_id
+          AND phs.patch_id = %(patch_id)s
           AND phs.as_of_date <= to_timestamp(ds.start_time)::DATE
         ORDER BY phs.as_of_date DESC
         LIMIT 1
@@ -250,7 +250,7 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
             SELECT win_rate, games FROM ml.hero_synergy_snapshot hss
             WHERE hss.hero_a = LEAST(ds.hero_id, pb2.hero_id)
               AND hss.hero_b = GREATEST(ds.hero_id, pb2.hero_id)
-              AND hss.patch_id = ds.patch_id
+              AND hss.patch_id = %(patch_id)s
               AND hss.as_of_date <= to_timestamp(ds.start_time)::DATE
             ORDER BY hss.as_of_date DESC
             LIMIT 1
@@ -272,7 +272,7 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
             SELECT win_rate, avg_kd_diff FROM ml.hero_counter_snapshot hcs
             WHERE hcs.hero_id = ds.hero_id
               AND hcs.enemy_hero_id = pb2.hero_id
-              AND hcs.patch_id = ds.patch_id
+              AND hcs.patch_id = %(patch_id)s
               AND hcs.as_of_date <= to_timestamp(ds.start_time)::DATE
             ORDER BY hcs.as_of_date DESC
             LIMIT 1
@@ -288,7 +288,7 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
         SELECT * FROM ml.team_h2h_snapshot ths
         WHERE ths.team_id = CASE ds.team WHEN 0 THEN ds.radiant_team_id ELSE ds.dire_team_id END
           AND ths.enemy_team_id = CASE ds.team WHEN 0 THEN ds.dire_team_id ELSE ds.radiant_team_id END
-          AND ths.patch_id = ds.patch_id
+          AND ths.patch_id = %(patch_id)s
           AND ths.as_of_date <= to_timestamp(ds.start_time)::DATE
         ORDER BY ths.as_of_date DESC
         LIMIT 1
@@ -298,7 +298,7 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
     LEFT JOIN LATERAL (
         SELECT * FROM ml.hero_baseline_snapshot hbs
         WHERE hbs.hero_id = ds.hero_id
-          AND hbs.patch_id = ds.patch_id
+          AND hbs.patch_id = %(patch_id)s
           AND hbs.as_of_date <= to_timestamp(ds.start_time)::DATE
         ORDER BY hbs.as_of_date DESC
         LIMIT 1
@@ -310,7 +310,7 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
         SELECT * FROM ml.hero_draft_slot_snapshot hdss
         WHERE hdss.hero_id = ds.hero_id
           AND hdss.team_pick_ordinal = ds.team_pick_ordinal
-          AND hdss.patch_id = ds.patch_id
+          AND hdss.patch_id = %(patch_id)s
           AND hdss.as_of_date <= to_timestamp(ds.start_time)::DATE
         ORDER BY hdss.as_of_date DESC
         LIMIT 1
@@ -325,7 +325,7 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
         LEFT JOIN LATERAL (
             SELECT avg_gpm, avg_xpm FROM ml.hero_baseline_snapshot
             WHERE hero_id = pb2.hero_id
-              AND patch_id = ds.patch_id
+              AND patch_id = %(patch_id)s
               AND as_of_date <= to_timestamp(ds.start_time)::DATE
             ORDER BY as_of_date DESC
             LIMIT 1
