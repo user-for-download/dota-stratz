@@ -853,7 +853,7 @@ def populate_team_hero_snapshot(cfg: TrainerConfig, conn) -> int:
     # Use prior as base so prior-only combos are preserved.
     rows = []
     with conn.cursor() as cur:
-        # Get all dates for the current patch
+        # Get all dates spanning lookback range so PIT joins resolve for older matches
         cur.execute(f"""
             SELECT generate_series(
                 date_trunc('day', to_timestamp(MIN(start_time)))::date,
@@ -861,8 +861,8 @@ def populate_team_hero_snapshot(cfg: TrainerConfig, conn) -> int:
                 '1 day'::interval
             )::date AS as_of_date
             FROM matches
-            WHERE patch = %s AND radiant_win IS NOT NULL{extra}
-        """, (patch_id,))
+            WHERE patch BETWEEN %s AND %s AND radiant_win IS NOT NULL{extra}
+        """, (min_patch, patch_id))
         dates = [r[0] for r in cur.fetchall()]
 
         # For each date, compute current-patch aggregates
@@ -1027,7 +1027,7 @@ def populate_player_hero_snapshot(cfg: TrainerConfig, conn) -> int:
                     '7 days'::interval
                 )::date AS as_of_date
                 FROM matches
-                WHERE patch = %s AND radiant_win IS NOT NULL{extra}
+                WHERE patch BETWEEN %s AND %s AND radiant_win IS NOT NULL{extra}
             ),
             eligible_matches AS (
                 SELECT
@@ -1077,7 +1077,7 @@ def populate_player_hero_snapshot(cfg: TrainerConfig, conn) -> int:
             WHERE p.account_id IS NOT NULL
             GROUP BY em.as_of_date, p.account_id, p.hero_id
             ORDER BY em.as_of_date, p.account_id, p.hero_id
-        """, (patch_id, patch_id, prior_weight, min_patch, patch_id, patch_id, patch_id))
+        """, (min_patch, patch_id, patch_id, prior_weight, min_patch, patch_id, patch_id, patch_id))
         rows = []
         for r in cur.fetchall():
             (as_of, aid, hid, games, wins,
@@ -1136,7 +1136,7 @@ def populate_synergy_snapshot(cfg: TrainerConfig, conn) -> int:
                     '7 days'::interval
                 )::date AS as_of_date
                 FROM matches
-                WHERE patch = %s AND radiant_win IS NOT NULL{extra}
+                WHERE patch BETWEEN %s AND %s AND radiant_win IS NOT NULL{extra}
             ),
             eligible_matches AS (
                 SELECT
@@ -1168,7 +1168,7 @@ def populate_synergy_snapshot(cfg: TrainerConfig, conn) -> int:
             GROUP BY em.as_of_date, p1.hero_id, p2.hero_id
             HAVING SUM(em.patch_weight) >= 3
             ORDER BY em.as_of_date, p1.hero_id, p2.hero_id
-        """, (patch_id, patch_id, prior_weight, min_patch, patch_id, patch_id, patch_id))
+        """, (min_patch, patch_id, patch_id, prior_weight, min_patch, patch_id, patch_id, patch_id))
         rows = []
         for r in cur.fetchall():
             as_of, ha, hb, games, wins = r
@@ -1223,7 +1223,7 @@ def populate_counter_snapshot(cfg: TrainerConfig, conn) -> int:
                     '7 days'::interval
                 )::date AS as_of_date
                 FROM matches
-                WHERE patch = %s AND radiant_win IS NOT NULL{extra}
+                WHERE patch BETWEEN %s AND %s AND radiant_win IS NOT NULL{extra}
             ),
             eligible_matches AS (
                 SELECT
@@ -1255,7 +1255,7 @@ def populate_counter_snapshot(cfg: TrainerConfig, conn) -> int:
             GROUP BY em.as_of_date, p1.hero_id, p2.hero_id
             HAVING SUM(em.patch_weight) >= 3
             ORDER BY em.as_of_date, p1.hero_id, p2.hero_id
-        """, (patch_id, patch_id, prior_weight, min_patch, patch_id, patch_id, patch_id))
+        """, (min_patch, patch_id, patch_id, prior_weight, min_patch, patch_id, patch_id, patch_id))
         rows = []
         for r in cur.fetchall():
             as_of, hid, ehid, games, wins, akd = r
@@ -1299,8 +1299,8 @@ def populate_h2h_snapshot(cfg: TrainerConfig, conn) -> int:
             WITH dates AS (
                 SELECT DISTINCT d::DATE AS as_of_date
                 FROM generate_series(
-                    (SELECT MIN(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch = %s),
-                    (SELECT MAX(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch = %s),
+                    (SELECT MIN(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch BETWEEN %s AND %s),
+                    (SELECT MAX(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch BETWEEN %s AND %s),
                     '1 day'::INTERVAL
                 ) d
             )
@@ -1335,7 +1335,7 @@ def populate_h2h_snapshot(cfg: TrainerConfig, conn) -> int:
                 HAVING COUNT(*) >= 2
             ) sub
             ORDER BY d.as_of_date, sub.team_id, sub.enemy_team_id
-        """, (patch_id, patch_id, patch_id))
+        """, (min_patch, patch_id, min_patch, patch_id, patch_id))
         rows = []
         for r in cur.fetchall():
             as_of, tid, etid, games, wins = r
@@ -1375,10 +1375,16 @@ POPULATE_BASELINE_SNAPSHOT = """
 
 
 def populate_baseline_snapshot(cfg: TrainerConfig, conn) -> int:
-    """Populate ml.hero_baseline_snapshot for *patch_id* (Tier 1 — daily)."""
+    """Populate ml.hero_baseline_snapshot for *patch_id* (Tier 1 — daily).
+
+    Uses cross-patch lookback (cfg.lookback_patches) so older matches
+    find PIT-safe snapshot rows within their as_of_date range.
+    """
     patch_id = cfg.patch_id
     pg = cfg.prior_games
     pw = cfg.prior_win_rate
+    lookback = cfg.lookback_patches
+    min_patch = patch_id - lookback
     _clean_patch_rows(conn, "ml.hero_baseline_snapshot", patch_id)
     extra = _match_extra_where(cfg, "m")
     with conn.cursor() as cur:
@@ -1386,8 +1392,8 @@ def populate_baseline_snapshot(cfg: TrainerConfig, conn) -> int:
             WITH dates AS (
                 SELECT DISTINCT d::DATE AS as_of_date
                 FROM generate_series(
-                    (SELECT MIN(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch = %s),
-                    (SELECT MAX(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch = %s),
+                    (SELECT MIN(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch BETWEEN %s AND %s),
+                    (SELECT MAX(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch BETWEEN %s AND %s),
                     '1 day'::INTERVAL
                 ) d
             ),
@@ -1421,7 +1427,7 @@ def populate_baseline_snapshot(cfg: TrainerConfig, conn) -> int:
                         FROM player_time_series_arrays pta
                         WHERE pta.match_id = m.match_id AND pta.player_slot = p.player_slot
                     ) xp10 ON TRUE
-                    WHERE m.patch = %s
+                    WHERE m.patch BETWEEN %s AND %s
                       AND to_timestamp(m.start_time) < d.as_of_date
                       AND m.radiant_win IS NOT NULL{extra}
                     GROUP BY p.hero_id
@@ -1434,7 +1440,7 @@ def populate_baseline_snapshot(cfg: TrainerConfig, conn) -> int:
                     SELECT pb.hero_id, COUNT(*) AS total_bans
                     FROM matches m
                     INNER JOIN picks_bans pb ON pb.match_id = m.match_id AND pb.is_pick = FALSE
-                    WHERE m.patch = %s
+                    WHERE m.patch BETWEEN %s AND %s
                       AND to_timestamp(m.start_time) < d.as_of_date
                       AND m.radiant_win IS NOT NULL{extra}
                     GROUP BY pb.hero_id
@@ -1446,7 +1452,7 @@ def populate_baseline_snapshot(cfg: TrainerConfig, conn) -> int:
                 CROSS JOIN LATERAL (
                     SELECT COUNT(DISTINCT match_id) AS total
                     FROM matches
-                    WHERE patch = %s
+                    WHERE patch BETWEEN %s AND %s
                       AND to_timestamp(start_time) < d.as_of_date
                       AND radiant_win IS NOT NULL{extra}
                 ) sub
@@ -1464,7 +1470,8 @@ def populate_baseline_snapshot(cfg: TrainerConfig, conn) -> int:
             FULL OUTER JOIN bans_pit b ON b.as_of_date = p.as_of_date AND b.hero_id = p.hero_id
             INNER JOIN total_matches_pit tm ON tm.as_of_date = COALESCE(p.as_of_date, b.as_of_date)
             ORDER BY hero_id, as_of_date
-        """, (patch_id, patch_id, patch_id, patch_id, patch_id))
+        """, (min_patch, patch_id, min_patch, patch_id,
+              min_patch, patch_id, min_patch, patch_id, min_patch, patch_id))
         rows = []
         for r in cur.fetchall():
             as_of, hid, picks, wins, bans, ag, ax, ak, ad, aa, ag10, ax10, tot = r
@@ -1500,10 +1507,16 @@ POPULATE_HERO_DRAFT_SLOT_SNAPSHOT = """
 
 
 def populate_hero_draft_slot_snapshot(cfg: TrainerConfig, conn) -> int:
-    """Populate ml.hero_draft_slot_snapshot for *patch_id* (Tier 1 — daily)."""
+    """Populate ml.hero_draft_slot_snapshot for *patch_id* (Tier 1 — daily).
+
+    Uses cross-patch lookback (cfg.lookback_patches) so older matches
+    find PIT-safe snapshot rows within their as_of_date range.
+    """
     patch_id = cfg.patch_id
     pg = cfg.prior_games
     pw = cfg.prior_win_rate
+    lookback = cfg.lookback_patches
+    min_patch = patch_id - lookback
     _clean_patch_rows(conn, "ml.hero_draft_slot_snapshot", patch_id)
     extra = _match_extra_where(cfg, "m")
     with conn.cursor() as cur:
@@ -1511,8 +1524,8 @@ def populate_hero_draft_slot_snapshot(cfg: TrainerConfig, conn) -> int:
             WITH dates AS (
                 SELECT DISTINCT d::DATE AS as_of_date
                 FROM generate_series(
-                    (SELECT MIN(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch = %s),
-                    (SELECT MAX(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch = %s),
+                    (SELECT MIN(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch BETWEEN %s AND %s),
+                    (SELECT MAX(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch BETWEEN %s AND %s),
                     '1 day'::INTERVAL
                 ) d
             )
@@ -1543,7 +1556,7 @@ def populate_hero_draft_slot_snapshot(cfg: TrainerConfig, conn) -> int:
                         END AS won
                     FROM picks_bans pb
                     INNER JOIN matches m ON m.match_id = pb.match_id
-                    WHERE m.patch = %s
+                    WHERE m.patch BETWEEN %s AND %s
                       AND to_timestamp(m.start_time) < d.as_of_date
                       AND m.radiant_win IS NOT NULL{extra}
                       AND pb.is_pick = TRUE
@@ -1553,7 +1566,7 @@ def populate_hero_draft_slot_snapshot(cfg: TrainerConfig, conn) -> int:
                 HAVING COUNT(*) >= 3
             ) sub
             ORDER BY d.as_of_date, sub.hero_id, sub.team_pick_ordinal
-        """, (patch_id, patch_id, patch_id))
+        """, (min_patch, patch_id, min_patch, patch_id, min_patch, patch_id))
         rows = []
         for r in cur.fetchall():
             as_of, hid, tpo, games, wins = r
