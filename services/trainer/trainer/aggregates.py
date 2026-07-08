@@ -825,6 +825,32 @@ def _team_hero_bans_prior(cfg: TrainerConfig, conn, extra: str, min_patch: int):
         return bans_prior
 
 
+def _team_hero_bans_current(cfg: TrainerConfig, conn, extra: str) -> dict[tuple, int]:
+    """Pre-compute current-patch bans — no date dimension."""
+    patch_id = cfg.patch_id
+    with conn.cursor() as cur:
+        cur.execute(f"""
+            SELECT
+                CASE WHEN pb.team = 0 THEN m.radiant_team_id ELSE m.dire_team_id END AS team_id,
+                pb.hero_id,
+                COUNT(*) AS bans
+            FROM matches m
+            JOIN picks_bans pb ON pb.match_id = m.match_id
+            WHERE m.radiant_win IS NOT NULL{extra}
+              AND m.patch = %s
+              AND pb.is_pick = FALSE AND pb.team IN (0, 1) AND pb.hero_id IS NOT NULL
+              AND CASE WHEN pb.team = 0 THEN m.radiant_team_id ELSE m.dire_team_id END IS NOT NULL
+            GROUP BY team_id, pb.hero_id
+        """, (patch_id,))
+        bans_current: dict[tuple, int] = {}
+        for r in cur.fetchall():
+            tid, hid, cnt = r
+            bans_current[(tid, hid)] = cnt
+        logger.info("  bans_current: %d team_hero combos for patch %d",
+                     len(bans_current), patch_id)
+        return bans_current
+
+
 def populate_team_hero_snapshot(cfg: TrainerConfig, conn) -> int:
     """Populate ml.team_hero_snapshot for *patch_id* (Tier 1 — daily).
 
@@ -848,6 +874,9 @@ def populate_team_hero_snapshot(cfg: TrainerConfig, conn) -> int:
     # Phase 1: pre-compute prior-patch aggregates (no date dimension).
     prior = _team_hero_prior_agg(cfg, conn, extra, min_patch, prior_weight)
     bans_prior = _team_hero_bans_prior(cfg, conn, extra, min_patch)
+    bans_current = _team_hero_bans_current(cfg, conn, extra)
+    # Merge bans: current overwrites prior for same combos
+    all_bans = {**bans_prior, **bans_current}
 
     # Phase 2: for each date, compute current-patch PIT and merge with prior.
     # Use prior as base so prior-only combos are preserved.
@@ -951,7 +980,7 @@ def populate_team_hero_snapshot(cfg: TrainerConfig, conn) -> int:
 
                 rows.append((
                     patch_id, as_of, tid, hid, games, wins,
-                    bans_prior.get(combo, 0),
+                    all_bans.get(combo, 0),
                     _shrunk_wr(wins, games, pg, pw),
                     ag, ax, ak_, ad_, aa_, fbr, acs, avp, ag10, ax10, lp,
                 ))
@@ -1221,8 +1250,9 @@ def populate_counter_snapshot(cfg: TrainerConfig, conn) -> int:
         with conn.cursor() as cur:
             cur.execute(f"""
                 SELECT p1.hero_id, p2.hero_id,
-                       COUNT(*)::float,
-                       SUM(CASE WHEN (p1.is_radiant = m.radiant_win) THEN 1.0 ELSE 0 END)::float,
+                       SUM(CASE WHEN m.patch = %s THEN 1.0 ELSE %s END)::float,
+                       SUM(CASE WHEN (p1.is_radiant = m.radiant_win)
+                            THEN CASE WHEN m.patch = %s THEN 1.0 ELSE %s END ELSE 0 END)::float,
                        AVG(p1.kills - p1.deaths)::float
                 FROM matches m
                 JOIN players p1 ON p1.match_id = m.match_id
@@ -1231,8 +1261,9 @@ def populate_counter_snapshot(cfg: TrainerConfig, conn) -> int:
                   AND m.radiant_win IS NOT NULL
                   AND to_timestamp(m.start_time) < %s
                 GROUP BY p1.hero_id, p2.hero_id
-                HAVING COUNT(*) >= 3
-            """, (min_patch, patch_id, dt))
+                HAVING SUM(CASE WHEN m.patch = %s THEN 1.0 ELSE %s END) >= 3
+            """, (patch_id, prior_weight, patch_id, prior_weight,
+                  min_patch, patch_id, dt, patch_id, prior_weight))
             rows = []
             for r in cur.fetchall():
                 hid, ehid, g, w, akd = r
