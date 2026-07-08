@@ -882,21 +882,11 @@ def populate_team_hero_snapshot(cfg: TrainerConfig, conn) -> int:
                     AVG(p.firstblood_claimed)::FLOAT   AS firstblood_rate,
                     AVG(p.camps_stacked)::FLOAT        AS avg_camps_stacked,
                     AVG(p.obs_placed + p.sen_placed)::FLOAT AS avg_vision_placed,
-                    COALESCE(AVG(g10.avg_gold_10)::FLOAT, 0) AS avg_gold_10,
-                    COALESCE(AVG(x10.avg_xp_10)::FLOAT, 0)   AS avg_xp_10,
+                    0.0 AS avg_gold_10,
+                    0.0 AS avg_xp_10,
                     MAX(m.start_time)                  AS last_played
                 FROM matches m
                 JOIN players p ON p.match_id = m.match_id
-                LEFT JOIN LATERAL (
-                    SELECT AVG((pta.gold_t ->> 10)::numeric) AS avg_gold_10
-                    FROM player_time_series_arrays pta
-                    WHERE pta.match_id = m.match_id AND pta.player_slot = p.player_slot
-                ) g10 ON TRUE
-                LEFT JOIN LATERAL (
-                    SELECT AVG((pta.xp_t ->> 10)::numeric) AS avg_xp_10
-                    FROM player_time_series_arrays pta
-                    WHERE pta.match_id = m.match_id AND pta.player_slot = p.player_slot
-                ) x10 ON TRUE
                 WHERE m.radiant_win IS NOT NULL{extra}
                   AND m.patch = %s
                   AND to_timestamp(m.start_time) < %s
