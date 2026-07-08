@@ -11,7 +11,7 @@ import torch
 from torch.utils.data import Dataset
 
 from .config import TrainerConfig
-from .features import training_features_sql, feature_column_names, make_target
+from .features import training_features_sql, training_features_sql_fast, feature_column_names, make_target
 from .aggregates import _match_extra_where
 
 logger = logging.getLogger(__name__)
@@ -68,32 +68,24 @@ def _build_augmented_data(df, agg_cols):
 def load_sequence_dataset(cfg: TrainerConfig, engine, max_len: int = 50):
     """Load, clean, split, and augment sequence data for DraftBERT.
 
-    First materializes features into a temp table (slow LATERAL joins),
-    then reads from the temp table (fast sequential scan).
+    Uses fast aggregate tables (no LATERAL joins) for speed.
     """
     logger.info("Loading training data from DB for patch %s ...", cfg.patch_id)
 
-    # Step 1: Materialize features into temp table (expensive LATERAL joins)
-    sql = training_features_sql(_match_extra_where(cfg), lookback=cfg.lookback_patches)
-    mat_sql = f"""
-        DROP TABLE IF EXISTS _tmp_train_features;
-        CREATE TEMP TABLE _tmp_train_features AS {sql};
-        ANALYZE _tmp_train_features;
-    """
-    logger.info("Materializing features into temp table (one-time LATERAL join)...")
+    # Use fast SQL with aggregate tables (no LATERAL joins)
+    sql = training_features_sql_fast(_match_extra_where(cfg))
+    logger.info("Reading training data from aggregate tables...")
     import time
+    t0 = time.time()
     from sqlalchemy import text
-    t0 = time.time()
     with engine.connect() as conn:
-        conn.execute(text(mat_sql), {"patch_id": cfg.patch_id})
-        conn.commit()
-    logger.info("Materialization done in %.0fs", time.time() - t0)
+        result = conn.execute(text(sql), {"patch_id": cfg.patch_id})
+        columns = result.keys()
+        rows = result.fetchall()
+    logger.info("Read %d rows in %.1fs", len(rows), time.time() - t0)
 
-    # Step 2: Read from temp table (fast sequential scan)
-    logger.info("Reading from temp table...")
-    t0 = time.time()
-    df = pd.read_sql("SELECT * FROM _tmp_train_features", engine)
-    logger.info("Read %d rows in %.0fs", len(df), time.time() - t0)
+    import pandas as pd
+    df = pd.DataFrame(rows, columns=columns)
 
     if df.empty:
         raise ValueError(f"No training data found for patch {cfg.patch_id}.")

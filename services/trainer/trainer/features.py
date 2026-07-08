@@ -45,6 +45,95 @@ logger = logging.getLogger(__name__)
 # SQL query: build training features
 # ---------------------------------------------------------------------------
 
+def training_features_sql_fast(extra: str = "") -> str:
+    """Fast training SQL using aggregate tables directly (no LATERAL joins).
+
+    Uses ml.*_agg tables instead of ml.*_snapshot tables.
+    Much faster (~30s vs ~20min) but slightly less PIT-safe.
+    Good enough for training since aggregates are already populated.
+    """
+    return f"""
+    WITH draft_slots AS (
+        SELECT
+            pb.match_id, pb.hero_id, pb.is_pick, pb.team, pb."order",
+            m.start_time, m.radiant_team_id, m.dire_team_id, m.radiant_win,
+            m.patch AS patch_id, p.account_id, p.player_slot,
+            CASE WHEN pb.is_pick THEN
+                ROW_NUMBER() OVER (PARTITION BY pb.match_id, pb.team, pb.is_pick ORDER BY pb."order")
+            END AS team_pick_ordinal
+        FROM picks_bans pb
+        INNER JOIN matches m ON pb.match_id = m.match_id
+        LEFT JOIN players p ON p.match_id = pb.match_id AND p.hero_id = pb.hero_id AND p.is_radiant = (pb.team = 0)
+        WHERE m.patch = :patch_id
+          AND m.radiant_win IS NOT NULL AND m.duration >= 900
+          {extra}
+          AND NOT EXISTS (SELECT 1 FROM players p2 WHERE p2.match_id = m.match_id AND p2.leaver_status IN (1,2,3,4))
+          AND pb."order" IS NOT NULL AND pb.hero_id IS NOT NULL AND pb.team IN (0,1)
+    )
+    SELECT
+        ds.match_id, ds.hero_id, ds.is_pick::INT AS is_pick, ds.team,
+        CASE WHEN ds."order" <= 7 THEN 0 WHEN ds."order" <= 9 THEN 1
+             WHEN ds."order" <= 12 THEN 2 WHEN ds."order" <= 18 THEN 3
+             WHEN ds."order" <= 22 THEN 4 ELSE 5 END AS draft_phase_id,
+        ds."order", ds.start_time, ds.radiant_team_id, ds.dire_team_id, ds.radiant_win,
+        -- Aggregates (direct join, no LATERAL)
+        COALESCE(th.games,0) AS th_games, COALESCE(th.wins,0) AS th_wins,
+        COALESCE(th.win_rate,0.5) AS th_win_rate, COALESCE(th.bans,0) AS th_bans,
+        COALESCE(th.avg_gpm,0) AS th_avg_gpm, COALESCE(th.avg_xpm,0) AS th_avg_xpm,
+        COALESCE(th.avg_kills,0) AS th_avg_kills, COALESCE(th.avg_deaths,0) AS th_avg_deaths,
+        COALESCE(th.avg_assists,0) AS th_avg_assists, COALESCE(th.firstblood_rate,0) AS th_firstblood_rate,
+        COALESCE(th.avg_camps_stacked,0) AS th_avg_camps_stacked,
+        COALESCE(th.avg_vision_placed,0) AS th_avg_vision_placed,
+        COALESCE(th.avg_gold_10,0) AS th_avg_gold_10, COALESCE(th.avg_xp_10,0) AS th_avg_xp_10,
+        COALESCE(ph.games,0) AS ph_games, COALESCE(ph.wins,0) AS ph_wins,
+        COALESCE(ph.win_rate,0.5) AS ph_win_rate, COALESCE(ph.avg_gpm,0) AS ph_avg_gpm,
+        COALESCE(ph.avg_xpm,0) AS ph_avg_xpm, COALESCE(ph.avg_kills,0) AS ph_avg_kills,
+        COALESCE(ph.avg_deaths,0) AS ph_avg_deaths, COALESCE(ph.avg_assists,0) AS ph_avg_assists,
+        COALESCE(ph.avg_kda,0) AS ph_avg_kda, COALESCE(ph.lane_role,0) AS ph_lane_role,
+        COALESCE(ph.firstblood_rate,0) AS ph_firstblood_rate,
+        COALESCE(ph.avg_camps_stacked,0) AS ph_avg_camps_stacked,
+        COALESCE(ph.avg_vision_placed,0) AS ph_avg_vision_placed,
+        COALESCE(ph.avg_gold_10,0) AS ph_avg_gold_10, COALESCE(ph.avg_xp_10,0) AS ph_avg_xp_10,
+        COALESCE(sy.win_rate,0.5) AS sy_avg_win_rate, COALESCE(sy.games,0) AS sy_n_teammates,
+        COALESCE(co.win_rate,0.5) AS co_avg_win_rate, COALESCE(co.games,0) AS co_n_enemies,
+        COALESCE(co.avg_kd_diff,0) AS co_avg_kd_diff,
+        COALESCE(h2h.win_rate,0.5) AS h2h_win_rate, COALESCE(h2h.games,0) AS h2h_games,
+        COALESCE(bl.total_picks,0) AS bl_total_picks, COALESCE(bl.total_wins,0) AS bl_total_wins,
+        COALESCE(bl.total_bans,0) AS bl_total_bans, COALESCE(bl.win_rate,0.5) AS bl_win_rate,
+        COALESCE(bl.pick_rate,0) AS bl_pick_rate, COALESCE(bl.ban_rate,0) AS bl_ban_rate,
+        COALESCE(bl.avg_gpm,0) AS bl_avg_gpm, COALESCE(bl.avg_xpm,0) AS bl_avg_xpm,
+        COALESCE(bl.avg_kills,0) AS bl_avg_kills, COALESCE(bl.avg_deaths,0) AS bl_avg_deaths,
+        COALESCE(bl.avg_assists,0) AS bl_avg_assists,
+        COALESCE(bl.avg_gold_10,0) AS bl_avg_gold_10, COALESCE(bl.avg_xp_10,0) AS bl_avg_xp_10,
+        COALESCE(hds.win_rate,0.5) AS hds_win_rate, COALESCE(hds.games,0) AS hds_games,
+        CASE WHEN COALESCE(ph.games,0) < 5 THEN 1 ELSE 0 END AS ph_is_new_player,
+        CASE WHEN COALESCE(th.games,0) < 5 THEN 1 ELSE 0 END AS th_is_new_team_hero,
+        (COALESCE(th.win_rate,0.5) - COALESCE(bl.win_rate,0.5)) AS rel_th_win_rate,
+        (COALESCE(ph.win_rate,0.5) - COALESCE(bl.win_rate,0.5)) AS rel_ph_win_rate,
+        CASE WHEN COALESCE(ph.lane_role,0) = 5 THEN COALESCE(ph.avg_vision_placed,0) ELSE 0 END AS ph_vision_support_score,
+        CASE WHEN COALESCE(ph.lane_role,0) = 1 THEN COALESCE(ph.avg_gpm,0) ELSE 0 END AS ph_gpm_carry_score,
+        COALESCE(bl.avg_gpm,0) AS team_gpm_budget, COALESCE(bl.avg_xpm,0) AS team_xpm_budget,
+        CASE WHEN COALESCE(bl.total_picks,0) > 0 THEN COALESCE(th.games,0)::FLOAT / bl.total_picks ELSE 0.0 END AS team_pick_propensity
+    FROM draft_slots ds
+    LEFT JOIN ml.team_hero_agg th ON th.patch_id = ds.patch_id
+        AND th.team_id = CASE ds.team WHEN 0 THEN ds.radiant_team_id ELSE ds.dire_team_id END
+        AND th.hero_id = ds.hero_id
+    LEFT JOIN ml.player_hero_agg ph ON ph.patch_id = ds.patch_id
+        AND ph.account_id = ds.account_id AND ph.hero_id = ds.hero_id
+    LEFT JOIN ml.hero_synergy_agg sy ON sy.patch_id = ds.patch_id
+        AND sy.hero_a = LEAST(ds.hero_id, ds.hero_id) AND sy.hero_b = GREATEST(ds.hero_id, ds.hero_id)
+    LEFT JOIN ml.hero_counter_agg co ON co.patch_id = ds.patch_id
+        AND co.hero_id = ds.hero_id AND co.enemy_hero_id = ds.hero_id
+    LEFT JOIN ml.team_h2h_agg h2h ON h2h.patch_id = ds.patch_id
+        AND h2h.team_id = CASE ds.team WHEN 0 THEN ds.radiant_team_id ELSE ds.dire_team_id END
+        AND h2h.enemy_team_id = CASE ds.team WHEN 0 THEN ds.dire_team_id ELSE ds.radiant_team_id END
+    LEFT JOIN ml.hero_baseline_agg bl ON bl.patch_id = ds.patch_id AND bl.hero_id = ds.hero_id
+    LEFT JOIN ml.hero_draft_slot_agg hds ON hds.patch_id = ds.patch_id
+        AND hds.hero_id = ds.hero_id AND hds.team_pick_ordinal = ds.team_pick_ordinal
+    ORDER BY ds.match_id, ds."order"
+    """
+
+
 def training_features_sql(extra: str = "", lookback: int = 0) -> str:
     """Return the training features SQL with optional match filters.
 
