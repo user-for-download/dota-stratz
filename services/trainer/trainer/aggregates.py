@@ -1258,9 +1258,19 @@ def populate_counter_snapshot(cfg: TrainerConfig, conn) -> int:
             ORDER BY em.as_of_date, p1.hero_id, p2.hero_id
         """, (patch_id, patch_id, prior_weight, min_patch, patch_id, patch_id, patch_id))
         rows = []
-        for r in cur.fetchall():
-            as_of, hid, ehid, games, wins, akd = r
-            rows.append((patch_id, as_of, hid, ehid, games, wins, _shrunk_wr(wins, games, pg, pw), akd))
+        while True:
+            batch = cur.fetchmany(10000)
+            if not batch:
+                break
+            for r in batch:
+                as_of, hid, ehid, games, wins, akd = r
+                rows.append((patch_id, as_of, hid, ehid, games, wins, _shrunk_wr(wins, games, pg, pw), akd))
+            # Flush to DB periodically to avoid OOM
+            if len(rows) >= 50000:
+                for b in _batched(rows, cfg.agg_batch_size):
+                    psycopg2.extras.execute_values(cur, POPULATE_COUNTER_SNAPSHOT, b, template=None)
+                conn.commit()
+                rows = []
 
     total = 0
     with conn.cursor() as cur:
