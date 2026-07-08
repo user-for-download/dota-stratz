@@ -1,7 +1,7 @@
 """Dynamic feature columns for live match prediction.
 
 Shared between trainer (training) and API (inference).
-24 dynamic features capturing the 5 true pillars of live Dota 2.
+35 dynamic features capturing the 7 pillars of live Dota 2.
 """
 
 DYNAMIC_FEATURE_COLUMNS = [
@@ -38,4 +38,20 @@ DYNAMIC_FEATURE_COLUMNS = [
     "aegis_diff",
     # Barracks differential
     "barracks_diff",
+    # Economy Distribution (who has the gold)
+    "rad_carry_nw_pct",
+    "dire_carry_nw_pct",
+    "carry_farm_diff",
+    # Laning Phase (CS dominance)
+    "radiant_cs_adv",
+    # Defensive & Utility Power Spikes
+    "save_item_diff",
+    "aura_item_diff",
+    # Vision Denial (de-warding)
+    "dewards_diff",
+    # Rune Control
+    "rune_control_diff",
+    # Teamfight Efficiency (magnitude of swings)
+    "tf_gold_swing_1m",
+    "tf_xp_swing_1m",
 ]

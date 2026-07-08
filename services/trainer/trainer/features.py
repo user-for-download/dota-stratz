@@ -109,6 +109,15 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
         ds.hero_id,
         ds.is_pick::INT AS is_pick,
         ds.team,
+        -- CM draft phase: 0=Ban1, 1=Pick1, 2=Ban2, 3=Pick2, 4=Ban3, 5=FinalPick
+        CASE
+            WHEN ds."order" <= 7 THEN 0
+            WHEN ds."order" <= 9 THEN 1
+            WHEN ds."order" <= 12 THEN 2
+            WHEN ds."order" <= 18 THEN 3
+            WHEN ds."order" <= 22 THEN 4
+            ELSE 5
+        END AS draft_phase_id,
         ds."order" AS "order",
         ds.start_time,
         ds.radiant_team_id,
@@ -195,7 +204,16 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
 
         -- Role interaction features
         CASE WHEN COALESCE(ph.lane_role, 0) = 5 THEN COALESCE(ph.avg_vision_placed, 0) ELSE 0 END AS ph_vision_support_score,
-        CASE WHEN COALESCE(ph.lane_role, 0) = 1 THEN COALESCE(ph.avg_gpm, 0) ELSE 0 END AS ph_gpm_carry_score
+        CASE WHEN COALESCE(ph.lane_role, 0) = 1 THEN COALESCE(ph.avg_gpm, 0) ELSE 0 END AS ph_gpm_carry_score,
+
+        -- Macro Composition Features
+        COALESCE(mac.ally_gpm, 0) + COALESCE(bl.avg_gpm, 0) AS team_gpm_budget,
+        COALESCE(mac.ally_xpm, 0) + COALESCE(bl.avg_xpm, 0) AS team_xpm_budget,
+
+        -- Pick Propensity (team comfort pick signal)
+        CASE WHEN COALESCE(bl.total_picks, 0) > 0
+            THEN COALESCE(th.games, 0)::FLOAT / bl.total_picks
+            ELSE 0.0 END AS team_pick_propensity
 
     FROM draft_slots ds
 
@@ -298,6 +316,26 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
         LIMIT 1
     ) hds ON TRUE
 
+    -- Macro Composition (PIT-safe sum of already picked allies)
+    LEFT JOIN LATERAL (
+        SELECT
+            SUM(COALESCE(hbs.avg_gpm, 0)) AS ally_gpm,
+            SUM(COALESCE(hbs.avg_xpm, 0)) AS ally_xpm
+        FROM picks_bans pb2
+        LEFT JOIN LATERAL (
+            SELECT avg_gpm, avg_xpm FROM ml.hero_baseline_snapshot
+            WHERE hero_id = pb2.hero_id
+              AND patch_id = ds.patch_id
+              AND as_of_date <= to_timestamp(ds.start_time)::DATE
+            ORDER BY as_of_date DESC
+            LIMIT 1
+        ) hbs ON TRUE
+        WHERE pb2.match_id = ds.match_id
+          AND pb2."order" < ds."order"
+          AND pb2.is_pick = TRUE
+          AND pb2.team = ds.team
+    ) mac ON TRUE
+
     ORDER BY ds.match_id, ds."order"
 """
 
@@ -313,8 +351,8 @@ def feature_column_names(include_onehot: bool = True, max_hero_id: int = 160, n_
     include_onehot=False (no embeddings needed for PyTorch DraftBERT).
     """
     cols = [
-        # Draft context (side + pick-vs-ban) — critical context for the model
-        "is_pick", "team",
+        # Draft context (side + pick-vs-ban + phase) — critical context for the model
+        "is_pick", "team", "draft_phase_id",
         # Team-hero aggregates
         "th_games", "th_wins", "th_win_rate", "th_bans",
         "th_avg_gpm", "th_avg_xpm", "th_avg_kills", "th_avg_deaths", "th_avg_assists",
@@ -348,6 +386,11 @@ def feature_column_names(include_onehot: bool = True, max_hero_id: int = 160, n_
         # Task 6: Role interactions
         "ph_vision_support_score",
         "ph_gpm_carry_score",
+        # Task 7: Macro Composition Constraints
+        "team_gpm_budget",
+        "team_xpm_budget",
+        # Task 8: Pick Propensity
+        "team_pick_propensity",
     ]
     if include_onehot:
         # hero_id as native categorical + 32-D semantic embeddings
@@ -379,7 +422,7 @@ def make_target(df: pd.DataFrame) -> np.ndarray:
     return (df["radiant_win"] == (df["team"] == 0)).astype(int).values
 
 
-def write_schema(model_dir: str | Path, patch_id: int, max_hero_id: int = 160, n_embeddings: int = 32, max_seq_len: int = 50) -> None:
+def write_schema(model_dir: str | Path, patch_id: int, max_hero_id: int = 160, n_embeddings: int = 32, max_seq_len: int = 50, drift_stats: dict | None = None) -> None:
     """Write ``feature_schema_patch_{patch_id}.json`` — the authoritative
     column-order contract for a specific patch.
 
@@ -408,6 +451,8 @@ def write_schema(model_dir: str | Path, patch_id: int, max_hero_id: int = 160, n
         "embedding_prefix": "emb_",
         "max_seq_len": max_seq_len,
     }
+    if drift_stats:
+        schema["drift_stats"] = drift_stats
     path = Path(model_dir) / f"feature_schema_patch_{patch_id}.json"
     path.write_text(json.dumps(schema, indent=2))
     logger.info("Wrote feature schema to %s (%d columns)", path, len(cols))

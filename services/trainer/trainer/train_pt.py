@@ -7,11 +7,11 @@ and writes schema/metadata files for the API to consume.
 import copy
 import json
 import logging
+import uuid
 from pathlib import Path
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
 
 from .config import TrainerConfig
 from .dataset_pt import load_sequence_dataset
@@ -27,20 +27,31 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
     Returns best validation loss.
     """
     torch.set_num_threads(cfg.num_threads)
+    torch.set_flush_denormal(True)  # Prevents CPU slowdowns from denormal floats
+    run_id = str(uuid.uuid4())[:8]
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info("Training DraftBERT on device: %s (%d threads)", device, cfg.num_threads)
+    logger.info("Training DraftBERT run=%s device=%s threads=%d", run_id, device, cfg.num_threads)
 
     # 1. Load Data
     train_ds, val_ds, metadata = load_sequence_dataset(cfg, engine, max_len=cfg.max_seq_len)
 
-    # num_workers=0: Dataset is pre-tensorized, so no GIL overhead.
-    # Using num_workers > 0 would duplicate tensor memory across workers.
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True, drop_last=False, num_workers=0)
-    val_loader = DataLoader(val_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=0)
+    # --- Standardize Continuous Features ---
+    logger.info("Normalizing tabular features (Mean/Std Scaling)...")
+    feature_means = train_ds.tabular.mean(dim=0)
+    feature_stds = train_ds.tabular.std(dim=0).clamp(min=1e-6)
+
+    train_ds.tabular = (train_ds.tabular - feature_means) / feature_stds
+    val_ds.tabular = (val_ds.tabular - feature_means) / feature_stds
+
+    feature_means_list = feature_means.numpy().tolist()
+    feature_stds_list = feature_stds.numpy().tolist()
 
     num_continuous = metadata["n_continuous_features"]
-    logger.info("Sequence max_len=%d, Continuous features=%d", cfg.max_seq_len, num_continuous)
+    n_train = len(train_ds)
+    n_val = len(val_ds)
+    batch_size = cfg.batch_size
+    logger.info("Train: %d samples, Val: %d samples, Features: %d", n_train, n_val, num_continuous)
 
     # 2. Init Model
     model = MultiModalDraftBERT(
@@ -61,7 +72,7 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
         optimizer, mode='min', factor=cfg.lr_scheduler_factor, patience=cfg.lr_scheduler_patience,
     )
 
-    # 3. Training Loop
+    # 3. Training Loop (vectorized — direct tensor slicing, no DataLoader)
     best_val_loss = float("inf")
     patience_counter = 0
     model_dir = Path(cfg.model_dir)
@@ -72,9 +83,20 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
         model.train()
         train_loss = 0.0
         train_samples = 0
-        for heroes, actions, tabular, labels in train_loader:
-            heroes, actions = heroes.to(device), actions.to(device)
-            tabular, labels = tabular.to(device), labels.to(device)
+
+        # Shuffle once per epoch for cache-friendly sequential access
+        indices = torch.randperm(n_train)
+        shuffled_heroes = train_ds.heroes[indices]
+        shuffled_actions = train_ds.actions[indices]
+        shuffled_tabular = train_ds.tabular[indices]
+        shuffled_labels = train_ds.labels[indices]
+
+        for start in range(0, n_train, batch_size):
+            end = start + batch_size
+            heroes = shuffled_heroes[start:end].to(device)
+            actions = shuffled_actions[start:end].to(device)
+            tabular = shuffled_tabular[start:end].to(device)
+            labels = shuffled_labels[start:end].to(device)
 
             optimizer.zero_grad()
             logits = model(heroes, actions, tabular)
@@ -82,25 +104,27 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             optimizer.step()
-            train_loss += loss.item() * heroes.size(0)
-            train_samples += heroes.size(0)
+            train_loss += loss.item() * len(labels)
+            train_samples += len(labels)
 
         # Validation
         model.eval()
         val_loss = 0.0
         val_samples = 0
         with torch.no_grad():
-            for heroes, actions, tabular, labels in val_loader:
-                heroes, actions = heroes.to(device), actions.to(device)
-                tabular, labels = tabular.to(device), labels.to(device)
+            for start in range(0, n_val, batch_size):
+                end = start + batch_size
+                heroes = val_ds.heroes[start:end].to(device)
+                actions = val_ds.actions[start:end].to(device)
+                tabular = val_ds.tabular[start:end].to(device)
+                labels = val_ds.labels[start:end].to(device)
                 logits = model(heroes, actions, tabular)
                 loss = criterion(logits, labels)
-                val_loss += loss.item() * heroes.size(0)
-                val_samples += heroes.size(0)
+                val_loss += loss.item() * len(labels)
+                val_samples += len(labels)
 
         avg_train = train_loss / max(train_samples, 1)
         avg_val = val_loss / max(val_samples, 1)
-
         scheduler.step(avg_val)
         current_lr = optimizer.param_groups[0]['lr']
 
@@ -113,20 +137,18 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
             best_val_loss = avg_val
             patience_counter = 0
 
-            # Save weights (for resume)
-            torch.save(model.state_dict(), model_dir / f"draftbert_weights_{cfg.patch_id}.pt")
+            torch.save(model.state_dict(), model_dir / f"draftbert_w_{cfg.patch_id}_{run_id}.pt")
 
-            # Export to TorchScript on CPU for device-agnostic inference.
-            # deepcopy so .cpu() on the clone doesn't orphan the optimizer's
-            # parameter references (latent GPU bug — harmless on CPU but
-            # breaks training if device were CUDA).
             model_eval = copy.deepcopy(model).cpu().eval()
             with torch.no_grad():
                 dummy_h = torch.tensor([[5, 10, 15] + [0] * (cfg.max_seq_len - 3)], dtype=torch.long)
                 dummy_a = torch.tensor([[3, 4, 1] + [0] * (cfg.max_seq_len - 3)], dtype=torch.long)
                 dummy_f = torch.zeros((1, num_continuous), dtype=torch.float32)
                 traced = torch.jit.trace(model_eval, (dummy_h, dummy_a, dummy_f))
-                traced.save(model_dir / f"draftbert_compiled_{cfg.patch_id}.pt")
+                traced.save(model_dir / f"draftbert_compiled_{cfg.patch_id}_{run_id}.pt")
+
+            torch.save(model.state_dict(), model_dir / f"draftbert_weights_{cfg.patch_id}.pt")
+            traced.save(model_dir / f"draftbert_compiled_{cfg.patch_id}.pt")
         else:
             patience_counter += 1
             if patience_counter >= cfg.early_stop_patience:
@@ -146,8 +168,34 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
     }
     (model_dir / f"model_patch_{cfg.patch_id}_meta.json").write_text(json.dumps(meta, indent=2))
 
-    # Write schema (n_embeddings=0, no SVD embeddings needed)
-    write_schema(model_dir, patch_id=cfg.patch_id, max_hero_id=cfg.max_hero_id, n_embeddings=0, max_seq_len=cfg.max_seq_len)
+    write_schema(model_dir, patch_id=cfg.patch_id, max_hero_id=cfg.max_hero_id,
+                 n_embeddings=0, max_seq_len=cfg.max_seq_len,
+                 drift_stats={"mean": feature_means_list, "std": feature_stds_list})
 
-    logger.info("PyTorch training complete & TorchScript model exported.")
+    _log_experiment(cfg, run_id, best_val_loss, engine)
+    logger.info("Training complete run=%s — loss %.4f", run_id, best_val_loss)
     return best_val_loss
+
+
+def _log_experiment(cfg: TrainerConfig, run_id: str, val_loss: float, engine):
+    try:
+        conn = engine.raw_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS ml.experiment_logs (
+                    run_id VARCHAR PRIMARY KEY, patch_id INT, val_loss FLOAT,
+                    hyperparameters JSONB, created_at TIMESTAMPTZ DEFAULT NOW()
+                )""")
+            cur.execute("""
+                INSERT INTO ml.experiment_logs (run_id, patch_id, val_loss, hyperparameters)
+                VALUES (%s, %s, %s, %s)""",
+                (run_id, int(cfg.patch_id), val_loss, json.dumps({
+                    "d_model": cfg.d_model, "nhead": cfg.nhead,
+                    "num_layers": cfg.num_layers, "dropout": cfg.dropout,
+                    "lr": cfg.lr, "batch_size": cfg.batch_size,
+                    "epochs": cfg.epochs, "max_seq_len": cfg.max_seq_len,
+                })))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.warning("Could not log experiment: %s", e)

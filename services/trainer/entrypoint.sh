@@ -1,23 +1,17 @@
 #!/bin/sh
-# Entrypoint wrapper for trainer service.
-# Ensures /models directory is writable before running the actual command.
-# Handles permission issues when the volume is first created.
+# Entrypoint: runs as root to fix volume permissions, then exec's the CMD.
 
 set -e
 
-# Try to ensure /models is writable
-# If we can't chown (not root), that's okay — the volume might already have correct permissions
+# Fix /models permissions (container starts as root)
 if [ -d /models ]; then
-    # Check if we can write to /models
-    if ! touch /models/.write_test 2>/dev/null; then
-        echo "Warning: Cannot write to /models, attempting to fix permissions..."
-        # Try to chown (will fail if not root, but that's okay)
-        chown -R appuser:appgroup /models 2>/dev/null || true
-        chmod -R 775 /models 2>/dev/null || true
-    else
-        rm -f /models/.write_test
-    fi
+    chown -R appuser:appgroup /models 2>/dev/null || true
+    chmod -R 775 /models 2>/dev/null || true
 fi
 
-# Execute the actual command
-exec "$@"
+# If gosu is available, drop privileges; otherwise exec directly
+if command -v gosu >/dev/null 2>&1; then
+    exec gosu appuser "$@"
+else
+    exec "$@"
+fi

@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir -r requirements.txt --extra-index-url https://dow
 FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 \
+    libpq5 gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user with pinned UID/GID
@@ -47,8 +47,6 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # Mount point for model output — shared volume with inference API
 VOLUME /models
 
-# Switch to non-root user
-USER appuser
-
+# Container starts as root; entrypoint fixes perms then drops to appuser
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["python", "-m", "trainer.main"]

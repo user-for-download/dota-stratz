@@ -2,6 +2,7 @@
 
 Runs random rollouts for average-case analysis, PLUS an Adversarial Minimax
 (Paranoia) pass to detect devastating last-pick counters ("Cheese" heroes).
+Applies a Macro Composition Penalty to prevent 4-carry or 4-support drafts.
 """
 
 import logging
@@ -11,6 +12,7 @@ from typing import Callable
 import numpy as np
 import torch
 
+from . import db as db_
 from .draft_state import DraftContext
 from .features import build_feature_vector, pre_fetch_batch
 
@@ -48,6 +50,9 @@ def run_monte_carlo_rollouts(
     batch_data = pre_fetch_batch(patch_id, [1], radiant_team_id, dire_team_id, dummy_ctx)
     base_fv = build_feature_vector(1, dummy_ctx, patch_id, batch_data, schema, {}, schema["max_hero_id"])
     base_tabular = base_fv[:num_continuous]
+
+    # Fetch baselines for already-picked heroes (for macro composition checks)
+    taken_baselines = db_.fetch_baselines_batch(patch_id, list(ctx.all_taken)) if ctx.all_taken else {}
 
     batch_h, batch_a, batch_f, batch_cid = [], [], [], []
     is_worst_case_flag = []
@@ -134,7 +139,7 @@ def run_monte_carlo_rollouts(
         else:
             mc_scores[cid].append(score)
 
-    # 3. BLEND SCORES (Base Policy + Avg MC + Worst Case Penalty)
+    # 3. BLEND SCORES (Base Policy + Avg MC + Worst Case Penalty + Comp Penalty)
     for idx, cand in enumerate(candidates):
         cid = cand["hero_id"]
 
@@ -144,6 +149,27 @@ def run_monte_carlo_rollouts(
         wc = worst_case_scores[cid]
         worst_case_win_rate = min(wc) if wc else mc_avg
 
+        # --- MACRO COMPOSITION PENALTY (FARM STARVATION) ---
+        is_rad = ctx.recommending_team == 0
+        ally_picks = ctx.radiant_picks if is_rad else ctx.dire_picks
+
+        cand_gpm = batch_data.baselines.get(cid, {}).get("avg_gpm", 450)
+        ally_gpm = sum(taken_baselines.get(h, {}).get("avg_gpm", 450) for h in ally_picks)
+        current_total_gpm = ally_gpm + cand_gpm
+
+        remaining_slots = max(0, 4 - len(ally_picks))
+        projected_gpm = current_total_gpm + (420 * remaining_slots)
+
+        comp_penalty = 0.0
+        comp_reason = None
+
+        if projected_gpm > 2750:
+            comp_penalty = 0.15 + ((projected_gpm - 2750) / 1000)
+            comp_reason = "Farm Starved (Too Many Cores)"
+        elif projected_gpm < 1950:
+            comp_penalty = 0.15 + ((1950 - projected_gpm) / 1000)
+            comp_reason = "No Scaling (Too Many Supports)"
+
         # 40% Base + 40% Average Rollouts + 20% Worst-Case Paranoia
         blended = (cand["score"] * 0.40) + (mc_avg * 0.40) + (worst_case_win_rate * 0.20)
 
@@ -151,9 +177,14 @@ def run_monte_carlo_rollouts(
         if worst_case_win_rate < 0.35:
             blended -= 0.15
 
+        blended -= comp_penalty
+
         cand["lookahead_score"] = round(blended, 4)
         cand["mc_win_probability"] = round(mc_avg, 4)
         cand["worst_case_nemesis_wr"] = round(worst_case_win_rate, 4)
+
+        if comp_penalty > 0:
+            cand["comp_penalty"] = comp_reason
 
         if progress_cb:
             progress_cb({

@@ -3,12 +3,14 @@
 Each sample contains:
 - heroes: draft hero IDs (same for all minutes of a match)
 - actions: action tokens (same for all minutes)
-- static_features: 59 pre-game aggregates (same for all minutes)
-- dynamic_features: 15 live game state features (CHANGES per minute)
+- static_features: 61 pre-game aggregates (same for all minutes)
+- dynamic_features: 35 live game state features (CHANGES per minute)
 - label: who won (same for all minutes)
 
 Multiple samples per match (one per minute), sharing the same draft
 and static features but with different dynamic features.
+
+Supports both map-style (Dataset) and streaming (IterableDataset) loading.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ import logging
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, IterableDataset, get_worker_info
 
 from .config import TrainerConfig
 from .features import feature_column_names, training_features_sql
@@ -176,3 +178,97 @@ def load_live_dataset(cfg: TrainerConfig, engine, max_len: int = 50):
     logger.info("Final: %d train / %d val samples", len(t_l), len(v_l))
 
     return train_ds, val_ds, metadata
+
+
+class StreamingLiveDataset(IterableDataset):
+    """Memory-efficient streaming dataset for large live training sets.
+
+    Reads data in chunks from the database using server-side cursors,
+    yielding one sample at a time without loading the full dataset into memory.
+    """
+
+    def __init__(self, engine, match_ids: set[int], patch_id: int,
+                 lookback: int = 2, max_len: int = 50, chunk_size: int = 1000):
+        self.engine = engine
+        self.match_ids = match_ids
+        self.patch_id = patch_id
+        self.lookback = lookback
+        self.max_len = max_len
+        self.chunk_size = chunk_size
+
+    def __iter__(self):
+        worker_info = get_worker_info()
+        if worker_info is not None:
+            # Split match_ids across workers
+            per_worker = len(self.match_ids) // worker_info.num_workers
+            worker_id = worker_info.id
+            match_list = sorted(self.match_ids)[worker_id * per_worker:(worker_id + 1) * per_worker]
+        else:
+            match_list = sorted(self.match_ids)
+
+        if not match_list:
+            return
+
+        # Stream draft data in chunks using server-side cursor
+        conn = self.engine.raw_connection()
+        try:
+            conn.cursor_factory = None  # Use default cursor for server-side
+            with conn.cursor(name='live_draft_cursor') as cur:
+                cur.itersize = self.chunk_size
+                agg_cols = feature_column_names(include_onehot=False)
+                sql = training_features_sql(_match_extra_where(
+                    TrainerConfig(patch_id=self.patch_id, lookback_patches=self.lookback)
+                ), lookback=self.lookback)
+                cur.execute(sql, {"patch_id": self.patch_id})
+                col_names = [desc[0] for desc in cur.description]
+
+                # Build draft lookup from streaming rows
+                draft_lookup = {}
+                for row in cur:
+                    row_dict = dict(zip(col_names, row))
+                    mid = row_dict["match_id"]
+                    if mid not in match_list:
+                        continue
+                    if mid not in draft_lookup:
+                        draft_lookup[mid] = {
+                            "heroes": [], "actions": [], "static": None, "label": None
+                        }
+                    dl = draft_lookup[mid]
+                    dl["heroes"].append(int(row_dict["hero_id"]))
+                    dl["actions"].append(int(row_dict["team"]) * 1 + int(row_dict["is_pick"]) * 2 + 1)
+                    dl["static"] = np.array([float(row_dict.get(c, 0) or 0) for c in agg_cols], dtype=np.float32)
+                    dl["label"] = float(row_dict["radiant_win"])
+
+            # Extract dynamic features
+            dynamic_df = extract_dynamic_features(self.engine, self.patch_id, self.lookback)
+            dyn_matrix = dynamic_df[DYNAMIC_FEATURE_COLUMNS].values.astype(np.float32)
+            dyn_mids = dynamic_df["match_id"].values
+            dyn_minutes = dynamic_df["minute"].values
+
+            # Yield samples one at a time
+            for mid in match_list:
+                if mid not in draft_lookup:
+                    continue
+                dl = draft_lookup[mid]
+                mh = dl["heroes"]
+                ma = dl["actions"]
+                mt = dl["static"]
+                ml = dl["label"]
+
+                # Find matching dynamic features
+                mask = (dyn_mids == mid) & (dyn_minutes > 0)
+                indices = np.where(mask)[0]
+
+                for idx in indices:
+                    dyn = dyn_matrix[idx]
+                    h_padded = mh[:self.max_len] + [0] * max(0, self.max_len - len(mh))
+                    a_padded = ma[:self.max_len] + [0] * max(0, self.max_len - len(ma))
+                    yield (
+                        torch.tensor(h_padded, dtype=torch.long),
+                        torch.tensor(a_padded, dtype=torch.long),
+                        torch.tensor(mt, dtype=torch.float32),
+                        torch.tensor(dyn, dtype=torch.float32),
+                        torch.tensor(ml, dtype=torch.float32),
+                    )
+        finally:
+            conn.close()

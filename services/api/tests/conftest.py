@@ -38,6 +38,7 @@ def feature_schema() -> dict[str, Any]:
         "aggregate_columns": [
             "is_pick",
             "team",
+            "draft_phase_id",
             # -- team-hero --
             "th_games",
             "th_wins",
@@ -103,8 +104,11 @@ def feature_schema() -> dict[str, Any]:
             "rel_ph_win_rate",
             "ph_vision_support_score",
             "ph_gpm_carry_score",
+            "team_gpm_budget",
+            "team_xpm_budget",
+            "team_pick_propensity",
         ],
-        "num_aggregates": 59,  # FIXED: was 56, actual count is 59 (added co_avg_kd_diff)
+        "num_aggregates": 64,
     }
 
 

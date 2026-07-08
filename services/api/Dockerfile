@@ -22,7 +22,7 @@ RUN pip install --no-cache-dir -r requirements.txt --extra-index-url https://dow
 FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 \
+    libpq5 gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user with pinned UID/GID
@@ -38,12 +38,15 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Copy the API package
 COPY services/api/api/ ./api/
 
+# Copy entrypoint wrapper for volume permission handling
+COPY services/api/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
 # Mount point for model files — shared volume with trainer
 VOLUME /models
 
-# Switch to non-root user
-USER appuser
-
+# Container starts as root; entrypoint fixes perms then drops to appuser
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 EXPOSE 8080
 
 CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8080"]

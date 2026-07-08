@@ -147,6 +147,7 @@ class DraftContext:
     turn: int
     recommending_team: int
     is_pick_turn: bool
+    draft_phase_id: int = 0  # 0=Ban1, 1=Pick1, 2=Ban2, 3=Pick2, 4=Ban3, 5=FinalPick
     radiant_picks: list[int] = field(default_factory=list)
     dire_picks: list[int] = field(default_factory=list)
     radiant_bans: list[int] = field(default_factory=list)
@@ -165,14 +166,35 @@ class DraftContext:
         return self.dire_picks if self.recommending_team == 0 else self.radiant_picks
 
 
+def _compute_draft_phase(turn: int, order: tuple[tuple[int, bool], ...]) -> int:
+    """Compute the CM draft phase (0-5) based on turn number.
+
+    Phases: 0=Ban1, 1=Pick1, 2=Ban2, 3=Pick2, 4=Ban3, 5=FinalPick
+    Derived from action transitions (ban→pick or pick→ban).
+    """
+    if turn <= 1 or turn > len(order):
+        return 0
+    phase = 0
+    for i in range(1, turn):
+        prev_is_pick = order[i - 1][1]
+        curr_is_pick = order[i][1]
+        if prev_is_pick != curr_is_pick:
+            phase += 1
+    return phase
+
+
 def build_draft_context(draft: list[DraftSlot], patch_id: int, first_pick_team: int = 0) -> DraftContext:
     order = get_turn_order(patch_id, first_pick_team)
     _validate_draft(draft, order, first_pick_team)
 
+    turn = len(draft) + 1
+    draft_phase_id = _compute_draft_phase(turn, order)
+
     ctx = DraftContext(
-        turn=len(draft) + 1,
+        turn=turn,
         recommending_team=0,
         is_pick_turn=True,
+        draft_phase_id=draft_phase_id,
     )
 
     for slot in draft:

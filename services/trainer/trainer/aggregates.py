@@ -84,6 +84,19 @@ def _clean_patch_rows(conn, table: str, patch_id: int) -> None:
         cur.execute(f"DELETE FROM {table} WHERE patch_id = %s", (patch_id,))
 
 
+def _bulk_upsert(conn, table: str, patch_id: int, query: str, rows: list[tuple], batch_size: int) -> int:
+    """Handles deletion of stale rows, batch insertion, and committing."""
+    _clean_patch_rows(conn, table, patch_id)
+    total = 0
+    with conn.cursor() as cur:
+        for batch in _batched(rows, batch_size):
+            psycopg2.extras.execute_values(cur, query, batch, template=None)
+            total += len(batch)
+    conn.commit()
+    logger.info("populate_%s: %s rows for patch %s", table.split('.')[-1], total, patch_id)
+    return total
+
+
 def _match_extra_where(  # noqa: N802 (matches public SQL function naming)
     cfg: TrainerConfig, alias: str = "m",
 ) -> str:

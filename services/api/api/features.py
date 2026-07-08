@@ -247,6 +247,7 @@ def build_feature_vector(
     # -- Draft context (must match trainer's feature_column_names order) --
     vec["is_pick"] = 1.0  # inference always recommends picks
     vec["team"] = float(ctx.recommending_team)  # 0 = radiant, 1 = dire
+    vec["draft_phase_id"] = float(ctx.draft_phase_id)  # CM phase (0-5)
 
     # -- Team-hero aggregates (from pre-fetched batch dict) --
     th = batch.team_hero_agg.get(hero_id)
@@ -349,15 +350,45 @@ def build_feature_vector(
     vec["ph_vision_support_score"] = ph_vision_val if ph_lane_role_val == 5 else 0.0
     vec["ph_gpm_carry_score"] = ph_gpm_val if ph_lane_role_val == 1 else 0.0
 
+    # -- Task 7: Macro Composition Constraints --
+    team_gpm = vec.get("bl_avg_gpm", 0.0)
+    team_xpm = vec.get("bl_avg_xpm", 0.0)
+    for ally_id in ctx.ally_picks:
+        ally_bl = batch.baselines.get(ally_id, {})
+        team_gpm += _float(ally_bl.get("avg_gpm"), "avg_gpm")
+        team_xpm += _float(ally_bl.get("avg_xpm"), "avg_xpm")
+    vec["team_gpm_budget"] = team_gpm
+    vec["team_xpm_budget"] = team_xpm
+
+    # -- Task 8: Pick Propensity (team comfort pick signal) --
+    th_games_val = vec.get("th_games", 0.0)
+    bl_total_picks = vec.get("bl_total_picks", 1.0)
+    vec["team_pick_propensity"] = th_games_val / max(bl_total_picks, 1.0)
+
     # Build numeric array in the exact column order from the schema
-    # Schema now includes hero_id as a categorical column + embedding columns
     numeric_values = []
     aggregate_cols = schema["aggregate_columns"]
     for col in aggregate_cols:
         numeric_values.append(vec.get(col, 0.0))
-    # Add hero_id as a numeric value (used by model's embedding layer)
-    numeric_values.append(float(hero_id))
     numeric = np.array(numeric_values, dtype=np.float32)
+
+    # --- Standardize Features ---
+    drift_stats = schema.get("drift_stats")
+    if drift_stats:
+        means = np.array(drift_stats["mean"], dtype=np.float32)
+        stds = np.array(drift_stats["std"], dtype=np.float32)
+        numeric = (numeric - means) / stds
+
+    # Add hero_id as a numeric value (DO NOT scale categorical IDs!)
+    numeric = np.append(numeric, float(hero_id))
+
+    # --- Feature Drift Detection (on standardized values) ---
+    if drift_stats:
+        z_scores = np.abs(numeric[:len(means)])
+        max_z = float(np.max(z_scores))
+        if max_z > 4.0:
+            drift_col = aggregate_cols[int(np.argmax(z_scores))] if int(np.argmax(z_scores)) < len(aggregate_cols) else "unknown"
+            logger.warning("Feature drift detected on %s! Z-Score: %.2f. Data may be anomalous.", drift_col, max_z)
 
     # Resolve embedding vector for this hero
     n_embeddings = schema.get("n_embeddings", 32)

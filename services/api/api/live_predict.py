@@ -65,8 +65,8 @@ class LivePredictor:
                     d_model=schema.get("d_model", 128),
                     nhead=schema.get("nhead", 4),
                     num_layers=schema.get("num_layers", 3),
-                    num_static_features=schema.get("n_static_features", 59),
-                    num_dynamic_features=schema.get("n_dynamic_features", 24),
+                    num_static_features=schema.get("n_static_features", 61),
+                    num_dynamic_features=schema.get("n_dynamic_features", 35),
                     max_seq_len=schema.get("max_seq_len", 50),
                     dropout=schema.get("dropout", 0.3),
                     transformer_dropout=schema.get("transformer_dropout", 0.1),
@@ -406,4 +406,156 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
         "courier_lost_diff": float(radiant_couriers_lost - dire_couriers_lost),
         "aegis_diff": float(radiant_aegis - dire_aegis),
         "barracks_diff": float(radiant_barracks - dire_barracks),
+        # --- NEW: Economy Distribution ---
+        **_extract_economy_distribution(match_data, current_minute),
+        # --- NEW: Laning Phase CS ---
+        **_extract_cs_advantage(match_data, current_minute),
+        # --- NEW: Defensive & Utility Items ---
+        **_extract_defensive_items(match_data, current_minute),
+        # --- NEW: Vision Denial ---
+        **_extract_dewards(match_data),
+        # --- NEW: Rune Control ---
+        **_extract_rune_control(match_data, current_minute),
+        # --- NEW: Teamfight Efficiency ---
+        **_extract_teamfight_swing(match_data, current_minute),
+    }
+
+
+def _extract_economy_distribution(match_data: dict, current_minute: int) -> dict:
+    """Feature 1: Economy Distribution — who holds the gold."""
+    radiant_gold_total = 0
+    dire_gold_total = 0
+    radiant_max_gold = 0
+    dire_max_gold = 0
+
+    for player in match_data.get("players", []):
+        is_rad = player.get("player_slot", 0) < 128
+        gold_timeline = player.get("gold_t", [])
+        hero_gold = gold_timeline[current_minute] if current_minute < len(gold_timeline) else 0
+
+        if is_rad:
+            radiant_gold_total += hero_gold
+            radiant_max_gold = max(radiant_max_gold, hero_gold)
+        else:
+            dire_gold_total += hero_gold
+            dire_max_gold = max(dire_max_gold, hero_gold)
+
+    rad_pos1_pct = (radiant_max_gold / radiant_gold_total) if radiant_gold_total > 0 else 0.2
+    dire_pos1_pct = (dire_max_gold / dire_gold_total) if dire_gold_total > 0 else 0.2
+
+    return {
+        "rad_carry_nw_pct": rad_pos1_pct,
+        "dire_carry_nw_pct": dire_pos1_pct,
+        "carry_farm_diff": rad_pos1_pct - dire_pos1_pct,
+    }
+
+
+def _extract_cs_advantage(match_data: dict, current_minute: int) -> dict:
+    """Feature 2: Laning Phase — Last Hit + Deny advantage."""
+    radiant_cs = 0
+    dire_cs = 0
+
+    for player in match_data.get("players", []):
+        is_rad = player.get("player_slot", 0) < 128
+        lh_timeline = player.get("lh_t", [])
+        dn_timeline = player.get("dn_t", [])
+        minute_idx = min(current_minute, len(lh_timeline) - 1, len(dn_timeline) - 1)
+        if minute_idx >= 0:
+            lh = lh_timeline[minute_idx] if minute_idx < len(lh_timeline) else 0
+            dn = dn_timeline[minute_idx] if minute_idx < len(dn_timeline) else 0
+            cs = lh + dn
+            if is_rad:
+                radiant_cs += cs
+            else:
+                dire_cs += cs
+
+    return {"radiant_cs_adv": float(radiant_cs - dire_cs)}
+
+
+# Defensive item keys (save items)
+_SAVE_ITEMS = {"glimmer_cape", "force_staff", "eul_scepter", "ghost_scepter", "aeon_disk"}
+# Aura item keys (teamfight utility)
+_AURA_ITEMS = {"pipe_of_insight", "crimson_guard", "guardian_greaves", "vladmir", "mekansm", "assault"}
+
+
+def _extract_defensive_items(match_data: dict, current_minute: int) -> dict:
+    """Feature 3: Defensive & Utility Power Spikes."""
+    radiant_save = 0
+    dire_save = 0
+    radiant_aura = 0
+    dire_aura = 0
+
+    for player in match_data.get("players", []):
+        is_rad = player.get("player_slot", 0) < 128
+        for purchase in player.get("purchase_log", []):
+            if purchase.get("time", 0) > current_minute * 60:
+                continue
+            key = purchase.get("key", "")
+            if key in _SAVE_ITEMS:
+                if is_rad: radiant_save += 1
+                else: dire_save += 1
+            elif key in _AURA_ITEMS:
+                if is_rad: radiant_aura += 1
+                else: dire_aura += 1
+
+    return {
+        "save_item_diff": float(radiant_save - dire_save),
+        "aura_item_diff": float(radiant_aura - dire_aura),
+    }
+
+
+def _extract_dewards(match_data: dict) -> dict:
+    """Feature 4: Vision Denial — Observer/Sentry kills."""
+    radiant_dewards = 0
+    dire_dewards = 0
+
+    for player in match_data.get("players", []):
+        is_rad = player.get("player_slot", 0) < 128
+        obs_kills = player.get("observer_kills", 0) or 0
+        sen_kills = player.get("sentry_kills", 0) or 0
+        total = obs_kills + sen_kills
+        if is_rad:
+            radiant_dewards += total
+        else:
+            dire_dewards += total
+
+    return {"dewards_diff": float(radiant_dewards - dire_dewards)}
+
+
+def _extract_rune_control(match_data: dict, current_minute: int) -> dict:
+    """Feature 5: Rune Control Efficiency."""
+    radiant_runes = 0
+    dire_runes = 0
+
+    for player in match_data.get("players", []):
+        is_rad = player.get("player_slot", 0) < 128
+        for rune in player.get("runes_log", []):
+            if rune.get("time", 0) > current_minute * 60:
+                continue
+            if is_rad: radiant_runes += 1
+            else: dire_runes += 1
+
+    return {"rune_control_diff": float(radiant_runes - dire_runes)}
+
+
+def _extract_teamfight_swing(match_data: dict, current_minute: int) -> dict:
+    """Feature 6: True Teamfight Efficiency — magnitude of gold/XP swings in last minute."""
+    tf_gold_swing = 0.0
+    tf_xp_swing = 0.0
+
+    for tf in match_data.get("teamfights", []):
+        tf_time = tf.get("start", 0)
+        if tf_time < (current_minute - 1) * 60 or tf_time > current_minute * 60:
+            continue
+
+        players = tf.get("players", [])
+        if isinstance(players, list):
+            for pid in range(5):
+                pdata = players[pid] if pid < len(players) and isinstance(players[pid], dict) else {}
+                tf_gold_swing += pdata.get("gold_delta", 0)
+                tf_xp_swing += pdata.get("xp_delta", 0)
+
+    return {
+        "tf_gold_swing_1m": tf_gold_swing,
+        "tf_xp_swing_1m": tf_xp_swing,
     }

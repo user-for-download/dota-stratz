@@ -16,7 +16,7 @@ class LiveDraftBERT(nn.Module):
         nhead: int = 4,
         num_layers: int = 3,
         num_static_features: int = 59,
-        num_dynamic_features: int = 24,
+        num_dynamic_features: int = 35,
         max_seq_len: int = 50,
         dropout: float = 0.3,
         transformer_dropout: float = 0.1,
@@ -38,13 +38,13 @@ class LiveDraftBERT(nn.Module):
             dropout=transformer_dropout,
             batch_first=True,
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers, enable_nested_tensor=False)
 
         self.static_mlp = nn.Sequential(
             nn.LayerNorm(num_static_features),
             nn.Linear(num_static_features, static_hidden),
             nn.ReLU(),
-            nn.Dropout(dropout),
+            nn.Dropout(min(0.5, dropout * 1.5)),
         )
 
         self.dynamic_mlp = nn.Sequential(

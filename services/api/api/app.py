@@ -304,8 +304,9 @@ def live_predict(req: LivePredictRequest, request: Request):
         heroes = [pb["hero_id"] for pb in picks_bans]
         actions = [pb["team"] * 1 + (1 if pb.get("is_pick", True) else 0) * 2 + 1 for pb in picks_bans]
 
-    # Static features: use zeros for now (would need ml.*_agg queries in production)
-    static_feats = [0.0] * 59
+    # Static features: dynamically sized based on loaded model schema
+    n_static = live_pred._schemas.get(patch_id, {}).get("n_static_features", 61)
+    static_feats = [0.0] * n_static
 
     patch_id = match_data.get("patch", 60)
 
@@ -351,7 +352,8 @@ def get_prediction_timeline(match_id: int, request: Request):
         heroes = []
         actions = []
 
-    static_feats = [0.0] * 59
+    n_static = live_pred._schemas.get(patch_id, {}).get("n_static_features", 61)
+    static_feats = [0.0] * n_static
 
     timeline = []
     for minute in range(1, max_minute + 1):
@@ -536,6 +538,8 @@ async def ws_draft(websocket: WebSocket):
                     mc_prob = top.get("mc_win_probability")
                     if mc_prob:
                         final_reasoning = (final_reasoning or "") + f" | MCTS Rollout WR: {mc_prob*100:.1f}%"
+                    if top.get("comp_penalty"):
+                        final_reasoning = (final_reasoning or "") + f" | WARNING: {top['comp_penalty']}"
                 else:
                     final_reasoning = reasoning
 
@@ -660,7 +664,8 @@ async def ws_live(websocket: WebSocket):
                         heroes = []
                         actions_list = []
 
-                    static_feats = [0.0] * 59
+                    n_static = live_pred._schemas.get(patch_id, {}).get("n_static_features", 61)
+                    static_feats = [0.0] * n_static
 
                     # Compute dynamic features first (needed for dyn_feats below)
                     features = await loop.run_in_executor(

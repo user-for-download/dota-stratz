@@ -2,13 +2,9 @@
 
 Adds a Dynamic MLP branch to the existing DraftBERT architecture:
 - Branch 1: Transformer (draft sequence) → 128-dim [CACHED per match]
-- Branch 2: Static MLP (59 pre-game aggregates) → 64-dim [CACHED per match]
-- Branch 3: Dynamic MLP (24 live game state features) → 32-dim [RE-EVALUATED per tick]
+- Branch 2: Static MLP (61 pre-game aggregates) → 64-dim [CACHED per match]
+- Branch 3: Dynamic MLP (35 live game state features) → 32-dim [RE-EVALUATED per tick]
 - Fusion Head: Linear(128+64+32, 64) → ReLU → Dropout → Linear(64, 1)
-
-The Transformer and Static MLP embeddings are computed once at match start
-and cached. Only the Dynamic MLP runs every 30s, reducing per-tick cost
-from ~5ms to ~0.1ms.
 """
 
 import torch
@@ -16,8 +12,6 @@ import torch.nn as nn
 
 
 class LiveDraftBERT(nn.Module):
-    """Extended DraftBERT with Dynamic MLP branch for live game state."""
-
     def __init__(
         self,
         vocab_size: int = 165,
@@ -25,7 +19,7 @@ class LiveDraftBERT(nn.Module):
         nhead: int = 4,
         num_layers: int = 3,
         num_static_features: int = 59,
-        num_dynamic_features: int = 24,
+        num_dynamic_features: int = 35,
         max_seq_len: int = 50,
         dropout: float = 0.3,
         transformer_dropout: float = 0.1,
@@ -35,30 +29,28 @@ class LiveDraftBERT(nn.Module):
     ):
         super().__init__()
 
-        # --- Branch 1: Transformer (draft sequence) ---
+        # Branch 1: Transformer
         self.hero_emb = nn.Embedding(vocab_size, d_model, padding_idx=0)
         self.action_emb = nn.Embedding(5, d_model, padding_idx=0)
         self.pos_emb = nn.Embedding(max_seq_len, d_model)
         self.emb_dropout = nn.Dropout(dropout)
 
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=nhead,
-            dim_feedforward=d_model * 4,
-            dropout=transformer_dropout,
+            d_model=d_model, nhead=nhead,
+            dim_feedforward=d_model * 4, dropout=transformer_dropout,
             batch_first=True,
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers, enable_nested_tensor=False)
 
-        # --- Branch 2: Static MLP (pre-game aggregates) ---
+        # Branch 2: Static MLP
         self.static_mlp = nn.Sequential(
             nn.LayerNorm(num_static_features),
             nn.Linear(num_static_features, static_hidden),
             nn.ReLU(),
-            nn.Dropout(dropout),
+            nn.Dropout(tabular_dropout),
         )
 
-        # --- Branch 3: Dynamic MLP (live game state) ---
+        # Branch 3: Dynamic MLP
         self.dynamic_mlp = nn.Sequential(
             nn.LayerNorm(num_dynamic_features),
             nn.Linear(num_dynamic_features, dynamic_hidden),
@@ -66,13 +58,8 @@ class LiveDraftBERT(nn.Module):
             nn.Dropout(dropout),
         )
 
-        # --- Gated Fusion Head ---
-        # Gating mechanism to learn which modality to prioritize
+        # Fusion Head (no gate — straight concatenation)
         fusion_dim = d_model + static_hidden + dynamic_hidden
-        self.gate = nn.Sequential(
-            nn.Linear(fusion_dim, fusion_dim),
-            nn.Sigmoid(),
-        )
         self.fusion_head = nn.Sequential(
             nn.Linear(fusion_dim, fusion_hidden),
             nn.ReLU(),
@@ -81,19 +68,9 @@ class LiveDraftBERT(nn.Module):
         )
 
     def forward(self, heroes, actions, static_features, dynamic_features):
-        """
-        Full forward pass (used at minute 0, caches embeddings).
-
-        heroes: (B, SeqLen) — draft hero IDs
-        actions: (B, SeqLen) — action tokens (0=pad, 1=RadBan, 2=DireBan, 3=RadPick, 4=DirePick)
-        static_features: (B, num_static) — pre-game aggregates
-        dynamic_features: (B, num_dynamic) — live game state features
-        Returns: (B,) — raw logits for Radiant win probability
-        """
         B, S = heroes.size()
         positions = torch.arange(S, device=heroes.device).unsqueeze(0).expand(B, S)
 
-        # Branch 1: Transformer
         x = self.hero_emb(heroes) + self.action_emb(actions) + self.pos_emb(positions)
         x = self.emb_dropout(x)
         pad_mask = (heroes == 0)
@@ -103,43 +80,22 @@ class LiveDraftBERT(nn.Module):
         out = out.masked_fill(mask_expanded, 0.0)
         sum_embeddings = out.sum(dim=1)
         valid_lengths = (~pad_mask).sum(dim=1, keepdim=True).float().clamp(min=1.0)
-        seq_repr = sum_embeddings / valid_lengths  # (B, 128)
+        seq_repr = sum_embeddings / valid_lengths
 
-        # Branch 2: Static MLP
-        static_repr = self.static_mlp(static_features)  # (B, 64)
+        static_repr = self.static_mlp(static_features)
+        dynamic_repr = self.dynamic_mlp(dynamic_features)
 
-        # Branch 3: Dynamic MLP
-        dynamic_repr = self.dynamic_mlp(dynamic_features)  # (B, 32)
-
-        # Gated fusion: learn which modality to prioritize
-        fused = torch.cat([seq_repr, static_repr, dynamic_repr], dim=1)  # (B, 224)
-        gate_weights = self.gate(fused)
-        gated_fused = fused * gate_weights
-        logits = self.fusion_head(gated_fused).squeeze(-1)  # (B,)
+        fused = torch.cat([seq_repr, static_repr, dynamic_repr], dim=1)
+        logits = self.fusion_head(fused).squeeze(-1)
         return logits
 
     def forward_dynamic(self, seq_repr, static_repr, dynamic_features):
-        """Fast inference path using cached transformer + static embeddings.
-
-        seq_repr: (B, 128) — cached transformer output
-        static_repr: (B, 64) — cached static MLP output
-        dynamic_features: (B, num_dynamic) — new live features (changes every tick)
-        Returns: (B,) — raw logits
-        """
-        dynamic_repr = self.dynamic_mlp(dynamic_features)  # (B, 32)
-        fused = torch.cat([seq_repr, static_repr, dynamic_repr], dim=1)  # (B, 224)
-        gate_weights = self.gate(fused)
-        gated_fused = fused * gate_weights
-        logits = self.fusion_head(gated_fused).squeeze(-1)  # (B,)
+        dynamic_repr = self.dynamic_mlp(dynamic_features)
+        fused = torch.cat([seq_repr, static_repr, dynamic_repr], dim=1)
+        logits = self.fusion_head(fused).squeeze(-1)
         return logits
 
     def encode_draft(self, heroes, actions, static_features):
-        """Encode draft + static features for caching (called once per match).
-
-        Returns:
-            seq_repr: (B, 128) — transformer embedding
-            static_repr: (B, 64) — static MLP embedding
-        """
         B, S = heroes.size()
         positions = torch.arange(S, device=heroes.device).unsqueeze(0).expand(B, S)
 

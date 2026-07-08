@@ -371,7 +371,22 @@ run-%: env-sync ## Run service locally, e.g. make run-parser
 
 .PHONY: train
 train: ## Train PyTorch DraftBERT model: make train PATCH=<id> (default: auto-detect)
-	$(COMPOSE) --profile db --profile train run --rm trainer $(if $(PATCH),--patch $(PATCH),)
+	$(COMPOSE) --profile db \
+  --profile train \
+  run --rm trainer \
+  $(if $(PATCH),--patch $(PATCH),)\
+  --env-file deploy/.env \
+  --profile db \
+  --profile train \
+  -e TRAINER_NUM_THREADS=8 \
+  -e OMP_NUM_THREADS=8 \
+  -e MKL_NUM_THREADS=8 \
+  -e OPENBLAS_NUM_THREADS=8 \
+  -e TRAINER_BATCH_SIZE=256 \
+  -e OMP_PROC_BIND=CLOSE \
+  -e OMP_PLACES=cores \
+  -e KMP_AFFINITY=granularity=fine,compact,1,0 \
+  --entrypoint python trainer -m trainer.main --patch 60 --skip-agg
 
 .PHONY: train-live
 train-live: ## Train LiveDraftBERT for live match prediction: make train-live PATCH=<id>
@@ -458,8 +473,16 @@ clean: ## Remove local build artifacts
 	@echo "Cleaned ./bin"
 
 .PHONY: nuke
-nuke: ## DESTRUCTIVE: stop compose stack and remove project volumes
-	@echo "$(YELLOW)WARNING: This removes this project's compose containers and volumes.$(RESET)"
-	@read -p "Continue? [y/N] " ans && [ "$${ans:-N}" = "y" ]
-	$(COMPOSE) --profile all down -v --remove-orphans
-	@echo "$(CYAN)Project stack removed.$(RESET)"
+nuke: ## DESTRUCTIVE: stop ALL containers and remove ALL images/volumes on the host
+	@echo "Nuking all Docker containers, volumes, and images..."
+	-docker stop $$(docker ps -aq) 2>/dev/null || true
+	-docker rm $$(docker ps -aq) 2>/dev/null || true
+	-docker network prune -f
+	-docker volume prune -f
+	-docker rmi -f $$(docker images -qa) 2>/dev/null || true
+	@echo "Docker is completely clean."
+
+.PHONY: clean-project
+clean-project: ## DESTRUCTIVE: wipe ONLY this project's containers and volumes
+	@echo "Destroying dota-stratz environment..."
+	docker compose -f deploy/compose.yaml --env-file deploy/.env --profile db --profile train down -v --rmi all --remove-orphans

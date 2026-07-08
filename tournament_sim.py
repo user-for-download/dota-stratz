@@ -125,6 +125,7 @@ def simulate_draft(team_a, team_b, first_pick_team):
                 "for_team": recommending_team,
                 "first_pick_team": first_pick_team,
                 "num_recommendations": 5,
+                "run_mcts": False,
             })
             recs = result.get("recommendations", [])
         except Exception:
