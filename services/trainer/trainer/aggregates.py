@@ -51,9 +51,9 @@ def _batched(rows: list[tuple], batch_size: int):
         yield rows[i : i + batch_size]
 
 
-def _wavg(c_val: float, c_w: float, p_val: float, p_w: float, total_g: float) -> float:
+def _wavg(c_val, c_w, p_val, p_w, total_g) -> float:
     """Weighted average of current and prior values."""
-    return (c_val * c_w + p_val * p_w) / total_g
+    return (float(c_val or 0) * float(c_w or 0) + float(p_val or 0) * float(p_w or 0)) / float(total_g or 1)
 
 
 _VALID_TABLES = frozenset({
