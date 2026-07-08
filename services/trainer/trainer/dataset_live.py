@@ -22,7 +22,7 @@ import torch
 from torch.utils.data import Dataset, IterableDataset, get_worker_info
 
 from .config import TrainerConfig
-from .features import feature_column_names, training_features_sql
+from .features import feature_column_names, training_features_sql, training_features_sql_fast
 from .aggregates import _match_extra_where
 from .live_features import (
     DYNAMIC_FEATURE_COLUMNS,
@@ -85,12 +85,17 @@ def load_live_dataset(cfg: TrainerConfig, engine, max_len: int = 50):
     """
     logger.info("Loading live training data for patch %s ...", cfg.patch_id)
 
-    # 1. Draft sequences + static features
-    draft_df = pd.read_sql(
-        training_features_sql(_match_extra_where(cfg), lookback=cfg.lookback_patches),
-        engine,
-        params={"patch_id": cfg.patch_id},
-    )
+    # 1. Draft sequences + static features (use fast aggregate SQL)
+    from sqlalchemy import text
+    import time
+    t0 = time.time()
+    sql = training_features_sql_fast(_match_extra_where(cfg))
+    with engine.connect() as conn:
+        result = conn.execute(text(sql), {"patch_id": cfg.patch_id})
+        columns = result.keys()
+        rows = result.fetchall()
+    logger.info("Read %d rows in %.1fs", len(rows), time.time() - t0)
+    draft_df = pd.DataFrame(rows, columns=columns)
 
     if draft_df.empty:
         raise ValueError(f"No draft data found for patch {cfg.patch_id}")
