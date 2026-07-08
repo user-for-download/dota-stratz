@@ -57,12 +57,11 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
         ``aggregates.py`` to keep filters consistent with aggregate
         population.
     lookback : int
-        Number of previous patches to include (e.g., 2 means patches 58-60).
+        Number of previous patches for aggregate/snapshot data only.
+        Draft data always uses exactly patch_id (current patch only).
     """
-    if lookback > 0:
-        patch_cond = f"m.patch >= %(patch_id)s - {lookback} AND m.patch <= %(patch_id)s"
-    else:
-        patch_cond = "m.patch = %(patch_id)s"
+    # Draft data: ONLY current patch (patch 60) — current gameplay only
+    patch_cond = "m.patch = %(patch_id)s"
 
     return f"""
     WITH draft_slots AS (
