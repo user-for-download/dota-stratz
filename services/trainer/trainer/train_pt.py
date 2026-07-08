@@ -7,6 +7,7 @@ and writes schema/metadata files for the API to consume.
 import copy
 import json
 import logging
+import time
 import uuid
 from pathlib import Path
 
@@ -38,6 +39,7 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
 
     # --- Standardize Continuous Features ---
     logger.info("Normalizing tabular features (Mean/Std Scaling)...")
+    t0 = time.time()
     feature_means = train_ds.tabular.mean(dim=0)
     feature_stds = train_ds.tabular.std(dim=0).clamp(min=1e-6)
 
@@ -46,6 +48,7 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
 
     feature_means_list = feature_means.numpy().tolist()
     feature_stds_list = feature_stds.numpy().tolist()
+    logger.info("Normalization done in %.1fs", time.time() - t0)
 
     num_continuous = metadata["n_continuous_features"]
     n_train = len(train_ds)
@@ -79,6 +82,7 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
     model_dir.mkdir(parents=True, exist_ok=True)
 
     for epoch in range(cfg.epochs):
+        t_epoch = time.time()
         # Training
         model.train()
         train_loss = 0.0
@@ -129,8 +133,8 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
         current_lr = optimizer.param_groups[0]['lr']
 
         logger.info(
-            "Epoch %02d/%02d | LR: %.2e | Train Loss: %.4f | Val Loss: %.4f",
-            epoch + 1, cfg.epochs, current_lr, avg_train, avg_val,
+            "Epoch %02d/%02d | LR: %.2e | Train Loss: %.4f | Val Loss: %.4f | %.0fs",
+            epoch + 1, cfg.epochs, current_lr, avg_train, avg_val, time.time() - t_epoch,
         )
 
         if avg_val < best_val_loss:

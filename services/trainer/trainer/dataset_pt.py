@@ -81,13 +81,18 @@ def load_sequence_dataset(cfg: TrainerConfig, engine, max_len: int = 50):
         ANALYZE _tmp_train_features;
     """
     logger.info("Materializing features into temp table (one-time LATERAL join)...")
+    import time
+    t0 = time.time()
     with engine.connect() as conn:
         conn.execute(pd.io.sql.text(mat_sql), {"patch_id": cfg.patch_id})
         conn.commit()
+    logger.info("Materialization done in %.0fs", time.time() - t0)
 
     # Step 2: Read from temp table (fast sequential scan)
     logger.info("Reading from temp table...")
+    t0 = time.time()
     df = pd.read_sql("SELECT * FROM _tmp_train_features", engine)
+    logger.info("Read %d rows in %.0fs", len(df), time.time() - t0)
 
     if df.empty:
         raise ValueError(f"No training data found for patch {cfg.patch_id}.")
@@ -116,8 +121,11 @@ def load_sequence_dataset(cfg: TrainerConfig, engine, max_len: int = 50):
     logger.info("Split: %d train, %d val matches",
                 len(match_ids_sorted[:n_train]), len(match_ids_sorted[n_train:]))
 
+    t0 = time.time()
     t_h, t_a, t_t, t_l = _build_augmented_data(train_df, agg_cols)
     v_h, v_a, v_t, v_l = _build_augmented_data(val_df, agg_cols)
+    logger.info("Augmentation done in %.0fs — train: %d seqs, val: %d seqs",
+                time.time() - t0, len(t_l), len(v_l))
 
     train_ds = DraftSequenceDataset(t_h, t_a, t_t, t_l, max_len)
     val_ds = DraftSequenceDataset(v_h, v_a, v_t, v_l, max_len)
