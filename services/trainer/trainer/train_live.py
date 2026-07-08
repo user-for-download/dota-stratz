@@ -149,7 +149,7 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
         "n_static_features": metadata["n_static_features"],
         "n_dynamic_features": metadata["n_dynamic_features"],
         "dynamic_feature_columns": DYNAMIC_FEATURE_COLUMNS,
-        "val_loss": best_val_loss, "val_acc": best_val_acc,
+        "val_loss": best_val_loss, "val_auc": best_val_acc,
         "n_train_matches": metadata["n_train_matches"],
         "n_val_matches": metadata["n_val_matches"],
         "n_train_samples": metadata["n_train_samples"],
@@ -200,7 +200,7 @@ def _upsert_model_meta(cfg: TrainerConfig, patch_id: int, meta: dict, engine=Non
                     trained_at = NOW()""",
                 (patch_id, meta["weights_filename"], meta["weights_filename"],
                  json.dumps(meta["dynamic_feature_columns"]),
-                 meta.get("val_acc"), meta.get("val_loss"),
+                 meta.get("val_auc"), meta.get("val_loss"),
                  meta["n_train_matches"] + meta["n_val_matches"],
                  meta["n_train_samples"] + meta["n_val_samples"]),
             )

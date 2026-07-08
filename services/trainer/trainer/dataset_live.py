@@ -193,21 +193,25 @@ class StreamingLiveDataset(IterableDataset):
     """
 
     def __init__(self, engine, match_ids: set[int], patch_id: int,
-                 lookback: int = 2, max_len: int = 50, chunk_size: int = 1000):
+                 lookback: int = 2, max_len: int = 50, chunk_size: int = 1000,
+                 cfg: TrainerConfig = None):
         self.engine = engine
         self.match_ids = match_ids
         self.patch_id = patch_id
         self.lookback = lookback
         self.max_len = max_len
         self.chunk_size = chunk_size
+        self.cfg = cfg  # Pass actual config to preserve filters
 
     def __iter__(self):
         worker_info = get_worker_info()
         if worker_info is not None:
-            # Split match_ids across workers
+            # Split match_ids across workers, last worker gets remainder
             per_worker = len(self.match_ids) // worker_info.num_workers
             worker_id = worker_info.id
-            match_list = sorted(self.match_ids)[worker_id * per_worker:(worker_id + 1) * per_worker]
+            start = worker_id * per_worker
+            end = len(self.match_ids) if worker_id == worker_info.num_workers - 1 else start + per_worker
+            match_list = sorted(self.match_ids)[start:end]
         else:
             match_list = sorted(self.match_ids)
 
@@ -221,9 +225,7 @@ class StreamingLiveDataset(IterableDataset):
             with conn.cursor(name='live_draft_cursor') as cur:
                 cur.itersize = self.chunk_size
                 agg_cols = feature_column_names(include_onehot=False)
-                sql = training_features_sql(_match_extra_where(
-                    TrainerConfig(patch_id=self.patch_id, lookback_patches=self.lookback)
-                ), lookback=self.lookback)
+                sql = training_features_sql(_match_extra_where(self.cfg), lookback=self.lookback)
                 cur.execute(sql, {"patch_id": self.patch_id})
                 col_names = [desc[0] for desc in cur.description]
 
