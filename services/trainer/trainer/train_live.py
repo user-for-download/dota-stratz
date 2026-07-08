@@ -77,11 +77,11 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
 
         for batch_i, start in enumerate(range(0, n_train, batch_size)):
             idx = indices[start:start + batch_size]
-            heroes = train_ds.heroes[idx]
-            actions = train_ds.actions[idx]
-            static = train_ds.static[idx]
-            dynamic = train_ds.dynamic[idx]
-            labels = train_ds.labels[idx]
+            heroes = train_ds.heroes[idx].to(device)
+            actions = train_ds.actions[idx].to(device)
+            static = train_ds.static[idx].to(device)
+            dynamic = train_ds.dynamic[idx].to(device)
+            labels = train_ds.labels[idx].to(device)
 
             optimizer.zero_grad()
             logits = model(heroes, actions, static, dynamic)
@@ -108,11 +108,11 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
             val_idx = torch.arange(n_val)
             for start in range(0, n_val, batch_size):
                 idx = val_idx[start:start + batch_size]
-                heroes = val_ds.heroes[idx]
-                actions = val_ds.actions[idx]
-                static = val_ds.static[idx]
-                dynamic = val_ds.dynamic[idx]
-                labels = val_ds.labels[idx]
+                heroes = val_ds.heroes[idx].to(device)
+                actions = val_ds.actions[idx].to(device)
+                static = val_ds.static[idx].to(device)
+                dynamic = val_ds.dynamic[idx].to(device)
+                labels = val_ds.labels[idx].to(device)
 
                 logits = model(heroes, actions, static, dynamic)
                 loss = criterion(logits, labels)
