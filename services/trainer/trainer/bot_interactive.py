@@ -82,18 +82,22 @@ def run_interactive(patch_id, use_mcts, iterations):
 
     if model_path.exists():
         logger.info("Loading model from %s", model_path)
-        from trainer.model_pt import MultiModalDraftBERT
-        model = MultiModalDraftBERT(
-            vocab_size=cfg.max_hero_id + 5, d_model=cfg.d_model,
-            nhead=cfg.nhead, num_layers=cfg.num_layers,
-            num_continuous_features=builder.num_features,
-            max_seq_len=cfg.max_seq_len, dropout=cfg.dropout,
-            transformer_dropout=cfg.transformer_dropout,
-            fusion_hidden=cfg.fusion_hidden,
-        )
-        state_dict = torch.load(str(model_path), map_location="cpu", weights_only=True)
-        model.load_state_dict(state_dict)
-        model.eval()
+        if 'compiled' in str(model_path):
+            model = torch.jit.load(str(model_path), map_location="cpu")
+            model.eval()
+        else:
+            from trainer.model_pt import MultiModalDraftBERT
+            model = MultiModalDraftBERT(
+                vocab_size=cfg.max_hero_id + 5, d_model=cfg.d_model,
+                nhead=cfg.nhead, num_layers=cfg.num_layers,
+                num_continuous_features=builder.num_features,
+                max_seq_len=cfg.max_seq_len, dropout=cfg.dropout,
+                transformer_dropout=cfg.transformer_dropout,
+                fusion_hidden=cfg.fusion_hidden,
+            )
+            state_dict = torch.load(str(model_path), map_location="cpu", weights_only=True)
+            model.load_state_dict(state_dict)
+            model.eval()
     else:
         logger.warning("No model found, using random weights")
         from trainer.model_pt import MultiModalDraftBERT
