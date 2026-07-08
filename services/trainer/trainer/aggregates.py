@@ -1193,10 +1193,7 @@ POPULATE_COUNTER_SNAPSHOT = """
 
 
 def populate_counter_snapshot(cfg: TrainerConfig, conn) -> int:
-    """Populate ml.hero_counter_snapshot for *patch_id* (Tier 2 — weekly).
-
-    Processes one date at a time to avoid PostgreSQL OOM on heavy cross-join.
-    """
+    """Populate ml.hero_counter_snapshot for patch_id. One date at a time."""
     patch_id = cfg.patch_id
     pg = cfg.prior_games
     pw = cfg.prior_win_rate
@@ -1206,58 +1203,46 @@ def populate_counter_snapshot(cfg: TrainerConfig, conn) -> int:
     _clean_patch_rows(conn, "ml.hero_counter_snapshot", patch_id)
     extra = _match_extra_where(cfg, "m")
 
-    # Get all weekly dates first
+    # Get dates
     with conn.cursor() as cur:
-        cur.execute(f"""
+        cur.execute("""
             SELECT generate_series(
                 date_trunc('day', to_timestamp(MIN(start_time)))::date,
                 date_trunc('day', to_timestamp(MAX(start_time)))::date,
                 '7 days'::interval
-            )::date AS as_of_date
-            FROM matches
-            WHERE patch = %s AND radiant_win IS NOT NULL{extra}
+            )::date FROM matches WHERE patch = %s AND radiant_win IS NOT NULL
         """, (patch_id,))
         dates = [r[0] for r in cur.fetchall()]
 
     total = 0
-    for as_of_date in dates:
+    params_base = (patch_id, min_patch, patch_id, prior_weight)
+
+    for dt in dates:
         with conn.cursor() as cur:
             cur.execute(f"""
-                SELECT
-                    p1.hero_id, p2.hero_id AS enemy_hero_id,
-                    SUM(CASE WHEN m.patch = %s THEN 1.0 ELSE %s END)::FLOAT AS games,
-                    SUM(CASE WHEN CASE WHEN p1.is_radiant THEN m.radiant_win ELSE NOT m.radiant_win END
-                        THEN CASE WHEN m.patch = %s THEN 1.0 ELSE %s END ELSE 0 END)::FLOAT AS wins,
-                    AVG(p1.kills - p1.deaths)::FLOAT AS avg_kd_diff
+                SELECT p1.hero_id, p2.hero_id,
+                       COUNT(*)::float,
+                       SUM(CASE WHEN (p1.is_radiant = m.radiant_win) THEN 1.0 ELSE 0 END)::float,
+                       AVG(p1.kills - p1.deaths)::float
                 FROM matches m
                 JOIN players p1 ON p1.match_id = m.match_id
                 JOIN players p2 ON p2.match_id = m.match_id AND p2.is_radiant != p1.is_radiant
-                WHERE m.patch BETWEEN %s AND %s
-                  AND m.radiant_win IS NOT NULL{extra}
-                  AND (
-                    (m.patch = %s AND to_timestamp(m.start_time) < %s)
-                    OR m.patch < %s
-                  )
+                WHERE m.patch BETWEEN %s AND %s {extra}
+                  AND m.radiant_win IS NOT NULL
+                  AND to_timestamp(m.start_time) < %s
                 GROUP BY p1.hero_id, p2.hero_id
-                HAVING SUM(CASE WHEN m.patch = %s THEN 1.0 ELSE %s END) >= 3
-            """, (patch_id, prior_weight, patch_id, prior_weight,
-                  min_patch, patch_id, patch_id, patch_id, as_of_date, patch_id, patch_id, prior_weight))
+                HAVING COUNT(*) >= 3
+            """, (min_patch, patch_id, dt))
             rows = []
             for r in cur.fetchall():
-                hid, ehid, games, wins, akd = r
-                rows.append((patch_id, as_of_date, hid, ehid, games, wins, _shrunk_wr(wins, games, pg, pw), akd))
+                hid, ehid, g, w, akd = r
+                rows.append((patch_id, dt, hid, ehid, g, w, _shrunk_wr(w, g, pg, pw), akd or 0.0))
+            if rows:
+                psycopg2.extras.execute_values(cur, POPULATE_COUNTER_SNAPSHOT, rows, template=None)
+        conn.commit()
+        total += len(rows)
 
-        if rows:
-            with conn.cursor() as cur:
-                for batch in _batched(rows, cfg.agg_batch_size):
-                    psycopg2.extras.execute_values(cur, POPULATE_COUNTER_SNAPSHOT, batch, template=None)
-            conn.commit()
-            total += len(rows)
-
-    logger.info(
-        "populate_counter_snapshot: %s rows for patch %s (lookback=%d, prior_w=%.2f)",
-        total, patch_id, lookback, prior_weight,
-    )
+    logger.info("populate_counter_snapshot: %s rows for patch %s", total, patch_id)
     return total
 
 
