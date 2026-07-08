@@ -218,29 +218,32 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
     FROM draft_slots ds
 
     -- Team-hero aggregate (PIT-safe: most recent daily snapshot as of match start)
+    -- Falls back to earliest available snapshot when match predates snapshot system
     LEFT JOIN LATERAL (
         SELECT * FROM ml.team_hero_snapshot ths
         WHERE ths.team_id = CASE ds.team WHEN 0 THEN ds.radiant_team_id ELSE ds.dire_team_id END
           AND ths.hero_id = ds.hero_id
-          AND ths.patch_id = %(patch_id)s
-          AND ths.as_of_date <= to_timestamp(ds.start_time)::DATE
-        ORDER BY ths.as_of_date DESC
+          AND ths.patch_id <= ds.patch_id
+        ORDER BY (ths.as_of_date <= to_timestamp(ds.start_time)::DATE) DESC,
+                 ths.as_of_date DESC
         LIMIT 1
     ) th ON TRUE
 
     -- Player-hero aggregate (PIT-safe: most recent weekly snapshot as of match start)
+    -- Falls back to earliest available snapshot when match predates snapshot system
     -- NULL for bans where account_id is NULL
     LEFT JOIN LATERAL (
         SELECT * FROM ml.player_hero_snapshot phs
         WHERE phs.account_id = ds.account_id
           AND phs.hero_id = ds.hero_id
-          AND phs.patch_id = %(patch_id)s
-          AND phs.as_of_date <= to_timestamp(ds.start_time)::DATE
-        ORDER BY phs.as_of_date DESC
+          AND phs.patch_id <= ds.patch_id
+        ORDER BY (phs.as_of_date <= to_timestamp(ds.start_time)::DATE) DESC,
+                 phs.as_of_date DESC
         LIMIT 1
     ) ph ON TRUE
 
     -- Synergy: look up each already-picked ally's hero pair from ml.hero_synergy_snapshot
+    -- Falls back to earliest available snapshot when match predates snapshot system
     LEFT JOIN LATERAL (
         SELECT
             COALESCE(AVG(snap.win_rate), 0.5) AS win_rate,
@@ -250,9 +253,9 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
             SELECT win_rate, games FROM ml.hero_synergy_snapshot hss
             WHERE hss.hero_a = LEAST(ds.hero_id, pb2.hero_id)
               AND hss.hero_b = GREATEST(ds.hero_id, pb2.hero_id)
-              AND hss.patch_id = %(patch_id)s
-              AND hss.as_of_date <= to_timestamp(ds.start_time)::DATE
-            ORDER BY hss.as_of_date DESC
+              AND hss.patch_id <= ds.patch_id
+            ORDER BY (hss.as_of_date <= to_timestamp(ds.start_time)::DATE) DESC,
+                     hss.as_of_date DESC
             LIMIT 1
         ) snap ON TRUE
         WHERE pb2.match_id = ds.match_id
@@ -262,6 +265,7 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
     ) sy ON TRUE
 
     -- Counter: look up each enemy pick's hero pair from ml.hero_counter_snapshot
+    -- Falls back to earliest available snapshot when match predates snapshot system
     LEFT JOIN LATERAL (
         SELECT
             COALESCE(AVG(snap.win_rate), 0.5) AS win_rate,
@@ -272,9 +276,9 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
             SELECT win_rate, avg_kd_diff FROM ml.hero_counter_snapshot hcs
             WHERE hcs.hero_id = ds.hero_id
               AND hcs.enemy_hero_id = pb2.hero_id
-              AND hcs.patch_id = %(patch_id)s
-              AND hcs.as_of_date <= to_timestamp(ds.start_time)::DATE
-            ORDER BY hcs.as_of_date DESC
+              AND hcs.patch_id <= ds.patch_id
+            ORDER BY (hcs.as_of_date <= to_timestamp(ds.start_time)::DATE) DESC,
+                     hcs.as_of_date DESC
             LIMIT 1
         ) snap ON TRUE
         WHERE pb2.match_id = ds.match_id
@@ -284,39 +288,43 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
     ) co ON TRUE
 
     -- Team head-to-head (PIT-safe: most recent daily snapshot as of match start)
+    -- Falls back to earliest available snapshot when match predates snapshot system
     LEFT JOIN LATERAL (
         SELECT * FROM ml.team_h2h_snapshot ths
         WHERE ths.team_id = CASE ds.team WHEN 0 THEN ds.radiant_team_id ELSE ds.dire_team_id END
           AND ths.enemy_team_id = CASE ds.team WHEN 0 THEN ds.dire_team_id ELSE ds.radiant_team_id END
-          AND ths.patch_id = %(patch_id)s
-          AND ths.as_of_date <= to_timestamp(ds.start_time)::DATE
-        ORDER BY ths.as_of_date DESC
+          AND ths.patch_id <= ds.patch_id
+        ORDER BY (ths.as_of_date <= to_timestamp(ds.start_time)::DATE) DESC,
+                 ths.as_of_date DESC
         LIMIT 1
     ) h2h ON TRUE
 
     -- Hero baseline (PIT-safe: most recent daily snapshot as of match start)
+    -- Falls back to earliest available snapshot when match predates snapshot system
     LEFT JOIN LATERAL (
         SELECT * FROM ml.hero_baseline_snapshot hbs
         WHERE hbs.hero_id = ds.hero_id
-          AND hbs.patch_id = %(patch_id)s
-          AND hbs.as_of_date <= to_timestamp(ds.start_time)::DATE
-        ORDER BY hbs.as_of_date DESC
+          AND hbs.patch_id <= ds.patch_id
+        ORDER BY (hbs.as_of_date <= to_timestamp(ds.start_time)::DATE) DESC,
+                 hbs.as_of_date DESC
         LIMIT 1
     ) bl ON TRUE
 
     -- Hero draft-slot aggregate (PIT-safe: most recent daily snapshot as of match start)
+    -- Falls back to earliest available snapshot when match predates snapshot system
     -- NULL team_pick_ordinal for bans → join misses → COALESCE gives defaults.
     LEFT JOIN LATERAL (
         SELECT * FROM ml.hero_draft_slot_snapshot hdss
         WHERE hdss.hero_id = ds.hero_id
           AND hdss.team_pick_ordinal = ds.team_pick_ordinal
-          AND hdss.patch_id = %(patch_id)s
-          AND hdss.as_of_date <= to_timestamp(ds.start_time)::DATE
-        ORDER BY hdss.as_of_date DESC
+          AND hdss.patch_id <= ds.patch_id
+        ORDER BY (hdss.as_of_date <= to_timestamp(ds.start_time)::DATE) DESC,
+                 hdss.as_of_date DESC
         LIMIT 1
     ) hds ON TRUE
 
     -- Macro Composition (PIT-safe sum of already picked allies)
+    -- Falls back to earliest available snapshot when match predates snapshot system
     LEFT JOIN LATERAL (
         SELECT
             SUM(COALESCE(hbs.avg_gpm, 0)) AS ally_gpm,
@@ -325,9 +333,9 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
         LEFT JOIN LATERAL (
             SELECT avg_gpm, avg_xpm FROM ml.hero_baseline_snapshot
             WHERE hero_id = pb2.hero_id
-              AND patch_id = %(patch_id)s
-              AND as_of_date <= to_timestamp(ds.start_time)::DATE
-            ORDER BY as_of_date DESC
+              AND patch_id <= ds.patch_id
+            ORDER BY (as_of_date <= to_timestamp(ds.start_time)::DATE) DESC,
+                     as_of_date DESC
             LIMIT 1
         ) hbs ON TRUE
         WHERE pb2.match_id = ds.match_id
