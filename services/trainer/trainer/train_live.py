@@ -38,7 +38,8 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
     )
 
     # 2. Create model
-    device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info("LiveDraftBERT: using device=%s", device)
     model = LiveDraftBERT(
         vocab_size=cfg.max_hero_id + 5, d_model=cfg.d_model, nhead=cfg.nhead,
         num_layers=cfg.num_layers, num_static_features=metadata["n_static_features"],
