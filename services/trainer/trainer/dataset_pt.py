@@ -82,9 +82,10 @@ def load_sequence_dataset(cfg: TrainerConfig, engine, max_len: int = 50):
     """
     logger.info("Materializing features into temp table (one-time LATERAL join)...")
     import time
+    from sqlalchemy import text
     t0 = time.time()
     with engine.connect() as conn:
-        conn.execute(pd.io.sql.text(mat_sql), {"patch_id": cfg.patch_id})
+        conn.execute(text(mat_sql), {"patch_id": cfg.patch_id})
         conn.commit()
     logger.info("Materialization done in %.0fs", time.time() - t0)
 
