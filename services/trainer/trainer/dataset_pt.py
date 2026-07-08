@@ -66,10 +66,28 @@ def _build_augmented_data(df, agg_cols):
 
 
 def load_sequence_dataset(cfg: TrainerConfig, engine, max_len: int = 50):
-    """Load, clean, split, and augment sequence data for DraftBERT."""
+    """Load, clean, split, and augment sequence data for DraftBERT.
+
+    First materializes features into a temp table (slow LATERAL joins),
+    then reads from the temp table (fast sequential scan).
+    """
     logger.info("Loading training data from DB for patch %s ...", cfg.patch_id)
 
-    df = pd.read_sql(training_features_sql(_match_extra_where(cfg), lookback=cfg.lookback_patches), engine, params={"patch_id": cfg.patch_id})
+    # Step 1: Materialize features into temp table (expensive LATERAL joins)
+    sql = training_features_sql(_match_extra_where(cfg), lookback=cfg.lookback_patches)
+    mat_sql = f"""
+        DROP TABLE IF EXISTS _tmp_train_features;
+        CREATE TEMP TABLE _tmp_train_features AS {sql};
+        ANALYZE _tmp_train_features;
+    """
+    logger.info("Materializing features into temp table (one-time LATERAL join)...")
+    with engine.connect() as conn:
+        conn.execute(pd.io.sql.text(mat_sql), {"patch_id": cfg.patch_id})
+        conn.commit()
+
+    # Step 2: Read from temp table (fast sequential scan)
+    logger.info("Reading from temp table...")
+    df = pd.read_sql("SELECT * FROM _tmp_train_features", engine)
 
     if df.empty:
         raise ValueError(f"No training data found for patch {cfg.patch_id}.")
