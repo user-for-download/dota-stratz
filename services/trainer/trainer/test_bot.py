@@ -54,7 +54,8 @@ def test_draft_state_builder(cache):
     from trainer.draft_state import DraftStateBuilder
 
     builder = DraftStateBuilder(cache)
-    assert builder.num_features == 59, f"Expected 59 features, got {builder.num_features}"
+    expected = len(builder.col_idx)
+    assert builder.num_features == expected, f"Expected {expected} features, got {builder.num_features}"
 
     hero_id = cache.valid_hero_ids[0]
 
@@ -66,7 +67,7 @@ def test_draft_state_builder(cache):
         radiant_picks=[],
         dire_picks=[],
     )
-    assert feat.shape == (59,), f"Expected shape (59,), got {feat.shape}"
+    assert feat.shape == (expected,), f"Expected shape ({expected},), got {feat.shape}"
     assert feat.dtype == np.float32, f"Expected float32, got {feat.dtype}"
 
     # Check that baseline values are populated
@@ -90,7 +91,7 @@ def test_greedy_bot(cache, builder):
     class DummyModel(torch.nn.Module):
         def __init__(self):
             super().__init__()
-            self.linear = torch.nn.Linear(59, 1)
+            self.linear = torch.nn.Linear(expected, 1)
 
         def forward(self, heroes, actions, tabular):
             # Just use the tabular features
@@ -130,7 +131,7 @@ def test_mcts_bot(cache, builder):
     class DummyModel(torch.nn.Module):
         def __init__(self):
             super().__init__()
-            self.linear = torch.nn.Linear(59, 1)
+            self.linear = torch.nn.Linear(expected, 1)
 
         def forward(self, heroes, actions, tabular):
             return self.linear(tabular).squeeze(-1)
