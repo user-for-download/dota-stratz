@@ -61,7 +61,7 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
         Draft data always uses exactly patch_id (current patch only).
     """
     # Draft data: ONLY current patch (patch 60) — current gameplay only
-    patch_cond = "m.patch = %(patch_id)s"
+    patch_cond = "m.patch = :patch_id"
 
     return f"""
     WITH draft_slots AS (
