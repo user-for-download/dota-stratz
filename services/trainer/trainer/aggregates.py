@@ -602,7 +602,8 @@ def populate_team_hero_snapshot(cfg, conn) -> int:
                     ak_=_wavg(c["avg_kills"],c["games"],p["avg_kills"],p["games"],tg); ad_=_wavg(c["avg_deaths"],c["games"],p["avg_deaths"],p["games"],tg)
                     aa_=_wavg(c["avg_assists"],c["games"],p["avg_assists"],p["games"],tg); fbr=_wavg(c["firstblood_rate"],c["games"],p["firstblood_rate"],p["games"],tg)
                     acs=_wavg(c["avg_camps_stacked"],c["games"],p["avg_camps_stacked"],p["games"],tg); avp=_wavg(c["avg_vision_placed"],c["games"],p["avg_vision_placed"],p["games"],tg)
-                    ag10=_wavg(c["avg_gold_10"],c["games"],p["avg_gold_10"],p["games"],tg); ax10=_wavg(c["avg_xp_10"],c["games"],p["avg_xp_10"],p["games"],tg)
+                    ag10 = p["avg_gold_10"] if c["avg_gold_10"] == 0.0 else _wavg(c["avg_gold_10"],c["games"],p["avg_gold_10"],p["games"],tg)
+                    ax10 = p["avg_xp_10"] if c["avg_xp_10"] == 0.0 else _wavg(c["avg_xp_10"],c["games"],p["avg_xp_10"],p["games"],tg)
                     lp=max(c["last_played"] or 0, p["last_played"] or 0)
                 elif c:
                     games,wins,bans=c["games"],c["wins"],c["bans"]; ag,ax=c["avg_gpm"],c["avg_xpm"]
@@ -739,7 +740,7 @@ def populate_counter_snapshot(cfg, conn) -> int:
     _clean_patch_rows(conn, "ml.hero_counter_snapshot", patch_id)
     extra = _match_extra_where(cfg, "m")
     with conn.cursor() as cur:
-        cur.execute("SELECT generate_series(date_trunc('day', to_timestamp(MIN(start_time)))::date, date_trunc('day', to_timestamp(MAX(start_time)))::date, '7 days'::interval)::date FROM matches WHERE patch = %s AND radiant_win IS NOT NULL", (patch_id,))
+        cur.execute(f"SELECT generate_series(date_trunc('day', to_timestamp(MIN(start_time)))::date, date_trunc('day', to_timestamp(MAX(start_time)))::date, '7 days'::interval)::date FROM matches WHERE patch = %s AND radiant_win IS NOT NULL{extra}", (patch_id,))
         dates = [r[0] for r in cur.fetchall()]
     total = 0; last_emitted = {}
     for dt in sorted(dates):

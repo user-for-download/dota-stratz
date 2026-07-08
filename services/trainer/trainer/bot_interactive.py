@@ -37,11 +37,9 @@ HERO_NAMES = {
     86:"Mars",87:"Hoodwink",88:"Void Spirit",89:"Snapfire",
     91:"Dawnbreaker",92:"Marci",93:"Primal Beast",94:"Pangolier",
     97:"Ringmaster",98:"Kez",99:"Beastmaster",
-    102:"Bloodseeker",103:"Crystal Maiden",104:"Shadow Fiend",105:"Nyx Assassin",
-    106:"Doom",107:"Chaos Knight",108:"Shadow Demon",109:"Pangolier",
-    110:"Ancient Apparition",111:"Outworld Destroyer",112:"Puck",
+    106:"Doom",110:"Ancient Apparition",
     113:"Templar Assassin",114:"Naga Siren",119:"Dark Willow",
-    120:"Pangolier",121:"Grimstroke",123:"Hoodwink",126:"Void Spirit",
+    121:"Grimstroke",123:"Hoodwink",126:"Void Spirit",
     128:"Primal Beast",129:"Marci",131:"Dawnbreaker",135:"Muerta",
     136:"Ringmaster",137:"Kez",138:"Lion",145:"Enchantress",155:"Lich",
 }
