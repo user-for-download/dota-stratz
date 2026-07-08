@@ -43,6 +43,7 @@ class LiveDraftBERT(nn.Module):
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers, enable_nested_tensor=False)
 
         # Branch 2: Static MLP
+        tabular_dropout = min(0.5, dropout * 1.5)
         self.static_mlp = nn.Sequential(
             nn.LayerNorm(num_static_features),
             nn.Linear(num_static_features, static_hidden),
