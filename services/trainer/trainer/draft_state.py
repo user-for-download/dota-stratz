@@ -210,8 +210,15 @@ class DraftStateBuilder:
             feat[idx["hds_games"]] = 0
 
         # --- 9. Macro Composition & Pick Propensity ---
-        feat[idx["team_gpm_budget"]] = bl.get("avg_gpm", 0.0)
-        feat[idx["team_xpm_budget"]] = bl.get("avg_xpm", 0.0)
+        ally_picks = radiant_picks if is_radiant_turn else dire_picks
+        team_gpm = bl.get("avg_gpm", 0.0)
+        team_xpm = bl.get("avg_xpm", 0.0)
+        for ally_id in ally_picks:
+            ally_bl = self.cache.get_baseline(ally_id)
+            team_gpm += ally_bl.get("avg_gpm", 0.0)
+            team_xpm += ally_bl.get("avg_xpm", 0.0)
+        feat[idx["team_gpm_budget"]] = team_gpm
+        feat[idx["team_xpm_budget"]] = team_xpm
         bl_picks = bl.get("total_picks", 0)
         th_games = th.get("games", 0) if team_id else 0
         feat[idx["team_pick_propensity"]] = th_games / bl_picks if bl_picks > 0 else 0.0

@@ -127,12 +127,11 @@ def run_interactive(patch_id, use_mcts, iterations):
                 suggestions = bot.get_top_k(
                     current_heroes=[h for h, _, _ in draft_history],
                     current_actions=[a for _, a, _ in draft_history],
-                    is_radiant_turn=(side == 0),
-                    is_pick=(action_type == "pick"),
                     radiant_picks=[h for h, a, s in draft_history if a == "pick" and s == 0],
                     dire_picks=[h for h, a, s in draft_history if a == "pick" and s == 1],
-                    k=5,
+                    turn_idx=turn,
                     iterations=iterations,
+                    top_k=5,
                 )
             else:
                 from trainer.bot_greedy import GreedyDraftBot
