@@ -1,15 +1,20 @@
 """Dynamic feature columns for live match prediction.
 
 Shared between trainer (training) and API (inference).
-35 dynamic features capturing the 7 pillars of live Dota 2.
+39 dynamic features capturing the 7 pillars of live Dota 2.
 """
 
 DYNAMIC_FEATURE_COLUMNS = [
     # Core advantages
     "radiant_gold_adv",
     "radiant_xp_adv",
-    # Objectives
-    "tower_diff",
+    # Objectives (Granular)
+    "t1_tower_diff",
+    "t2_tower_diff",
+    "t3_tower_diff",
+    "t4_tower_diff",
+    "melee_rax_diff",
+    "range_rax_diff",
     "roshan_diff",
     "ward_diff",
     "tf_diff",
@@ -36,8 +41,6 @@ DYNAMIC_FEATURE_COLUMNS = [
     "courier_lost_diff",
     # Aegis (5-min window)
     "aegis_diff",
-    # Barracks differential
-    "barracks_diff",
     # Economy Distribution (who has the gold)
     "rad_carry_nw_pct",
     "dire_carry_nw_pct",

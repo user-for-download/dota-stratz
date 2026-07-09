@@ -9,7 +9,7 @@ Extracts per-minute dynamic features capturing the 7 pillars of live Dota 2:
 6. Economy Distribution & Laning
 7. Defensive/Utility Items & Rune Control
 
-35 dynamic features that capture actual game state, not just gold.
+39 dynamic features that capture actual game state, not just gold.
 """
 
 from __future__ import annotations
@@ -21,15 +21,20 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Dynamic feature columns (35 features)
+# Dynamic feature columns (39 features)
 # ---------------------------------------------------------------------------
 
 DYNAMIC_FEATURE_COLUMNS = [
     # Core advantages
     "radiant_gold_adv",
     "radiant_xp_adv",
-    # Objectives
-    "tower_diff",
+    # Objectives (Granular)
+    "t1_tower_diff",
+    "t2_tower_diff",
+    "t3_tower_diff",
+    "t4_tower_diff",
+    "melee_rax_diff",
+    "range_rax_diff",
     "roshan_diff",
     "ward_diff",
     "tf_diff",
@@ -56,8 +61,6 @@ DYNAMIC_FEATURE_COLUMNS = [
     "courier_lost_diff",
     # Aegis (5-min window)
     "aegis_diff",
-    # Barracks differential
-    "barracks_diff",
     # Economy Distribution (who has the gold)
     "rad_carry_nw_pct",
     "dire_carry_nw_pct",
@@ -109,10 +112,18 @@ kills AS (
 ),
 objs AS (
     SELECT match_id, minute,
-           SUM(CASE WHEN team = 0 AND type = 'tower_kill' THEN 1 ELSE 0 END) AS r_towers,
-           SUM(CASE WHEN team = 1 AND type = 'tower_kill' THEN 1 ELSE 0 END) AS d_towers,
-           SUM(CASE WHEN team = 0 AND type = 'barracks_kill' THEN 1 ELSE 0 END) AS r_barracks,
-           SUM(CASE WHEN team = 1 AND type = 'barracks_kill' THEN 1 ELSE 0 END) AS d_barracks,
+           SUM(CASE WHEN team = 0 AND type = 'tower_kill' AND COALESCE(key, '') LIKE '%%tower1%%' THEN 1 ELSE 0 END) AS r_t1_towers,
+           SUM(CASE WHEN team = 1 AND type = 'tower_kill' AND COALESCE(key, '') LIKE '%%tower1%%' THEN 1 ELSE 0 END) AS d_t1_towers,
+           SUM(CASE WHEN team = 0 AND type = 'tower_kill' AND COALESCE(key, '') LIKE '%%tower2%%' THEN 1 ELSE 0 END) AS r_t2_towers,
+           SUM(CASE WHEN team = 1 AND type = 'tower_kill' AND COALESCE(key, '') LIKE '%%tower2%%' THEN 1 ELSE 0 END) AS d_t2_towers,
+           SUM(CASE WHEN team = 0 AND type = 'tower_kill' AND COALESCE(key, '') LIKE '%%tower3%%' THEN 1 ELSE 0 END) AS r_t3_towers,
+           SUM(CASE WHEN team = 1 AND type = 'tower_kill' AND COALESCE(key, '') LIKE '%%tower3%%' THEN 1 ELSE 0 END) AS d_t3_towers,
+           SUM(CASE WHEN team = 0 AND type = 'tower_kill' AND COALESCE(key, '') LIKE '%%tower4%%' THEN 1 ELSE 0 END) AS r_t4_towers,
+           SUM(CASE WHEN team = 1 AND type = 'tower_kill' AND COALESCE(key, '') LIKE '%%tower4%%' THEN 1 ELSE 0 END) AS d_t4_towers,
+           SUM(CASE WHEN team = 0 AND type = 'barracks_kill' AND COALESCE(key, '') LIKE '%%melee%%' THEN 1 ELSE 0 END) AS r_melee_rax,
+           SUM(CASE WHEN team = 1 AND type = 'barracks_kill' AND COALESCE(key, '') LIKE '%%melee%%' THEN 1 ELSE 0 END) AS d_melee_rax,
+           SUM(CASE WHEN team = 0 AND type = 'barracks_kill' AND COALESCE(key, '') LIKE '%%range%%' THEN 1 ELSE 0 END) AS r_range_rax,
+           SUM(CASE WHEN team = 1 AND type = 'barracks_kill' AND COALESCE(key, '') LIKE '%%range%%' THEN 1 ELSE 0 END) AS d_range_rax,
            SUM(CASE WHEN type = 'roshan_kill' AND team = 0 THEN 1 ELSE 0 END) AS r_rosh,
            SUM(CASE WHEN type = 'roshan_kill' AND team = 1 THEN 1 ELSE 0 END) AS d_rosh,
            SUM(CASE WHEN type = 'CHAT_MESSAGE_COURIER_LOST' AND team = 2 THEN 1 ELSE 0 END) AS r_couriers_lost,
@@ -168,10 +179,18 @@ SELECT
     COALESCE(gx.radiant_xp_adv, 0) AS radiant_xp_adv,
     COALESCE(k.r_kills, 0) AS radiant_kills_tick,
     COALESCE(k.d_kills, 0) AS dire_kills_tick,
-    COALESCE(o.r_towers, 0) AS radiant_towers_tick,
-    COALESCE(o.d_towers, 0) AS dire_towers_tick,
-    COALESCE(o.r_barracks, 0) AS radiant_barracks_tick,
-    COALESCE(o.d_barracks, 0) AS dire_barracks_tick,
+    COALESCE(o.r_t1_towers, 0) AS radiant_t1_towers_tick,
+    COALESCE(o.d_t1_towers, 0) AS dire_t1_towers_tick,
+    COALESCE(o.r_t2_towers, 0) AS radiant_t2_towers_tick,
+    COALESCE(o.d_t2_towers, 0) AS dire_t2_towers_tick,
+    COALESCE(o.r_t3_towers, 0) AS radiant_t3_towers_tick,
+    COALESCE(o.d_t3_towers, 0) AS dire_t3_towers_tick,
+    COALESCE(o.r_t4_towers, 0) AS radiant_t4_towers_tick,
+    COALESCE(o.d_t4_towers, 0) AS dire_t4_towers_tick,
+    COALESCE(o.r_melee_rax, 0) AS radiant_melee_rax_tick,
+    COALESCE(o.d_melee_rax, 0) AS dire_melee_rax_tick,
+    COALESCE(o.r_range_rax, 0) AS radiant_range_rax_tick,
+    COALESCE(o.d_range_rax, 0) AS dire_range_rax_tick,
     COALESCE(o.r_rosh, 0) AS radiant_rosh_tick,
     COALESCE(o.d_rosh, 0) AS dire_rosh_tick,
     COALESCE(o.r_couriers_lost, 0) AS radiant_couriers_lost_tick,
@@ -226,8 +245,8 @@ def extract_dynamic_features(engine, patch_id: int, lookback: int = 2) -> pd.Dat
     df[cum_cols] = df.groupby("match_id")[tick_cols].cumsum()
 
     # --- Win Conditions: Mega Creeps ---
-    df["mega_creeps_radiant"] = (df["dire_barracks"] >= 6).astype(float)
-    df["mega_creeps_dire"] = (df["radiant_barracks"] >= 6).astype(float)
+    df["mega_creeps_radiant"] = ((df["dire_melee_rax"] + df["dire_range_rax"]) >= 6).astype(float)
+    df["mega_creeps_dire"] = ((df["radiant_melee_rax"] + df["radiant_range_rax"]) >= 6).astype(float)
 
     # --- Active Vulnerability: Dead Heroes Now ---
     # Death timers scale with game time:
@@ -262,8 +281,12 @@ def extract_dynamic_features(engine, patch_id: int, lookback: int = 2) -> pd.Dat
     df["courier_lost_diff"] = df["radiant_couriers_lost"] - df["dire_couriers_lost"]
 
     # --- Objectives Differentials ---
-    df["tower_diff"] = df["radiant_towers"] - df["dire_towers"]
-    df["barracks_diff"] = df["radiant_barracks"] - df["dire_barracks"]
+    df["t1_tower_diff"] = df["radiant_t1_towers"] - df["dire_t1_towers"]
+    df["t2_tower_diff"] = df["radiant_t2_towers"] - df["dire_t2_towers"]
+    df["t3_tower_diff"] = df["radiant_t3_towers"] - df["dire_t3_towers"]
+    df["t4_tower_diff"] = df["radiant_t4_towers"] - df["dire_t4_towers"]
+    df["melee_rax_diff"] = df["radiant_melee_rax"] - df["dire_melee_rax"]
+    df["range_rax_diff"] = df["radiant_range_rax"] - df["dire_range_rax"]
     df["roshan_diff"] = df["radiant_rosh"] - df["dire_rosh"]
     df["ward_diff"] = df["radiant_obs"] - df["dire_obs"]
     df["tf_diff"] = df["radiant_tf_wins"] - df["dire_tf_wins"]

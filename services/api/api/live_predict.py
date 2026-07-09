@@ -234,10 +234,8 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
             dire_kills += player.get("kills", 0)
 
     # Objectives
-    radiant_towers = 0
-    dire_towers = 0
-    radiant_barracks = 0
-    dire_barracks = 0
+    r_t1 = d_t1 = r_t2 = d_t2 = r_t3 = d_t3 = r_t4 = d_t4 = 0
+    r_melee = d_melee = r_range = d_range = 0
     radiant_rosh = 0
     dire_rosh = 0
     radiant_couriers_lost = 0
@@ -249,12 +247,30 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
             continue
         obj_type = obj.get("type", "")
         team = obj.get("team", -1)
+        key = str(obj.get("key", "") or "").lower()
+
         if obj_type == "tower_kill":
-            if team == 0: radiant_towers += 1
-            else: dire_towers += 1
+            is_rad = (team == 0)
+            if "tower1" in key:
+                if is_rad: r_t1 += 1
+                else: d_t1 += 1
+            elif "tower2" in key:
+                if is_rad: r_t2 += 1
+                else: d_t2 += 1
+            elif "tower3" in key:
+                if is_rad: r_t3 += 1
+                else: d_t3 += 1
+            elif "tower4" in key:
+                if is_rad: r_t4 += 1
+                else: d_t4 += 1
         elif obj_type == "barracks_kill":
-            if team == 0: radiant_barracks += 1
-            else: dire_barracks += 1
+            is_rad = (team == 0)
+            if "melee" in key:
+                if is_rad: r_melee += 1
+                else: d_melee += 1
+            elif "range" in key:
+                if is_rad: r_range += 1
+                else: d_range += 1
         elif obj_type == "roshan_kill":
             if team == 0: radiant_rosh += 1
             else: dire_rosh += 1
@@ -378,13 +394,18 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
     prev3_xp = radiant_xp_adv[current_minute - 3] if current_minute >= 3 and current_minute - 3 < len(radiant_xp_adv) else 0
 
     # Mega Creeps
-    mega_radiant = 1.0 if dire_barracks >= 6 else 0.0
-    mega_dire = 1.0 if radiant_barracks >= 6 else 0.0
+    mega_radiant = 1.0 if (d_melee + d_range) >= 6 else 0.0
+    mega_dire = 1.0 if (r_melee + r_range) >= 6 else 0.0
 
     return {
         "radiant_gold_adv": float(gold_adv),
         "radiant_xp_adv": float(xp_adv),
-        "tower_diff": float(radiant_towers - dire_towers),
+        "t1_tower_diff": float(r_t1 - d_t1),
+        "t2_tower_diff": float(r_t2 - d_t2),
+        "t3_tower_diff": float(r_t3 - d_t3),
+        "t4_tower_diff": float(r_t4 - d_t4),
+        "melee_rax_diff": float(r_melee - d_melee),
+        "range_rax_diff": float(r_range - d_range),
         "roshan_diff": float(radiant_rosh - dire_rosh),
         "ward_diff": float(radiant_obs - dire_obs),
         "tf_diff": float(radiant_tf_wins - dire_tf_wins),
@@ -405,7 +426,6 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
         "mega_creeps_dire": mega_dire,
         "courier_lost_diff": float(radiant_couriers_lost - dire_couriers_lost),
         "aegis_diff": float(radiant_aegis - dire_aegis),
-        "barracks_diff": float(radiant_barracks - dire_barracks),
         # --- NEW: Economy Distribution ---
         **_extract_economy_distribution(match_data, current_minute),
         # --- NEW: Laning Phase CS ---
