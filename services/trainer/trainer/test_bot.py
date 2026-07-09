@@ -71,6 +71,7 @@ def test_draft_state_builder(cache):
     assert feat.dtype == np.float32, f"Expected float32, got {feat.dtype}"
 
     # Check that baseline values are populated
+    bl = cache.get_baseline(hero_id)
     idx = builder.col_idx["bl_win_rate"]
     assert feat[idx] != 0.0 or bl["win_rate"] == 0.0, "Baseline win_rate not populated"
 

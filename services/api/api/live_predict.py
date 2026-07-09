@@ -270,7 +270,7 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
     radiant_tf_wins = 0
     dire_tf_wins = 0
     for tf in match_data.get("teamfights", []):
-        if tf.get("start_time", 0) > current_minute * 60:
+        if tf.get("start", 0) > current_minute * 60:
             continue
         players = tf.get("players", [])
         if isinstance(players, list):
