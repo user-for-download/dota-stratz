@@ -139,13 +139,21 @@ bbs AS (
 player_extras AS (
     SELECT p.match_id, p.player_slot,
            p.stuns, p.teamfight_participation, p.tower_damage, p.total_gold,
-           CASE WHEN p.permanent_buffs IS NOT NULL AND p.permanent_buffs::text != '[]' THEN
-               COALESCE((SELECT SUM((elem->>'stack_count')::int) FROM json_array_elements(p.permanent_buffs::json) elem), 0)
-           ELSE 0 END AS buff_stacks,
-           CASE WHEN p.neutral_item_history IS NOT NULL AND p.neutral_item_history::text != '[]' THEN
-               json_array_length(p.neutral_item_history::json)
-           ELSE 0 END AS neutrals
+           COALESCE(pb.buff_stacks, 0) AS buff_stacks,
+           COALESCE(ni.neutrals, 0) AS neutrals
     FROM players p
+    LEFT JOIN (
+        SELECT match_id, player_slot, SUM(stack_count) AS buff_stacks
+        FROM player_permanent_buffs
+        WHERE match_id IN (SELECT DISTINCT match_id FROM match_minutes)
+        GROUP BY match_id, player_slot
+    ) pb ON pb.match_id = p.match_id AND pb.player_slot = p.player_slot
+    LEFT JOIN (
+        SELECT match_id, player_slot, COUNT(*) AS neutrals
+        FROM player_neutral_item_history
+        WHERE match_id IN (SELECT DISTINCT match_id FROM match_minutes)
+        GROUP BY match_id, player_slot
+    ) ni ON ni.match_id = p.match_id AND ni.player_slot = p.player_slot
     WHERE p.match_id IN (SELECT DISTINCT match_id FROM match_minutes)
 ),
 team_extras AS (
