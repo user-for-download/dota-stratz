@@ -412,8 +412,8 @@ services:
         deploy:
             resources:
                 limits:
-                    memory: 2G
-                    cpus: "2"
+                    memory: 4G
+                    cpus: "4"
     frontend:
         profiles:
             - all

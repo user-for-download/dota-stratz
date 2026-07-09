@@ -150,7 +150,7 @@ def simulate_draft(team_a, team_b, first_pick_team):
                 "radiant_team_id": TEAMS_DB[rad_team_name],
                 "dire_team_id": TEAMS_DB[dire_team_name],
                 "num_recommendations": 10,
-                "run_mcts": is_pick,  # <--- THE FIX: MCTS on for picks to enforce roles, off for bans to save speed!
+                "run_mcts": False,  # MCTS too heavy for concurrent simulation — model scores sufficient
             })
             recs = result.get("recommendations", [])
         except Exception:
