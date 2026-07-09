@@ -217,7 +217,7 @@ def fetch_match_state(match_id: int) -> dict | None:
 
 
 def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str, float]:
-    """Compute 24 dynamic features capturing true game state from OpenDota data."""
+    """Compute 46 dynamic features capturing true game state from OpenDota data."""
     radiant_gold_adv = match_data.get("radiant_gold_adv", [])
     radiant_xp_adv = match_data.get("radiant_xp_adv", [])
 
@@ -426,18 +426,19 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
         "mega_creeps_dire": mega_dire,
         "courier_lost_diff": float(radiant_couriers_lost - dire_couriers_lost),
         "aegis_diff": float(radiant_aegis - dire_aegis),
-        # --- NEW: Economy Distribution ---
         **_extract_economy_distribution(match_data, current_minute),
-        # --- NEW: Laning Phase CS ---
         **_extract_cs_advantage(match_data, current_minute),
-        # --- NEW: Defensive & Utility Items ---
         **_extract_defensive_items(match_data, current_minute),
-        # --- NEW: Vision Denial ---
         **_extract_dewards(match_data),
-        # --- NEW: Rune Control ---
+        **_extract_deep_vision(match_data),
         **_extract_rune_control(match_data, current_minute),
-        # --- NEW: Teamfight Efficiency ---
         **_extract_teamfight_swing(match_data, current_minute),
+        **_extract_support_nw(match_data, current_minute),
+        **_extract_map_confinement(match_data),
+        **_extract_scaling_threats(match_data),
+        **_extract_cc_effectiveness(match_data),
+        **_extract_neutral_tier(match_data, current_minute),
+        **_extract_tower_damage(match_data),
     }
 
 
@@ -579,3 +580,145 @@ def _extract_teamfight_swing(match_data: dict, current_minute: int) -> dict:
         "tf_gold_swing_1m": tf_gold_swing,
         "tf_xp_swing_1m": tf_xp_swing,
     }
+
+
+def _extract_deep_vision(match_data: dict) -> dict:
+    """Deep Vision Advantage — wards placed past the river on enemy side."""
+    # Radiant deep ward = y > 96 (upper half, Dire territory)
+    # Dire deep ward = y < 96 (lower half, Radiant territory)
+    r_deep = 0
+    d_deep = 0
+    for player in match_data.get("players", []):
+        is_rad = player.get("player_slot", 0) < 128
+        for ward in player.get("obs_log", []):
+            y = ward.get("y", 0)
+            if is_rad and y > 96:
+                r_deep += 1
+            elif not is_rad and y < 96:
+                d_deep += 1
+    return {"deep_ward_diff": float(r_deep - d_deep)}
+
+
+def _extract_support_nw(match_data: dict, current_minute: int) -> dict:
+    """Support Net Worth Diff — bottom 2 net worths per team from gold_t."""
+    rad_golds = []
+    dire_golds = []
+    for player in match_data.get("players", []):
+        is_rad = player.get("player_slot", 0) < 128
+        gt = player.get("gold_t", [])
+        hero_gold = gt[current_minute] if current_minute < len(gt) else 0
+        if is_rad:
+            rad_golds.append(hero_gold)
+        else:
+            dire_golds.append(hero_gold)
+    rad_golds.sort()
+    dire_golds.sort()
+    # Bottom 2 = supports
+    rad_support = sum(rad_golds[:2]) if len(rad_golds) >= 2 else 0
+    dire_support = sum(dire_golds[:2]) if len(dire_golds) >= 2 else 0
+    return {"support_nw_diff": float(rad_support - dire_support)}
+
+
+def _extract_map_confinement(match_data: dict) -> dict:
+    """Map Confinement — where do teams die? Deaths in enemy territory = aggression."""
+    r_home = r_away = d_home = d_away = 0
+    for tf in match_data.get("teamfights", []):
+        players = tf.get("players", [])
+        if not isinstance(players, list):
+            continue
+        for pid, pdata in enumerate(players):
+            if not isinstance(pdata, dict):
+                continue
+            deaths_pos = pdata.get("deaths_pos", {})
+            is_rad = pid < 5
+            # deaths_pos is dict with string keys "0"-"9" mapping to {x,y}
+            for victim_id_str, pos in deaths_pos.items():
+                if not isinstance(pos, dict):
+                    continue
+                y = pos.get("y", 96)
+                if is_rad:
+                    if y < 96:
+                        r_home += 1  # Radiant died on their own side
+                    else:
+                        r_away += 1  # Radiant died in enemy territory (aggressive)
+                else:
+                    if y >= 96:
+                        d_home += 1  # Dire died on their own side
+                    else:
+                        d_away += 1  # Dire died in enemy territory
+    total_r = r_home + r_away
+    total_d = d_home + d_away
+    r_away_pct = r_away / total_r if total_r > 0 else 0.5
+    d_away_pct = d_away / total_d if total_d > 0 else 0.5
+    return {"map_confinement_diff": float(r_away_pct - d_away_pct)}
+
+
+def _extract_scaling_threats(match_data: dict) -> dict:
+    """Scaling Threats — permanent buff stacks (LC duel damage, Silencer int, etc.)."""
+    r_stacks = 0
+    d_stacks = 0
+    for player in match_data.get("players", []):
+        is_rad = player.get("player_slot", 0) < 128
+        for buff in player.get("permanent_buffs", []):
+            stack = buff.get("stack_count", 0)
+            if is_rad:
+                r_stacks += stack
+            else:
+                d_stacks += stack
+    return {"scaling_threat_diff": float(r_stacks - d_stacks)}
+
+
+def _extract_cc_effectiveness(match_data: dict) -> dict:
+    """CC Effectiveness — stun duration multiplied by teamfight participation."""
+    r_stuns = 0.0
+    d_stuns = 0.0
+    r_tf = 0.0
+    d_tf = 0.0
+    r_count = 0
+    d_count = 0
+    for player in match_data.get("players", []):
+        is_rad = player.get("player_slot", 0) < 128
+        stuns = player.get("stuns", 0) or 0
+        tfp = player.get("teamfight_participation", 0) or 0
+        if is_rad:
+            r_stuns += stuns
+            r_tf += tfp
+            r_count += 1
+        else:
+            d_stuns += stuns
+            d_tf += tfp
+            d_count += 1
+    r_avg_tfp = r_tf / r_count if r_count > 0 else 0.5
+    d_avg_tfp = d_tf / d_count if d_count > 0 else 0.5
+    r_cc = r_stuns * r_avg_tfp
+    d_cc = d_stuns * d_avg_tfp
+    return {"cc_effectiveness_diff": float(r_cc - d_cc)}
+
+
+def _extract_neutral_tier(match_data: dict, current_minute: int) -> dict:
+    """Neutral Item Tier Timing — who got their neutrals faster."""
+    r_neutrals = 0
+    d_neutrals = 0
+    for player in match_data.get("players", []):
+        is_rad = player.get("player_slot", 0) < 128
+        for nih in player.get("neutral_item_history", []):
+            if nih.get("time", 0) <= current_minute * 60:
+                if is_rad:
+                    r_neutrals += 1
+                else:
+                    d_neutrals += 1
+    return {"neutral_tier_diff": float(r_neutrals - d_neutrals)}
+
+
+def _extract_tower_damage(match_data: dict) -> dict:
+    """Tower Damage — cumulative building pressure."""
+    r_td = 0
+    d_td = 0
+    for player in match_data.get("players", []):
+        is_rad = player.get("player_slot", 0) < 128
+        td = player.get("tower_damage", 0) or 0
+        if is_rad:
+            r_td += td
+        else:
+            d_td += td
+    return {"tower_damage_diff": float(r_td - d_td)}
