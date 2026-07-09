@@ -241,28 +241,7 @@ player_agg AS (
 ),
 -- NEW: Map confinement — center of mass of team movements via lane_pos
 -- lane_pos is JSONB: {"x_str": {"y_str": count}} — sparse coordinate→time map
--- Radiant base ~ (60-80, 60-80), Dire base ~ (110-130, 110-130)
--- Confinement = distance of team's center of mass from enemy base
-lane_pos_agg AS (
-    SELECT p.match_id, 0 AS minute,
-           -- Radiant team center of mass (weighted average of positions)
-           SUM(CASE WHEN p.player_slot < 128 THEN
-               (elem.value::text::float) * (
-                   SELECT SUM(v::text::float) FROM jsonb_each_text(p.lane_pos AS outer_x(xk, xv),
-                       jsonb_each_text(xv, inner_x(yk, yv)))
-               ) ELSE 0 END) / NULLIF(SUM(CASE WHEN p.player_slot < 128 THEN 1 ELSE 0 END), 0) AS r_com_x,
-           SUM(CASE WHEN p.player_slot >= 128 THEN
-               (elem.value::text::float) * (
-                   SELECT SUM(v::text::float) FROM jsonb_each_text(p.lane_pos AS outer_x(xk, xv),
-                       jsonb_each_text(xv, inner_x(yk, yv)))
-               ) ELSE 0 END) / NULLIF(SUM(CASE WHEN p.player_slot >= 128 THEN 1 ELSE 0 END), 0) AS d_com_x
-    FROM players p,
-         jsonb_each_text(p.lane_pos) AS elem(xk, xv)
-    WHERE p.match_id IN (SELECT DISTINCT match_id FROM match_minutes)
-    GROUP BY p.match_id
-),
--- Simplified confinement: just track where Radiant players are (via their deaths_pos in teamfights)
--- This is a proxy for map control: if Radiant dies mostly in Dire territory, they're aggressive
+-- Map confinement via deaths_pos in teamfights (proxy for map control)
 tf_deaths AS (
     SELECT tp.match_id, 0 AS minute,
            -- Deaths on Radiant side (y < 96) by each team
