@@ -146,12 +146,9 @@ class BatchContext:
     current team_pick_ordinal. Falls back to ``(0.5, 0)`` per-hero."""
 
     hero_embs: dict[int, list[float]]
-    """hero_id → 32-D SVD embedding vector."""
-
     team_emb: list[float]
-    """16-D SVD embedding vector for the team."""
-
     player_emb: list[float]
+    hero_spatial_embs: dict[int, list[float]]
     """16-D SVD embedding vector for the player."""
 
 
@@ -198,7 +195,7 @@ def pre_fetch_batch(
         if hero_ids
         else {}
     )
-    he, te, pe = db_.fetch_embeddings(patch_id, hero_ids, team_id, account_id)
+    he, te, pe, hse = db_.fetch_embeddings(patch_id, hero_ids, team_id, account_id)
     return BatchContext(
         baselines=baselines,
         team_hero_agg=team_hero_agg,
@@ -210,6 +207,7 @@ def pre_fetch_batch(
         hero_embs=he,
         team_emb=te,
         player_emb=pe,
+        hero_spatial_embs=hse,
     )
 
 
@@ -386,6 +384,10 @@ def build_feature_vector(
         vec[f"team_emb_{i}"] = batch.team_emb[i]
     for i in range(16):
         vec[f"player_emb_{i}"] = batch.player_emb[i]
+
+    hse = batch.hero_spatial_embs.get(hero_id, [0.0] * 16)
+    for i in range(16):
+        vec[f"hero_spatial_emb_{i}"] = hse[i]
 
     # Build numeric array in the exact column order from the schema
     numeric_values = []

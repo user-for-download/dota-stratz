@@ -117,7 +117,8 @@ def training_features_sql_fast(extra: str = "") -> str:
         CASE WHEN COALESCE(bl.total_picks,0) > 0 THEN COALESCE(th.games,0)::FLOAT / bl.total_picks ELSE 0.0 END AS team_pick_propensity,
         {", ".join(f"COALESCE(he.emb_{i}, 0.0) AS hero_emb_{i}" for i in range(32))},
         {", ".join(f"COALESCE(te.emb_{i}, 0.0) AS team_emb_{i}" for i in range(16))},
-        {", ".join(f"COALESCE(pe.emb_{i}, 0.0) AS player_emb_{i}" for i in range(16))}
+        {", ".join(f"COALESCE(pe.emb_{i}, 0.0) AS player_emb_{i}" for i in range(16))},
+        {", ".join(f"COALESCE(hse.spatial_emb_{i}, 0.0) AS hero_spatial_emb_{i}" for i in range(16))}
     FROM draft_slots ds
     LEFT JOIN ml.team_hero_agg th ON th.patch_id = ds.patch_id
         AND th.team_id = CASE ds.team WHEN 0 THEN ds.radiant_team_id ELSE ds.dire_team_id END
@@ -154,6 +155,7 @@ def training_features_sql_fast(extra: str = "") -> str:
     LEFT JOIN ml.hero_embeddings he ON he.patch_id = ds.patch_id AND he.hero_id = ds.hero_id
     LEFT JOIN ml.team_embeddings te ON te.patch_id = ds.patch_id AND te.team_id = CASE ds.team WHEN 0 THEN ds.radiant_team_id ELSE ds.dire_team_id END
     LEFT JOIN ml.player_embeddings pe ON pe.patch_id = ds.patch_id AND pe.account_id = ds.account_id
+    LEFT JOIN ml.hero_spatial_embeddings hse ON hse.patch_id = ds.patch_id AND hse.hero_id = ds.hero_id
     ORDER BY ds.match_id, ds."order"
     """
 
@@ -329,7 +331,8 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
 
         {", ".join(f"COALESCE(he.emb_{i}, 0.0) AS hero_emb_{i}" for i in range(32))},
         {", ".join(f"COALESCE(te.emb_{i}, 0.0) AS team_emb_{i}" for i in range(16))},
-        {", ".join(f"COALESCE(pe.emb_{i}, 0.0) AS player_emb_{i}" for i in range(16))}
+        {", ".join(f"COALESCE(pe.emb_{i}, 0.0) AS player_emb_{i}" for i in range(16))},
+        {", ".join(f"COALESCE(hse.spatial_emb_{i}, 0.0) AS hero_spatial_emb_{i}" for i in range(16))}
 
     FROM draft_slots ds
 
@@ -523,6 +526,7 @@ def feature_column_names(include_onehot: bool = True, max_hero_id: int = 160, n_
         *[f"hero_emb_{i}" for i in range(32)],
         *[f"team_emb_{i}" for i in range(16)],
         *[f"player_emb_{i}" for i in range(16)],
+        *[f"hero_spatial_emb_{i}" for i in range(16)],
     ]
     if include_onehot:
         # hero_id as native categorical + 32-D semantic embeddings

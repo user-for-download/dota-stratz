@@ -236,4 +236,8 @@ class DraftStateBuilder:
         for i in range(16):
             feat[idx[f"player_emb_{i}"]] = pe[i]
 
+        hse = self.cache.hero_spatial_embeddings.get(hypothetical_hero_id, [0.0] * 16)
+        for i in range(16):
+            feat[idx[f"hero_spatial_emb_{i}"]] = hse[i]
+
         return feat

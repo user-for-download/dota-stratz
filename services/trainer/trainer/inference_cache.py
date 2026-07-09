@@ -177,11 +177,21 @@ class InferenceCache:
                 self.engine, params={"pid": self.patch_id},
             )
             self.player_embeddings = {int(row["account_id"]): row[t_cols].tolist() for _, row in df_pe.iterrows()}
-            logger.info("  embeddings: %d heroes, %d teams, %d players",
-                        len(self.hero_embeddings), len(self.team_embeddings), len(self.player_embeddings))
+
+            s_cols = [f"spatial_emb_{i}" for i in range(16)]
+            df_hse = pd.read_sql(
+                "SELECT hero_id, {} FROM ml.hero_spatial_embeddings WHERE patch_id = %(pid)s".format(", ".join(s_cols)),
+                self.engine, params={"pid": self.patch_id},
+            )
+            self.hero_spatial_embeddings = {int(row["hero_id"]): row[s_cols].tolist() for _, row in df_hse.iterrows()}
+
+            logger.info("  embeddings: %d heroes, %d spatial, %d teams, %d players",
+                        len(self.hero_embeddings), len(self.hero_spatial_embeddings),
+                        len(self.team_embeddings), len(self.player_embeddings))
         except Exception as e:
             logger.warning("  Could not load SVD embeddings: %s", e)
             self.hero_embeddings = {}
+            self.hero_spatial_embeddings = {}
             self.team_embeddings = {}
             self.player_embeddings = {}
 

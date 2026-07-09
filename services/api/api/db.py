@@ -549,9 +549,10 @@ def fetch_pick_ban_hero_ids(
 
 def fetch_embeddings(
     patch_id: int, hero_ids: list[int], team_id: int | None, account_id: int | None
-) -> tuple[dict[int, list[float]], list[float], list[float]]:
-    """Fetch SVD semantic embeddings for heroes, team, and player."""
+) -> tuple[dict[int, list[float]], list[float], list[float], dict[int, list[float]]]:
+    """Fetch SVD semantic embeddings for heroes, team, player, and hero spatial."""
     hero_embs = {h: [0.0] * 32 for h in hero_ids}
+    hero_spatial_embs = {h: [0.0] * 16 for h in hero_ids}
     team_emb = [0.0] * 16
     player_emb = [0.0] * 16
 
@@ -566,6 +567,14 @@ def fetch_embeddings(
                 )
                 for row in cur.fetchall():
                     hero_embs[row[0]] = list(row[1:])
+
+                s_cols = ", ".join(f"spatial_emb_{i}" for i in range(16))
+                cur.execute(
+                    f"SELECT hero_id, {s_cols} FROM ml.hero_spatial_embeddings WHERE patch_id = %s AND hero_id = ANY(%s)",
+                    (patch_id, hero_ids),
+                )
+                for row in cur.fetchall():
+                    hero_spatial_embs[row[0]] = list(row[1:])
 
             if team_id:
                 t_cols = ", ".join(f"emb_{i}" for i in range(16))
@@ -587,9 +596,9 @@ def fetch_embeddings(
                 if row:
                     player_emb = list(row)
 
-        return hero_embs, team_emb, player_emb
+        return hero_embs, team_emb, player_emb, hero_spatial_embs
     except Exception as e:
         logger.warning("Could not fetch embeddings: %s", e)
-        return hero_embs, team_emb, player_emb
+        return hero_embs, team_emb, player_emb, hero_spatial_embs
     finally:
         put_conn(conn)
