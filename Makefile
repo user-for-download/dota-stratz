@@ -390,11 +390,11 @@ train: ## Train PyTorch DraftBERT model: make train PATCH=<id> (default: auto-de
 
 .PHONY: train-live
 train-live: ## Train LiveDraftBERT for live match prediction: make train-live PATCH=<id>
-	$(COMPOSE) --profile db --profile train run --rm trainer $(if $(PATCH),--patch $(PATCH),) --live
+	$(COMPOSE) --profile db --profile train run --rm --entrypoint python trainer -m trainer.main $(if $(PATCH),--patch $(PATCH),) --live
 
 .PHONY: train-agg-only
 train-agg-only: ## Populate aggregate tables only: make train-agg-only PATCH=<id>
-	$(COMPOSE) --profile db --profile train run --rm trainer $(if $(PATCH),--patch $(PATCH),) --agg-only
+	$(COMPOSE) --profile db --profile train run --rm --entrypoint python trainer -m trainer.main $(if $(PATCH),--patch $(PATCH),) --agg-only
 
 .PHONY: up-api
 up-api: ## Start ML inference API (foreground)
