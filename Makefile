@@ -190,6 +190,12 @@ train-agg-only: ## Populate aggregates + embeddings: make train-agg-only PATCH=<
 		--entrypoint python trainer -m trainer.main \
 		$(if $(PATCH),--patch $(PATCH),) --agg-only
 
+.PHONY: train-live-agg-only
+train-live-agg-only: ## Populate aggregates + embeddings for LiveDraftBERT
+	$(COMPOSE) --profile db --profile train run --rm \
+		--entrypoint python trainer -m trainer.main \
+		$(if $(PATCH),--patch $(PATCH),) --agg-only --live
+
 .PHONY: lr-find
 lr-find: ## Run LR Range Test: make lr-find PATCH=<id> [--live]
 	$(COMPOSE) --profile db --profile train run --rm \
