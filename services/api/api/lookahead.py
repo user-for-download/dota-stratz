@@ -149,26 +149,46 @@ def run_monte_carlo_rollouts(
         wc = worst_case_scores[cid]
         worst_case_win_rate = min(wc) if wc else mc_avg
 
-        # --- MACRO COMPOSITION PENALTY (FARM STARVATION) ---
+        # --- MACRO COMPOSITION PENALTY (ROLES & FARM STARVATION) ---
         is_rad = ctx.recommending_team == 0
         ally_picks = ctx.radiant_picks if is_rad else ctx.dire_picks
 
-        cand_gpm = batch_data.baselines.get(cid, {}).get("avg_gpm", 450)
-        ally_gpm = sum(taken_baselines.get(h, {}).get("avg_gpm", 450) for h in ally_picks)
-        current_total_gpm = ally_gpm + cand_gpm
+        def _get_gpm(h_id):
+            row = batch_data.baselines.get(h_id) or taken_baselines.get(h_id) or {}
+            val = row.get("avg_gpm", 440.0)
+            return float(val) if val is not None else 440.0
 
+        cand_gpm = _get_gpm(cid)
+        ally_gpms = [_get_gpm(h) for h in ally_picks]
+
+        current_cores = sum(1 for g in ally_gpms if g > 440.0)
+        current_supps = sum(1 for g in ally_gpms if g <= 440.0)
+
+        is_core = cand_gpm > 440.0
+        is_supp = cand_gpm <= 440.0
+
+        current_total_gpm = sum(ally_gpms) + cand_gpm
         remaining_slots = max(0, 4 - len(ally_picks))
-        projected_gpm = current_total_gpm + (420 * remaining_slots)
+        projected_gpm = current_total_gpm + (430.0 * remaining_slots)
 
         comp_penalty = 0.0
         comp_reason = None
 
-        if projected_gpm > 2750:
-            comp_penalty = 0.15 + ((projected_gpm - 2750) / 1000)
-            comp_reason = "Farm Starved (Too Many Cores)"
-        elif projected_gpm < 1950:
-            comp_penalty = 0.15 + ((1950 - projected_gpm) / 1000)
-            comp_reason = "No Scaling (Too Many Supports)"
+        # Hard Role Limits (Extreme Penalty to completely forbid)
+        if is_core and current_cores >= 3:
+            comp_penalty += 0.80
+            comp_reason = "Draft Invalid: Too Many Cores (>3)"
+        elif is_supp and current_supps >= 2:
+            comp_penalty += 0.80
+            comp_reason = "Draft Invalid: Too Many Supports (>2)"
+
+        # Overall Farm Budget (Soft Penalty)
+        if projected_gpm > 2450.0:
+            comp_penalty += 0.10 + ((projected_gpm - 2450.0) / 500.0)
+            if not comp_reason: comp_reason = "Farm Starved"
+        elif projected_gpm < 2000.0:
+            comp_penalty += 0.10 + ((2000.0 - projected_gpm) / 500.0)
+            if not comp_reason: comp_reason = "No Scaling"
 
         # 40% Base + 40% Average Rollouts + 20% Worst-Case Paranoia
         blended = (cand["score"] * 0.40) + (mc_avg * 0.40) + (worst_case_win_rate * 0.20)
