@@ -121,17 +121,31 @@ def run_interactive(patch_id, use_mcts, iterations):
 
         # Get suggestion
         try:
-            from trainer.bot_greedy import GreedyDraftBot
-            bot = GreedyDraftBot(model, builder)
-            suggestions = bot.suggest_next_action(
-                current_heroes=[h for h, _, _ in draft_history],
-                current_actions=[a for _, a, _ in draft_history],
-                is_radiant_turn=(side == 0),
-                is_pick=(action_type == "pick"),
-                radiant_picks=[h for h, a, s in draft_history if a == "pick" and s == 0],
-                dire_picks=[h for h, a, s in draft_history if a == "pick" and s == 1],
-                top_k=5,
-            )
+            if use_mcts:
+                from trainer.bot_mcts import MCTSDraftBot
+                bot = MCTSDraftBot(model, builder, max_seq_len=cfg.max_seq_len)
+                suggestions = bot.get_top_k(
+                    current_heroes=[h for h, _, _ in draft_history],
+                    current_actions=[a for _, a, _ in draft_history],
+                    is_radiant_turn=(side == 0),
+                    is_pick=(action_type == "pick"),
+                    radiant_picks=[h for h, a, s in draft_history if a == "pick" and s == 0],
+                    dire_picks=[h for h, a, s in draft_history if a == "pick" and s == 1],
+                    k=5,
+                    iterations=iterations,
+                )
+            else:
+                from trainer.bot_greedy import GreedyDraftBot
+                bot = GreedyDraftBot(model, builder)
+                suggestions = bot.suggest_next_action(
+                    current_heroes=[h for h, _, _ in draft_history],
+                    current_actions=[a for _, a, _ in draft_history],
+                    is_radiant_turn=(side == 0),
+                    is_pick=(action_type == "pick"),
+                    radiant_picks=[h for h, a, s in draft_history if a == "pick" and s == 0],
+                    dire_picks=[h for h, a, s in draft_history if a == "pick" and s == 1],
+                    top_k=5,
+                )
             print("Suggested:", ", ".join(f"{hero_name(s['hero_id'])} ({s['win_probability']*100:.1f}%)" for s in suggestions[:5]))
         except Exception as e:
             logger.warning("Suggestion failed: %s", e)

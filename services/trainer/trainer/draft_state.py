@@ -209,4 +209,11 @@ class DraftStateBuilder:
             feat[idx["hds_win_rate"]] = 0.5
             feat[idx["hds_games"]] = 0
 
+        # --- 9. Macro Composition & Pick Propensity ---
+        feat[idx["team_gpm_budget"]] = bl.get("avg_gpm", 0.0)
+        feat[idx["team_xpm_budget"]] = bl.get("avg_xpm", 0.0)
+        bl_picks = bl.get("total_picks", 0)
+        th_games = th.get("games", 0) if team_id else 0
+        feat[idx["team_pick_propensity"]] = th_games / bl_picks if bl_picks > 0 else 0.0
+
         return feat

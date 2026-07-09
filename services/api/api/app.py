@@ -305,10 +305,9 @@ def live_predict(req: LivePredictRequest, request: Request):
         actions = [pb["team"] * 1 + (1 if pb.get("is_pick", True) else 0) * 2 + 1 for pb in picks_bans]
 
     # Static features: dynamically sized based on loaded model schema
+    patch_id = match_data.get("patch", 60)
     n_static = live_pred._schemas.get(patch_id, {}).get("n_static_features", 61)
     static_feats = [0.0] * n_static
-
-    patch_id = match_data.get("patch", 60)
 
     try:
         result = live_pred.predict(
