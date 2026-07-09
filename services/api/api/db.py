@@ -545,3 +545,51 @@ def fetch_pick_ban_hero_ids(
             return [r[0] for r in cur.fetchall()]
     finally:
         put_conn(conn)
+
+
+def fetch_embeddings(
+    patch_id: int, hero_ids: list[int], team_id: int | None, account_id: int | None
+) -> tuple[dict[int, list[float]], list[float], list[float]]:
+    """Fetch SVD semantic embeddings for heroes, team, and player."""
+    hero_embs = {h: [0.0] * 32 for h in hero_ids}
+    team_emb = [0.0] * 16
+    player_emb = [0.0] * 16
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            if hero_ids:
+                h_cols = ", ".join(f"emb_{i}" for i in range(32))
+                cur.execute(
+                    f"SELECT hero_id, {h_cols} FROM ml.hero_embeddings WHERE patch_id = %s AND hero_id = ANY(%s)",
+                    (patch_id, hero_ids),
+                )
+                for row in cur.fetchall():
+                    hero_embs[row[0]] = list(row[1:])
+
+            if team_id:
+                t_cols = ", ".join(f"emb_{i}" for i in range(16))
+                cur.execute(
+                    f"SELECT {t_cols} FROM ml.team_embeddings WHERE patch_id = %s AND team_id = %s",
+                    (patch_id, team_id),
+                )
+                row = cur.fetchone()
+                if row:
+                    team_emb = list(row)
+
+            if account_id:
+                p_cols = ", ".join(f"emb_{i}" for i in range(16))
+                cur.execute(
+                    f"SELECT {p_cols} FROM ml.player_embeddings WHERE patch_id = %s AND account_id = %s",
+                    (patch_id, account_id),
+                )
+                row = cur.fetchone()
+                if row:
+                    player_emb = list(row)
+
+        return hero_embs, team_emb, player_emb
+    except Exception as e:
+        logger.warning("Could not fetch embeddings: %s", e)
+        return hero_embs, team_emb, player_emb
+    finally:
+        put_conn(conn)

@@ -158,6 +158,33 @@ class InferenceCache:
         }
         logger.info("  draft_slot: %d combos", len(self.draft_slot))
 
+        # 8. SVD Embeddings
+        try:
+            h_cols = [f"emb_{i}" for i in range(32)]
+            t_cols = [f"emb_{i}" for i in range(16)]
+            df_he = pd.read_sql(
+                "SELECT hero_id, {} FROM ml.hero_embeddings WHERE patch_id = %(pid)s".format(", ".join(h_cols)),
+                self.engine, params={"pid": self.patch_id},
+            )
+            self.hero_embeddings = {int(row["hero_id"]): row[h_cols].tolist() for _, row in df_he.iterrows()}
+            df_te = pd.read_sql(
+                "SELECT team_id, {} FROM ml.team_embeddings WHERE patch_id = %(pid)s".format(", ".join(t_cols)),
+                self.engine, params={"pid": self.patch_id},
+            )
+            self.team_embeddings = {int(row["team_id"]): row[t_cols].tolist() for _, row in df_te.iterrows()}
+            df_pe = pd.read_sql(
+                "SELECT account_id, {} FROM ml.player_embeddings WHERE patch_id = %(pid)s".format(", ".join(t_cols)),
+                self.engine, params={"pid": self.patch_id},
+            )
+            self.player_embeddings = {int(row["account_id"]): row[t_cols].tolist() for _, row in df_pe.iterrows()}
+            logger.info("  embeddings: %d heroes, %d teams, %d players",
+                        len(self.hero_embeddings), len(self.team_embeddings), len(self.player_embeddings))
+        except Exception as e:
+            logger.warning("  Could not load SVD embeddings: %s", e)
+            self.hero_embeddings = {}
+            self.team_embeddings = {}
+            self.player_embeddings = {}
+
         # Build valid hero list
         self.valid_hero_ids = sorted([
             h for h, bl in self.baseline.items()

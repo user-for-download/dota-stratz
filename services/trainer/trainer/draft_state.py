@@ -223,4 +223,17 @@ class DraftStateBuilder:
         th_games = th.get("games", 0) if team_id else 0
         feat[idx["team_pick_propensity"]] = th_games / bl_picks if bl_picks > 0 else 0.0
 
+        # --- 10. Semantic Embeddings (SVD) ---
+        he = self.cache.hero_embeddings.get(hypothetical_hero_id, [0.0] * 32)
+        for i in range(32):
+            feat[idx[f"hero_emb_{i}"]] = he[i]
+
+        te = self.cache.team_embeddings.get(team_id, [0.0] * 16) if team_id else [0.0] * 16
+        for i in range(16):
+            feat[idx[f"team_emb_{i}"]] = te[i]
+
+        pe = self.cache.player_embeddings.get(account_id, [0.0] * 16) if account_id else [0.0] * 16
+        for i in range(16):
+            feat[idx[f"player_emb_{i}"]] = pe[i]
+
         return feat

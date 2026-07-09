@@ -145,6 +145,15 @@ class BatchContext:
     """hero_id → (hds_win_rate, hds_games) — pick-position win rate for the
     current team_pick_ordinal. Falls back to ``(0.5, 0)`` per-hero."""
 
+    hero_embs: dict[int, list[float]]
+    """hero_id → 32-D SVD embedding vector."""
+
+    team_emb: list[float]
+    """16-D SVD embedding vector for the team."""
+
+    player_emb: list[float]
+    """16-D SVD embedding vector for the player."""
+
 
 def pre_fetch_batch(
     patch_id: int,
@@ -189,6 +198,7 @@ def pre_fetch_batch(
         if hero_ids
         else {}
     )
+    he, te, pe = db_.fetch_embeddings(patch_id, hero_ids, team_id, account_id)
     return BatchContext(
         baselines=baselines,
         team_hero_agg=team_hero_agg,
@@ -197,6 +207,9 @@ def pre_fetch_batch(
         counter=counter,
         h2h_row=h2h_row,
         hero_draft_slot=hero_draft_slot,
+        hero_embs=he,
+        team_emb=te,
+        player_emb=pe,
     )
 
 
@@ -364,6 +377,15 @@ def build_feature_vector(
     th_games_val = vec.get("th_games", 0.0)
     bl_total_picks = vec.get("bl_total_picks", 1.0)
     vec["team_pick_propensity"] = th_games_val / max(bl_total_picks, 1.0)
+
+    # -- Task 9: Semantic SVD Embeddings --
+    he = batch.hero_embs.get(hero_id, [0.0] * 32)
+    for i in range(32):
+        vec[f"hero_emb_{i}"] = he[i]
+    for i in range(16):
+        vec[f"team_emb_{i}"] = batch.team_emb[i]
+    for i in range(16):
+        vec[f"player_emb_{i}"] = batch.player_emb[i]
 
     # Build numeric array in the exact column order from the schema
     numeric_values = []

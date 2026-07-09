@@ -122,6 +122,11 @@ def main(argv: list[str] | None = None) -> int:
         else:
             logger.info("Step 1 Skipped (--skip-agg provided). Using existing database aggregates.")
 
+        # Step 1.5: Generate SVD Semantic Embeddings
+        logger.info("Step 1.5: Generating SVD Semantic Embeddings...")
+        from .embeddings import populate_embeddings
+        populate_embeddings(cfg, eng)
+
         # Step 2: Train model
         if args.lr_find:
             logger.info("Step 2: Running Learning Rate Range Test ...")
