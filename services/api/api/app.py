@@ -369,9 +369,8 @@ def get_prediction_timeline(match_id: int, request: Request):
             timeline.append({
                 "minute": minute,
                 "radiant_win_probability": pred["radiant_win_probability"],
-                "radiant_gold_adv": features.get("radiant_gold_adv", 0),
-                "radiant_xp_adv": features.get("radiant_xp_adv", 0),
                 "tower_diff": sum(features.get(f"t{i}_tower_diff", 0) for i in range(1, 5)),
+                **features,
             })
         except Exception:
             continue
@@ -702,10 +701,8 @@ async def ws_live(websocket: WebSocket):
                         "is_live": is_live,
                         **pred,
                         "features": {
-                            "radiant_gold_adv": features.get("radiant_gold_adv", 0),
-                            "radiant_xp_adv": features.get("radiant_xp_adv", 0),
+                            **features,
                             "tower_diff": sum(features.get(f"t{i}_tower_diff", 0) for i in range(1, 5)),
-                            "tf_diff": features.get("tf_diff", 0),
                         },
                     })
 
