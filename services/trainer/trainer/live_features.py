@@ -271,7 +271,7 @@ def extract_dynamic_features(engine, patch_id: int, lookback: int = 2) -> pd.Dat
     df["roshan_diff"] = df["radiant_rosh"] - df["dire_rosh"]
     df["ward_diff"] = df["radiant_obs"] - df["dire_obs"]
     df["deep_ward_diff"] = df["radiant_deep"] - df["dire_deep"]
-    df["tf_diff"] = df["radiant_tf_wins"] - df["dire_tf_wins"]
+    df["tf_diff"] = df["radiant_tf"] - df["dire_tf"]
 
     # Momentum
     for col in ["radiant_gold_adv", "radiant_xp_adv"]:
