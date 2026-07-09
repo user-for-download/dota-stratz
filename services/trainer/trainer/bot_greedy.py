@@ -42,7 +42,7 @@ class GreedyDraftBot:
         model: torch.jit.ScriptModule | torch.nn.Module,
         state_builder: DraftStateBuilder,
         max_hero_id: int = 160,
-        max_seq_len: int = 50,
+        max_seq_len: int = 25,
         device: str = "cpu",
     ):
         self.model = model

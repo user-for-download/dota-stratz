@@ -38,7 +38,7 @@ class TestChronologicalSplit:
         16 train matches (oldest) + 4 val matches (newest)."""
         with mock.patch("pandas.read_sql", return_value=synthetic_match_df):
             train_ds, val_ds, metadata = load_sequence_dataset(
-                trainer_config, mock_engine, max_len=50,
+                trainer_config, mock_engine, max_len=25,
             )
 
         n_val_matches = metadata["n_val_matches"]
@@ -55,7 +55,7 @@ class TestChronologicalSplit:
         """Train and val are pre-tensorized DraftSequenceDataset instances."""
         with mock.patch("pandas.read_sql", return_value=synthetic_match_df):
             train_ds, val_ds, metadata = load_sequence_dataset(
-                trainer_config, mock_engine, max_len=50,
+                trainer_config, mock_engine, max_len=25,
             )
 
         assert isinstance(train_ds, DraftSequenceDataset)
@@ -67,12 +67,12 @@ class TestChronologicalSplit:
         """Each sample returns (heroes, actions, tabular, label) tensors."""
         with mock.patch("pandas.read_sql", return_value=synthetic_match_df):
             train_ds, val_ds, _ = load_sequence_dataset(
-                trainer_config, mock_engine, max_len=50,
+                trainer_config, mock_engine, max_len=25,
             )
 
         h, a, t, l = train_ds[0]
-        assert h.shape == (50,), f"heroes shape: {h.shape}"
-        assert a.shape == (50,), f"actions shape: {a.shape}"
+        assert h.shape == (25,), f"heroes shape: {h.shape}"
+        assert a.shape == (25,), f"actions shape: {a.shape}"
         assert t.dtype == torch.float32
         assert l.dtype == torch.float32
 
@@ -83,7 +83,7 @@ class TestChronologicalSplit:
         not len(train_ds) complement."""
         with mock.patch("pandas.read_sql", return_value=synthetic_match_df):
             train_ds, val_ds, metadata = load_sequence_dataset(
-                trainer_config, mock_engine, max_len=50,
+                trainer_config, mock_engine, max_len=25,
             )
 
         assert metadata["n_val_sequences"] == len(val_ds)

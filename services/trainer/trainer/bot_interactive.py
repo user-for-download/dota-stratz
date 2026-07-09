@@ -14,35 +14,24 @@ import torch
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-HERO_NAMES = {
-    1:"Anti-Mage",2:"Axe",3:"Bane",4:"Bloodseeker",5:"Crystal Maiden",
-    6:"Drow Ranger",7:"Earthshaker",8:"Juggernaut",9:"Mirana",10:"Morphling",
-    11:"Shadow Fiend",12:"Phantom Lancer",13:"Puck",14:"Storm Spirit",
-    15:"Sven",16:"Tiny",17:"Tinker",18:"Zeus",19:"Slardar",20:"Sniper",
-    21:"Necrophos",22:"Warlock",23:"Faceless Void",25:"Shadow Shaman",
-    26:"Venomancer",27:"Viper",28:"Spirit Breaker",29:"Weaver",30:"Nature's Prophet",
-    31:"Lifestealer",32:"Dark Seer",33:"Clinkz",34:"Omniknight",
-    35:"Enchantress",36:"Shadow Demon",37:"Dazzle",38:"Death Prophet",
-    39:"Razor",40:"Sand King",41:"Windranger",42:"Phantom Assassin",
-    43:"Outworld Destroyer",44:"Lich",45:"Lion",46:"Brewmaster",
-    48:"Ursa",49:"Gyrocopter",50:"Alchemist",
-    51:"Invoker",52:"Silencer",54:"Lycan",
-    56:"Dragon Knight",57:"Jakiro",58:"Batrider",
-    59:"Chaos Knight",60:"Rubick",61:"Keeper of the Light",62:"Wisp",
-    63:"Broodmother",64:"Queen of Pain",65:"Nyx Assassin",
-    67:"Io",68:"Centaur Warrunner",69:"Visage",70:"Oracle",
-    71:"Earth Spirit",72:"Terrorblade",73:"Phoenix",74:"Tusk",
-    75:"Skywrath Mage",76:"Abaddon",77:"Elder Titan",78:"Legion Commander",
-    79:"Ember Spirit",81:"Techies",83:"Underlord",85:"Grimstroke",
-    86:"Mars",87:"Hoodwink",88:"Void Spirit",89:"Snapfire",
-    91:"Dawnbreaker",92:"Marci",93:"Primal Beast",94:"Pangolier",
-    97:"Ringmaster",98:"Kez",99:"Beastmaster",
-    106:"Doom",110:"Ancient Apparition",
-    113:"Templar Assassin",114:"Naga Siren",119:"Dark Willow",
-    121:"Grimstroke",123:"Hoodwink",126:"Void Spirit",
-    128:"Primal Beast",129:"Marci",131:"Dawnbreaker",135:"Muerta",
-    136:"Ringmaster",137:"Kez",138:"Lion",145:"Enchantress",155:"Lich",
-}
+# Hero names are loaded from the DB's const_hero table at startup (see
+# _load_hero_names / run_interactive) instead of being hardcoded here — the
+# previous hardcoded dict had numeric hero IDs mapped to the wrong names
+# (e.g. multiple distinct real hero IDs mistakenly sharing one name), and a
+# static dict just goes stale every time new heroes ship. Falls back to
+# "Hero {id}" if the DB isn't reachable yet (see hero_name()).
+HERO_NAMES: dict[int, str] = {}
+
+
+def _load_hero_names(engine) -> None:
+    """Populate the module-level HERO_NAMES cache from const_hero."""
+    from trainer.db import load_heroes
+    conn = engine.raw_connection()
+    try:
+        HERO_NAMES.clear()
+        HERO_NAMES.update(load_heroes(conn))
+    finally:
+        conn.close()
 
 CM_FORMAT = [
     ("ban", 0), ("ban", 0), ("ban", 1), ("ban", 1), ("ban", 0), ("ban", 1), ("ban", 1),
@@ -68,6 +57,7 @@ def run_interactive(patch_id, use_mcts, iterations):
     cfg.patch_id = patch_id
     engine = make_engine(cfg)
 
+    _load_hero_names(engine)
     logger.info("Loading inference cache for patch %d...", patch_id)
     cache = InferenceCache(engine, patch_id)
     builder = DraftStateBuilder(cache)

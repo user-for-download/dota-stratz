@@ -113,7 +113,7 @@ class MCTSDraftBot:
         model: torch.jit.ScriptModule | torch.nn.Module,
         state_builder: DraftStateBuilder,
         draft_format: list[tuple[bool, bool]] | None = None,
-        max_seq_len: int = 50,
+        max_seq_len: int = 25,
         device: str = "cpu",
     ):
         self.model = model

@@ -94,10 +94,10 @@ def training_features_sql_fast(extra: str = "") -> str:
         COALESCE(ph.avg_camps_stacked,0) AS ph_avg_camps_stacked,
         COALESCE(ph.avg_vision_placed,0) AS ph_avg_vision_placed,
         COALESCE(ph.avg_gold_10,0) AS ph_avg_gold_10, COALESCE(ph.avg_xp_10,0) AS ph_avg_xp_10,
-        -- Synergy/counter: use hero-level baseline stats (fast SQL can't do per-draft-step joins)
-        COALESCE(bl.win_rate, 0.5) AS sy_avg_win_rate, 0 AS sy_n_teammates,
-        COALESCE(bl.win_rate, 0.5) AS co_avg_win_rate, 0 AS co_n_enemies,
-        0.0 AS co_avg_kd_diff,
+        -- Synergy/counter: real pairwise stats vs already-picked allies/enemies (LATERAL, still index-only)
+        COALESCE(sy.win_rate, 0.5) AS sy_avg_win_rate, COALESCE(sy.n_teammates, 0) AS sy_n_teammates,
+        COALESCE(co.win_rate, 0.5) AS co_avg_win_rate, COALESCE(co.n_enemies, 0) AS co_n_enemies,
+        COALESCE(co.avg_kd_diff, 0.0) AS co_avg_kd_diff,
         COALESCE(h2h.win_rate,0.5) AS h2h_win_rate, COALESCE(h2h.games,0) AS h2h_games,
         COALESCE(bl.total_picks,0) AS bl_total_picks, COALESCE(bl.total_wins,0) AS bl_total_wins,
         COALESCE(bl.total_bans,0) AS bl_total_bans, COALESCE(bl.win_rate,0.5) AS bl_win_rate,
@@ -121,8 +121,27 @@ def training_features_sql_fast(extra: str = "") -> str:
         AND th.hero_id = ds.hero_id
     LEFT JOIN ml.player_hero_agg ph ON ph.patch_id = ds.patch_id
         AND ph.account_id = ds.account_id AND ph.hero_id = ds.hero_id
-    -- Synergy/counter: REMOVED from fast SQL (joins were hero vs itself, always defaulting)
-    -- These features come from hero baseline stats instead; Transformer learns synergy from sequence
+    LEFT JOIN LATERAL (
+        SELECT COALESCE(AVG(sy_agg.win_rate), 0.5) AS win_rate, COUNT(*)::INT AS n_teammates
+        FROM picks_bans pb2
+        LEFT JOIN ml.hero_synergy_agg sy_agg
+            ON sy_agg.patch_id = ds.patch_id
+           AND sy_agg.hero_a = LEAST(ds.hero_id, pb2.hero_id)
+           AND sy_agg.hero_b = GREATEST(ds.hero_id, pb2.hero_id)
+        WHERE pb2.match_id = ds.match_id AND pb2."order" < ds."order"
+          AND pb2.is_pick = TRUE AND pb2.team = ds.team AND pb2.hero_id != ds.hero_id
+    ) sy ON TRUE
+    LEFT JOIN LATERAL (
+        SELECT COALESCE(AVG(co_agg.win_rate), 0.5) AS win_rate,
+               COALESCE(AVG(co_agg.avg_kd_diff), 0.0) AS avg_kd_diff,
+               COUNT(*)::INT AS n_enemies
+        FROM picks_bans pb2
+        LEFT JOIN ml.hero_counter_agg co_agg
+            ON co_agg.patch_id = ds.patch_id
+           AND co_agg.hero_id = ds.hero_id AND co_agg.enemy_hero_id = pb2.hero_id
+        WHERE pb2.match_id = ds.match_id AND pb2."order" < ds."order"
+          AND pb2.is_pick = TRUE AND pb2.team != ds.team
+    ) co ON TRUE
     LEFT JOIN ml.team_h2h_agg h2h ON h2h.patch_id = ds.patch_id
         AND h2h.team_id = CASE ds.team WHEN 0 THEN ds.radiant_team_id ELSE ds.dire_team_id END
         AND h2h.enemy_team_id = CASE ds.team WHEN 0 THEN ds.dire_team_id ELSE ds.radiant_team_id END
@@ -517,7 +536,7 @@ def make_target(df: pd.DataFrame) -> np.ndarray:
     return (df["radiant_win"] == (df["team"] == 0)).astype(int).values
 
 
-def write_schema(model_dir: str | Path, patch_id: int, max_hero_id: int = 160, n_embeddings: int = 32, max_seq_len: int = 50, drift_stats: dict | None = None) -> None:
+def write_schema(model_dir: str | Path, patch_id: int, max_hero_id: int = 160, n_embeddings: int = 32, max_seq_len: int = 25, drift_stats: dict | None = None) -> None:
     """Write ``feature_schema_patch_{patch_id}.json`` — the authoritative
     column-order contract for a specific patch.
 

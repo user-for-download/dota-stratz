@@ -18,6 +18,38 @@ from .features import write_schema
 from .live_features import DYNAMIC_FEATURE_COLUMNS
 from .model_live import LiveDraftBERT
 
+
+def _roc_auc(labels: torch.Tensor, probs: torch.Tensor) -> float:
+    """Rank-based ROC-AUC (Mann-Whitney U), no sklearn dependency.
+
+    Returns 0.5 (uninformative) if only one class is present in the batch.
+    """
+    labels = labels.view(-1)
+    probs = probs.view(-1)
+    n_pos = int(labels.sum().item())
+    n_neg = int(len(labels) - n_pos)
+    if n_pos == 0 or n_neg == 0:
+        return 0.5
+    order = torch.argsort(probs)
+    ranks = torch.empty_like(order, dtype=torch.float64)
+    ranks[order] = torch.arange(1, len(probs) + 1, dtype=torch.float64)
+    # average ranks for ties
+    sorted_probs = probs[order]
+    sorted_ranks = ranks[order]
+    i = 0
+    while i < len(sorted_probs):
+        j = i
+        while j + 1 < len(sorted_probs) and sorted_probs[j + 1] == sorted_probs[i]:
+            j += 1
+        if j > i:
+            avg_rank = sorted_ranks[i:j + 1].mean()
+            sorted_ranks[i:j + 1] = avg_rank
+        i = j + 1
+    ranks[order] = sorted_ranks
+    sum_ranks_pos = ranks[labels.bool()].sum().item()
+    auc = (sum_ranks_pos - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
+    return float(auc)
+
 logger = logging.getLogger(__name__)
 
 
@@ -61,6 +93,7 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
     # 4. Training loop — direct tensor slicing
     best_val_loss = float("inf")
     best_val_acc = 0.0
+    best_val_auc = 0.5
     patience_counter = 0
     n_train = len(train_ds)
     n_val = len(val_ds)
@@ -103,6 +136,8 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
         val_loss = 0.0
         val_n = 0
         val_correct = 0
+        val_probs = []
+        val_labels = []
 
         with torch.no_grad():
             val_idx = torch.arange(n_val)
@@ -118,20 +153,25 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
                 loss = criterion(logits, labels)
                 val_loss += loss.item() * len(labels)
                 val_n += len(labels)
-                val_correct += (torch.sigmoid(logits) > 0.5).float().eq(labels).sum().item()
+                probs = torch.sigmoid(logits)
+                val_correct += (probs > 0.5).float().eq(labels).sum().item()
+                val_probs.append(probs.detach().cpu())
+                val_labels.append(labels.detach().cpu())
 
         val_loss = val_loss / val_n if val_n > 0 else float("inf")
         val_acc = val_correct / val_n if val_n > 0 else 0.0
+        val_auc = _roc_auc(torch.cat(val_labels), torch.cat(val_probs)) if val_n > 0 else 0.5
         scheduler.step(val_loss)
 
         logger.info(
-            "Epoch %2d/%d | train_loss=%.4f | val_loss=%.4f | val_acc=%.3f | lr=%.2e",
-            epoch + 1, cfg.epochs, train_loss, val_loss, val_acc, optimizer.param_groups[0]["lr"],
+            "Epoch %2d/%d | train_loss=%.4f | val_loss=%.4f | val_acc=%.3f | val_auc=%.3f | lr=%.2e",
+            epoch + 1, cfg.epochs, train_loss, val_loss, val_acc, val_auc, optimizer.param_groups[0]["lr"],
         )
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_val_acc = val_acc
+            best_val_auc = val_auc
             patience_counter = 0
 
             weights_path = model_dir / f"draftbert_live_weights_{patch_id}.pt"
@@ -149,7 +189,7 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
         "n_static_features": metadata["n_static_features"],
         "n_dynamic_features": metadata["n_dynamic_features"],
         "dynamic_feature_columns": DYNAMIC_FEATURE_COLUMNS,
-        "val_loss": best_val_loss, "val_auc": best_val_acc,
+        "val_loss": best_val_loss, "val_auc": best_val_auc, "val_acc": best_val_acc,
         "n_train_matches": metadata["n_train_matches"],
         "n_val_matches": metadata["n_val_matches"],
         "n_train_samples": metadata["n_train_samples"],

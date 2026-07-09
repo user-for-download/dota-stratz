@@ -7,10 +7,11 @@ An event-driven microservice pipeline that ingests Dota 2 match data from the [O
 **Language:** Go 1.26.3 / Python 3.12  
 **ML Framework:** PyTorch 2.2+ (DraftBERT Transformer + MLP)  
 **Messaging:** RabbitMQ with dead-letter queues and automatic reconnection  
-**Database:** PostgreSQL 16 (partitioned, with deferred FK constraints)  
+**Database:** PostgreSQL 16 (partitioned, with deferred FK constraints, tuned for analytics)  
 **Caching/State:** Redis 7 (proxy pool backend + checkpoint state)  
 **Observability:** Prometheus + Grafana (pre-configured dashboards and alerts)  
-**Deployment:** Docker Compose with docker buildx bake
+**Deployment:** Docker Compose with docker buildx bake  
+**GPU Support:** CUDA auto-detect for training acceleration
 
 ---
 
@@ -36,7 +37,7 @@ An event-driven microservice pipeline that ingests Dota 2 match data from the [O
                                                                  │
                                                                  ▼
                                                           [Trainer]
-                                                    (PyTorch DraftBERT)
+                                                (PyTorch DraftBERT + LiveDraftBERT)
                                                                  │
                                                                  ▼
                                                        [ML Models]
@@ -68,21 +69,21 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 
 ---
 
-### 5. Trainer (PyTorch DraftBERT)
+### 5. Trainer (PyTorch DraftBERT + LiveDraftBERT)
 
-**Purpose:** Batch CLI service. Populates aggregate/snapshot tables and trains PyTorch DraftBERT model for draft prediction.
+**Purpose:** Batch CLI service. Populates aggregate/snapshot tables and trains PyTorch models for draft prediction.
 
 | Aspect | Detail |
 |---|---|
 | Package | `services/trainer/` |
-| Framework | PyTorch 2.2+ (CPU-only in Docker) |
+| Framework | PyTorch 2.2+ (CPU/GPU auto-detect) |
 | Dependencies | PostgreSQL (psycopg2 + SQLAlchemy) |
 | Config | Environment variables (`TRAINER_*`) |
 
 **Pipeline stages:**
 1. **Aggregate population** — 7 populator functions compute `ml.*_agg` tables per patch
-2. **Snapshot population** — 7 PIT-safe snapshot tables with cross-patch lookback
-3. **Training** — PyTorch DraftBERT model with configurable hyperparameters
+2. **Snapshot population** — 7 PIT-safe snapshot tables with cross-patch lookback and SCD state caching
+3. **Training** — PyTorch DraftBERT or LiveDraftBERT models with configurable hyperparameters
 4. **Export** — TorchScript JIT compilation for CPU inference
 
 **Model architecture — MultiModalDraftBERT:**
@@ -92,29 +93,38 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
   - Positional embedding: `nn.Embedding(max_seq_len, 128)`
   - Embedding dropout: 0.3
   - Mean pooling over sequence dimension
-- **Tabular branch:** MLP for 59 continuous features
-  - Input LayerNorm → Linear(59, 64) → ReLU → Dropout(0.3)
-- **Fusion head (gated):** Linear(128, 128) gate on sequence → Linear(64, 128) gate on tabular → sigmoid gating → element-wise multiply → concat with sequence → Linear(192, 64) → ReLU → Dropout(0.3) → Linear(64, 1)
+  - `enable_nested_tensor=False` for CPU multi-threading
+- **Tabular branch:** MLP for 63 continuous features
+  - Input → Linear(63, 64) → ReLU → Dropout(0.3) → Linear(64, 64)
+- **Fusion head (straight concat):** Sequence (128) + Tabular (64) → Linear(192, 64) → ReLU → Dropout(0.3) → Linear(64, 1)
 - **Output:** Raw logit for P(Radiant wins) via BCEWithLogitsLoss
-- **Gated fusion mechanism**: Forces the model to learn which modality (sequence or tabular) to prioritize per-hero, improving robustness when one modality has weak signal (e.g., new heroes with few tabular stats but strong draft-position patterns)
 - **Parameter count:** ~639K
+
+**Model architecture — LiveDraftBERT:**
+- **Sequence branch:** Same as DraftBERT (Transformer encoder)
+- **Tabular branch:** MLP for 24 static features (hero stats, synergy, counter)
+- **Live branch:** MLP for 35 dynamic features (economy, CS, defensive items, vision, runes, teamfight)
+- **Fusion:** 3-way concatenation → Linear(224, 64) → ReLU → Dropout(0.3) → Linear(64, 1)
 
 **Training configuration (all from `deploy/.env`):**
 
 | Parameter | Env Variable | Default | Description |
 |-----------|-------------|---------|-------------|
 | CPU threads | `TRAINER_NUM_THREADS` | 12 | `torch.set_num_threads()` |
-| Batch size | `TRAINER_BATCH_SIZE` | 256 | DataLoader batch size |
+| Batch size | `TRAINER_BATCH_SIZE` | 256 | Training batch size |
 | Epochs | `TRAINER_EPOCHS` | 15 | Training epochs |
-| Learning rate | `TRAINER_LR` | 1e-4 | AdamW learning rate |
+| Learning rate | `TRAINER_LR` | 5e-4 | AdamW learning rate (normalized features) |
 | Weight decay | `TRAINER_WEIGHT_DECAY` | 1e-3 | AdamW weight decay |
-| Max sequence length | `TRAINER_MAX_SEQ_LEN` | 50 | Draft sequence padding length |
+| Max sequence length | `TRAINER_MAX_SEQ_LEN` | 25 | Draft sequence padding (matches=24) |
 | Transformer dim | `TRAINER_D_MODEL` | 128 | Embedding dimension |
 | Attention heads | `TRAINER_NHEAD` | 4 | Multi-head attention |
 | Transformer layers | `TRAINER_NUM_LAYERS` | 3 | Encoder depth |
 | Early stop patience | `TRAINER_EARLY_STOP_PATIENCE` | 5 | Epochs to wait before stopping |
 | LR scheduler patience | `TRAINER_LR_SCHEDULER_PATIENCE` | 2 | Epochs before reducing LR |
 | LR scheduler factor | `TRAINER_LR_SCHEDULER_FACTOR` | 0.5 | LR reduction factor |
+| GPU device | `TRAINER_GPU` | auto | GPU device (auto/cuda/cpu) |
+| Skip aggregates | `TRAINER_SKIP_AGG` | false | Skip aggregate population |
+| Lookback patches | `TRAINER_LOOKBACK_PATCHES` | 2 | Patches for cross-patch lookback |
 
 **Key behaviors:**
 - TorchScript export uses `copy.deepcopy()` before `.cpu()` to avoid severing optimizer references
@@ -124,12 +134,18 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 - **Correct label handling** via `make_target()` — Dire picks labeled as success when Dire wins
 - Chronological train/val split (oldest → train, newest → val)
 - All hyperparameters configurable via `.env` — zero code changes needed
+- **StandardScaler normalization** — mean/std computed from training data, saved to schema, applied at inference
+- **Feature drift detection** — Z-scores computed at inference, warnings for anomalous data
+- **Model versioning** — Run IDs, experiment_logs table, versioned model files
+- **SCD state caching** — Snapshot inserts only when data changes (93-97% row reduction)
+- **Vectorized tensor slicing** — No DataLoader overhead, direct tensor operations
+- **CUDA support** — Auto-detects GPU, moves tensors to device with `torch.set_flush_denormal(True)`
 
 **Output:**
 - `draftbert_compiled_{patch_id}.pt` — TorchScript model for API
 - `draftbert_weights_{patch_id}.pt` — PyTorch state dict for resume
 - `model_patch_{patch_id}_meta.json` — Training metadata
-- `feature_schema_patch_{patch_id}.json` — Feature contract (59 aggregate columns + `max_seq_len`)
+- `feature_schema_patch_{patch_id}.json` — Feature contract (63 aggregate columns + `max_seq_len`)
 
 ---
 
@@ -149,6 +165,7 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 - `POST /predict` — Draft prediction with MCTS rollouts
 - `POST /predict-match` — 5v5 composition evaluation
 - `POST /reload/{patch_id}` — Hot-reload model (admin token)
+- `POST /for-team/{team_id}` — Team-specific predictions
 - `WS /ws/draft` — Real-time MCTS progress streaming
 
 **Prediction flow:**
@@ -156,25 +173,27 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 2. API validates draft order against per-patch pattern (`DRAFT_PATTERNS`)
 3. Pre-fetches batch aggregate data (7 queries per request)
 4. Builds sequence tensors (heroes + actions) and tabular features
-5. **Batched TorchScript inference** — single matrix multiply for all candidates (~2ms)
-6. Team-hero proficiency boosts (65%+ WR → +0.25 score boost)
-7. **Monte Carlo rollouts** — 40 simulations × 15 top candidates, batch-evaluated
-8. Returns top-N recommendations with reasoning
+5. **StandardScaler normalization** — Apply mean/std from training data
+6. **Feature drift detection** — Z-scores computed, warnings for anomalous data
+7. **Batched TorchScript inference** — single matrix multiply for all candidates (~2ms)
+8. Team-hero proficiency boosts (65%+ WR → +0.25 score boost)
+9. **Monte Carlo rollouts** — 40 simulations × 15 top candidates, batch-evaluated
+10. Returns top-N recommendations with reasoning
 
 **WebSocket streaming (`/ws/draft`):**
 - Queue-based async bridge between sync executor (MCTS) and async WebSocket
 - Progress packets streamed per-candidate during MCTS evaluation
 - Frontend shows real-time MCTS overlay with progress bar and top picks
+- Thread-safe: `asyncio.Semaphore(2)` limits concurrent evaluations
+- `turnId` mechanism prevents stale responses from overwriting current state
 
-**Feature categories (59 aggregate + sequence):**
+**Feature categories (63 aggregate + sequence):**
 - `th_*` (14): Team-hero aggregate
 - `ph_*` (15): Player-hero aggregate
-- `sy_*` (2): Synergy with allies
-- `co_*` (3): Counter vs enemies
-- `h2h_*` (2): Head-to-head record
-- `bl_*` (12): Hero baseline stats
+- `tc_*` (2): Team composition (gpm_budget, xpm_budget)
 - `hds_*` (2): Hero draft-slot win rate
-- Derived (4): Missingness flags, delta features, role interactions
+- `bl_*` (14): Hero baseline stats (including pick_propensity)
+- Derived (16): Missingness flags, delta features, role interactions, phase_id
 
 **Key behaviors:**
 - Thread-safe: `threading.RLock` for model swap, `BoundedSemaphore` for DB pool
@@ -182,6 +201,7 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 - NULL-safe: `_float()`/`_int()` helpers for all aggregate lookups
 - Draft patterns validated per-patch from `DRAFT_PATTERNS` dict
 - `for_team` parameter enables per-team recommendations (API inverts for Dire)
+- Eval context includes bans for feature construction
 
 ---
 
@@ -203,7 +223,9 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 - 24-slot Captain's Mode draft with ban/pick phases
 - Dual-column recommendation panels (bans + picks)
 - Hero image grid with highlighting and tooltip predictions
+- Ban/pick recommendations properly segregated
 
+---
 
 ### 8. Drafting Bots (Autonomous Draft Simulation)
 
@@ -212,15 +234,17 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 | Component | File | Description |
 |-----------|------|-------------|
 | **Inference Cache** | `trainer/inference_cache.py` | Loads 7 `ml.*_agg` tables into Python dicts for O(1) feature lookups |
-| **Draft State** | `trainer/draft_state.py` | Builds 59-dim feature arrays for hypothetical picks in RAM (mirrors SQL logic) |
+| **Draft State** | `trainer/draft_state.py` | Builds 63-dim feature arrays for hypothetical picks in RAM (mirrors SQL logic) |
 | **Greedy Bot** | `trainer/bot_greedy.py` | Single-step lookahead via batched PyTorch (~5ms per 120 heroes) |
 | **MCTS Bot** | `trainer/bot_mcts.py` | Monte Carlo Tree Search with UCB1, DraftBERT as value network (AlphaZero-style) |
+| **Interactive Bot** | `trainer/bot_interactive.py` | Captain's Mode interactive mode with AI suggestions |
 | **Tests** | `trainer/test_bot.py` | Component integration tests passing in Docker |
 
 **Architecture**:
 - All 7 aggregate tables cached in memory at startup
 - Feature computation mirrors `build_feature_vector()` from the API but uses in-memory dicts instead of DB round-trips
 - MCTS uses DraftBERT as a value network — no random rollouts needed due to prefix-augmented training data
+- MCTS applies GPM composition penalty for balanced team economies
 - Both bots expose `predict()` returning ranked hero lists with scores
 
 ---
@@ -260,6 +284,7 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 | `012_fix_ml_indexes.sql` | Drops redundant indexes, adds CHECK constraints |
 | `013_time_series_arrays.sql` | Moves gold_t/xp_t to dedicated table (PK conflict fix) |
 | `014_performance_optimization.sql` | Generated columns + composite indexes for GROUP BY performance |
+| `006_minutely_snapshots.sql` | Minutely snapshot materialized view |
 
 ### ML Schema (`ml`)
 
@@ -272,6 +297,10 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 - `team_h2h_snapshot`, `hero_baseline_snapshot`, `hero_draft_slot_snapshot`
 
 4 sparse tables use cross-patch lookback (`lookback_patches=2`, `prior_patch_weight=0.5`). 3 dense tables stay single-patch.
+
+**SCD state caching:** Snapshots only insert rows when data changes (93-97% row reduction). `last_emitted` dict tracks previous state per key.
+
+**Ban data fix:** Current patch bans now included in `team_hero_snapshot` (was missing before).
 
 ---
 
@@ -297,6 +326,15 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 | rabbitmq | 512M | 1.0 |
 | parser | 1G | 1.0 |
 
+### PostgreSQL Tuning
+
+| Parameter | Value | Purpose |
+|-----------|-------|---------|
+| shared_buffers | 4GB | Reduce SSD thrashing |
+| work_mem | 256MB | Speed up LATERAL joins |
+| effective_io_concurrency | 200 | SSD optimization |
+| random_page_cost | 1.1 | SSD-optimized query planning |
+
 ---
 
 ## Key Architectural Patterns
@@ -311,6 +349,11 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 8. **Monte Carlo rollouts** — 40 random draft completions per candidate, batch-evaluated
 9. **WebSocket MCTS streaming** — Queue-based async bridge for real-time progress updates
 10. **Configurable training** — All hyperparameters in `.env`, zero code changes needed
+11. **SCD state caching** — Snapshot inserts only when data changes (93-97% row reduction)
+12. **StandardScaler normalization** — mean/std from training data, applied at inference
+13. **Feature drift detection** — Z-scores at inference, warnings for anomalous data
+14. **Model versioning** — Run IDs, experiment_logs table, versioned model files
+15. **CUDA auto-detect** — Training auto-moves tensors to GPU when available
 
 ---
 
@@ -320,10 +363,10 @@ A comprehensive audit across ~100 source files found **55 items** — 9 blockers
 
 | Severity | Found | Fixed | Deferred |
 |----------|-------|-------|----------|
-| 🔴 BLOCKER | 9 | 9 | 0 |
-| 🟡 WARNING | 18 | 10 | 8 |
-| ℹ️ INFO | 28 | 0 | 28 |
-| **Total** | **55** | **19** | **36** |
+| BLOCKER | 9 | 9 | 0 |
+| WARNING | 18 | 18 | 0 |
+| INFO | 28 | 0 | 28 |
+| **Total** | **55** | **27** | **28** |
 
 **Key fixes**:
 - Feature vector now uses `self._max_hero_id + 1` instead of hardcoded `156` — new heroes no longer silently excluded (B2)
@@ -338,15 +381,77 @@ A comprehensive audit across ~100 source files found **55 items** — 9 blockers
 - Go services handle channel closes and context cancellations without busy-wait (W15, W16)
 - Missing `-u` flag in RabbitMQ startup and proxy.txt validation added (W11, W12)
 - `engine.raw_connection()` call protected with try-catch fallback (W7)
+- Synergy/counter features fixed in training (was joining hero against itself)
+- StreamingLiveDataset config fixed (was using wrong config keys)
+- Worker match drops fixed (was losing matches during streaming)
+- `val_auc` column mislabel fixed (was using `val_acc` key)
 
-**36 deferred items** are documented design choices or bounded, non-critical issues. See [`errors.md`](errors.md) for the full per-item report.
-
-### Fixed performance improvements (pre-audit)
+### Performance improvements
 - Sample-weighted loss averaging (fixes final-batch bias)
 - Generated columns `minute = time / 60` + composite indexes — replaces runtime division
-- Gated fusion mechanism for modality-adaptive feature combination
 - Prior-only combos now appear in all daily snapshots (prior-as-base approach)
 - Feature schema JSON exports explicit feature-type lists
 - NumPy `pad+from_numpy` replaces `torch.tensor()` loop
 - Single `groupby().cumsum()` for all tick columns
 - `num_workers=0` for pre-tensorized DataLoader
+- Vectorized tensor slicing (no DataLoader overhead)
+- `torch.set_flush_denormal(True)` for CPU performance
+- SCD state caching (93-97% snapshot row reduction)
+- PostgreSQL tuning (4GB shared_buffers, 256MB work_mem)
+- StandardScaler normalization (faster convergence)
+- Feature drift detection (early warning for data quality)
+- Model versioning (experiment tracking)
+- Dynamic feature sizing (24→35 for LiveDraftBERT)
+- Team composition features (gpm_budget, xpm_budget)
+- Draft phase awareness (draft_phase_id)
+- Team pick propensity (team_pick_propensity)
+
+### Deferred items (28)
+Design choices or bounded, non-critical issues:
+- SVD embeddings for hero features (W2)
+- Momentum smoothing for live predictions (W5)
+- Migration FK constraints (W9-W10)
+- Go race conditions in services (W13-W18)
+- Info items across all services
+
+---
+
+## Testing
+
+### Unit Tests
+
+| Test File | Purpose |
+|-----------|---------|
+| `services/trainer/tests/test_models.py` | PyTorch architecture tests (DraftBERT + LiveDraftBERT) |
+| `services/trainer/trainer/test_bot.py` | Bot component tests (dynamic feature count) |
+
+### Running Tests
+
+```bash
+# Python tests
+cd services/trainer && python -m pytest tests/ -v
+
+# Bot tests
+cd services/trainer && python -m pytest trainer/test_bot.py -v
+```
+
+---
+
+## Known Issues
+
+1. **LiveDraftBERT training** — Currently running on CUDA machine with 35 dynamic features
+2. **Full data training** — Patches 58-60 being processed
+3. **Retrain DraftBERT** — Needs new 64-feature schema (63 features + hero_id)
+4. **Model deployment** — Updated models need to be deployed to API
+
+---
+
+## Future Work
+
+1. **SVD embeddings** — Replace hero ID embeddings with pre-trained SVD features
+2. **Momentum smoothing** — Add temporal smoothing to live predictions
+3. **Migration FK constraints** — Add proper foreign key constraints to migrations
+4. **Go race condition fixes** — Address remaining race conditions in Go services
+5. **A/B testing** — Compare model versions in production
+6. **Feature importance analysis** — SHAP values for model interpretability
+7. **Real-time model updates** — Online learning for live predictions

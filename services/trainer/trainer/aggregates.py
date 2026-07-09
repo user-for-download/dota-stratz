@@ -563,9 +563,13 @@ def populate_team_hero_snapshot(cfg, conn) -> int:
                            AVG(p.gold_per_min)::FLOAT AS avg_gpm, AVG(p.xp_per_min)::FLOAT AS avg_xpm,
                            AVG(p.kills)::FLOAT AS avg_kills, AVG(p.deaths)::FLOAT AS avg_deaths, AVG(p.assists)::FLOAT AS avg_assists,
                            AVG(p.firstblood_claimed)::FLOAT AS firstblood_rate, AVG(p.camps_stacked)::FLOAT AS avg_camps_stacked,
-                           AVG(p.obs_placed + p.sen_placed)::FLOAT AS avg_vision_placed, 0.0 AS avg_gold_10, 0.0 AS avg_xp_10,
+                           AVG(p.obs_placed + p.sen_placed)::FLOAT AS avg_vision_placed,
+                           COALESCE(AVG(gold10.avg_gold_10)::FLOAT, 0) AS avg_gold_10,
+                           COALESCE(AVG(xp10.avg_xp_10)::FLOAT, 0) AS avg_xp_10,
                            MAX(m.start_time) AS last_played
                     FROM matches m JOIN players p ON p.match_id = m.match_id
+                    LEFT JOIN LATERAL (SELECT AVG((pta.gold_t ->> 10)::numeric) AS avg_gold_10 FROM player_time_series_arrays pta WHERE pta.match_id = m.match_id AND pta.player_slot = p.player_slot) gold10 ON TRUE
+                    LEFT JOIN LATERAL (SELECT AVG((pta.xp_t ->> 10)::numeric) AS avg_xp_10 FROM player_time_series_arrays pta WHERE pta.match_id = m.match_id AND pta.player_slot = p.player_slot) xp10 ON TRUE
                     WHERE m.radiant_win IS NOT NULL{extra} AND m.patch = %s AND to_timestamp(m.start_time) < %s
                       AND CASE WHEN p.is_radiant THEN m.radiant_team_id ELSE m.dire_team_id END IS NOT NULL
                     GROUP BY team_id, p.hero_id
@@ -783,7 +787,7 @@ def populate_h2h_snapshot(cfg, conn) -> int:
     extra = _match_extra_where(cfg, "m")
     with conn.cursor() as cur:
         cur.execute(f"""
-            WITH dates AS (SELECT DISTINCT d::DATE AS as_of_date FROM generate_series((SELECT MIN(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch = %s), (SELECT MAX(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch = %s), '1 day'::INTERVAL) d)
+            WITH dates AS (SELECT DISTINCT d::DATE AS as_of_date FROM generate_series((SELECT MIN(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch = %s{extra}), (SELECT MAX(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch = %s{extra}), '1 day'::INTERVAL) d)
             SELECT d.as_of_date, sub.team_id, sub.enemy_team_id, sub.games, sub.wins
             FROM dates d CROSS JOIN LATERAL (
                 WITH valid_matches AS (SELECT match_id, radiant_team_id, dire_team_id, radiant_win FROM matches WHERE patch = %s AND to_timestamp(start_time) < d.as_of_date AND radiant_win IS NOT NULL AND radiant_team_id IS NOT NULL AND dire_team_id IS NOT NULL{extra}),
@@ -823,7 +827,7 @@ def populate_baseline_snapshot(cfg, conn) -> int:
     extra = _match_extra_where(cfg, "m")
     with conn.cursor() as cur:
         cur.execute(f"""
-            WITH dates AS (SELECT DISTINCT d::DATE AS as_of_date FROM generate_series((SELECT MIN(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch = %s), (SELECT MAX(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch = %s), '1 day'::INTERVAL) d),
+            WITH dates AS (SELECT DISTINCT d::DATE AS as_of_date FROM generate_series((SELECT MIN(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch = %s{extra}), (SELECT MAX(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch = %s{extra}), '1 day'::INTERVAL) d),
             picks_pit AS (SELECT d.as_of_date, sub.hero_id, sub.total_picks, sub.total_wins, sub.avg_gpm, sub.avg_xpm, sub.avg_kills, sub.avg_deaths, sub.avg_assists, sub.avg_gold_10, sub.avg_xp_10
                 FROM dates d CROSS JOIN LATERAL (SELECT p.hero_id, COUNT(*) AS total_picks, SUM(CASE WHEN p.win = 1 THEN 1 ELSE 0 END) AS total_wins, AVG(p.gold_per_min)::FLOAT AS avg_gpm, AVG(p.xp_per_min)::FLOAT AS avg_xpm, AVG(p.kills)::FLOAT AS avg_kills, AVG(p.deaths)::FLOAT AS avg_deaths, AVG(p.assists)::FLOAT AS avg_assists, COALESCE(AVG(gold10.avg_gold_10)::FLOAT, 0) AS avg_gold_10, COALESCE(AVG(xp10.avg_xp_10)::FLOAT, 0) AS avg_xp_10 FROM matches m INNER JOIN players p ON p.match_id = m.match_id LEFT JOIN LATERAL (SELECT AVG((pta.gold_t ->> 10)::numeric) AS avg_gold_10 FROM player_time_series_arrays pta WHERE pta.match_id = m.match_id AND pta.player_slot = p.player_slot) gold10 ON TRUE LEFT JOIN LATERAL (SELECT AVG((pta.xp_t ->> 10)::numeric) AS avg_xp_10 FROM player_time_series_arrays pta WHERE pta.match_id = m.match_id AND pta.player_slot = p.player_slot) xp10 ON TRUE WHERE m.patch = %s AND to_timestamp(m.start_time) < d.as_of_date AND m.radiant_win IS NOT NULL{extra} GROUP BY p.hero_id) sub),
             bans_pit AS (SELECT d.as_of_date, sub.hero_id, sub.total_bans FROM dates d CROSS JOIN LATERAL (SELECT pb.hero_id, COUNT(*) AS total_bans FROM matches m INNER JOIN picks_bans pb ON pb.match_id = m.match_id AND pb.is_pick = FALSE WHERE m.patch = %s AND to_timestamp(m.start_time) < d.as_of_date AND m.radiant_win IS NOT NULL{extra} GROUP BY pb.hero_id) sub),
@@ -865,7 +869,7 @@ def populate_hero_draft_slot_snapshot(cfg, conn) -> int:
     extra = _match_extra_where(cfg, "m")
     with conn.cursor() as cur:
         cur.execute(f"""
-            WITH dates AS (SELECT DISTINCT d::DATE AS as_of_date FROM generate_series((SELECT MIN(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch = %s), (SELECT MAX(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch = %s), '1 day'::INTERVAL) d)
+            WITH dates AS (SELECT DISTINCT d::DATE AS as_of_date FROM generate_series((SELECT MIN(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch = %s{extra}), (SELECT MAX(to_timestamp(m.start_time))::DATE FROM matches m WHERE m.patch = %s{extra}), '1 day'::INTERVAL) d)
             SELECT d.as_of_date, sub.hero_id, sub.team_pick_ordinal, sub.games, sub.wins
             FROM dates d CROSS JOIN LATERAL (
                 SELECT ds.hero_id, ds.team_pick_ordinal, COUNT(*) AS games, SUM(CASE WHEN ds.won THEN 1 ELSE 0 END) AS wins

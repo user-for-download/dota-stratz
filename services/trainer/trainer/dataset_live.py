@@ -43,7 +43,7 @@ class LiveDraftDataset(Dataset):
         static_feats,
         dynamic_feats,
         labels,
-        max_len=50,
+        max_len=25,
     ):
         n = len(labels)
 
@@ -74,7 +74,7 @@ class LiveDraftDataset(Dataset):
         )
 
 
-def load_live_dataset(cfg: TrainerConfig, engine, max_len: int = 50):
+def load_live_dataset(cfg: TrainerConfig, engine, max_len: int = 25):
     """Load and prepare LiveDraftBERT training data.
 
     1. Extract draft sequences + static features (existing pipeline)
@@ -193,7 +193,7 @@ class StreamingLiveDataset(IterableDataset):
     """
 
     def __init__(self, engine, match_ids: set[int], patch_id: int,
-                 lookback: int = 2, max_len: int = 50, chunk_size: int = 1000,
+                 lookback: int = 2, max_len: int = 25, chunk_size: int = 1000,
                  cfg: TrainerConfig = None):
         self.engine = engine
         self.match_ids = match_ids

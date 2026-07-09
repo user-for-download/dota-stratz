@@ -67,7 +67,7 @@ def _make_mock_model(batch_size_out=1):
 def _make_schema():
     return {
         "n_features": 92, "n_embeddings": 0, "max_hero_id": 160,
-        "max_seq_len": 50,
+        "max_seq_len": 25,
         "aggregate_columns": ["is_pick", "team"],
     }
 

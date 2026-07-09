@@ -152,7 +152,7 @@ class Predictor:
 
         # Vectorize: batch all candidates at once
         num_continuous = len(schema["aggregate_columns"])
-        max_seq_len = schema.get("max_seq_len", 50)
+        max_seq_len = schema.get("max_seq_len", 25)
         batch_h, batch_a, batch_f = [], [], []
 
         for hid in eligible:
@@ -263,7 +263,7 @@ class Predictor:
             schema = self._schemas[patch_id]
 
         # Build sequence: alternating Rad/Dire picks
-        max_seq_len = schema.get("max_seq_len", 50)
+        max_seq_len = schema.get("max_seq_len", 25)
         seq_h, seq_a = [], []
         for i in range(5):
             seq_h.extend([radiant_heroes[i], dire_heroes[i]])

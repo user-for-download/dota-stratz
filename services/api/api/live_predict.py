@@ -67,7 +67,7 @@ class LivePredictor:
                     num_layers=schema.get("num_layers", 3),
                     num_static_features=schema.get("n_static_features", 61),
                     num_dynamic_features=schema.get("n_dynamic_features", 35),
-                    max_seq_len=schema.get("max_seq_len", 50),
+                    max_seq_len=schema.get("max_seq_len", 25),
                     dropout=schema.get("dropout", 0.3),
                     transformer_dropout=schema.get("transformer_dropout", 0.1),
                     static_hidden=schema.get("static_hidden", 64),
@@ -106,7 +106,7 @@ class LivePredictor:
 
         model = self._models[patch_id]
         schema = self._schemas[patch_id]
-        max_seq_len = schema.get("max_seq_len", 50)
+        max_seq_len = schema.get("max_seq_len", 25)
 
         # Pad sequences
         pad_h = heroes[:max_seq_len] + [0] * max(0, max_seq_len - len(heroes))
@@ -180,7 +180,7 @@ class LivePredictor:
             model = self._models[patch_id]
             schema = self._schemas[patch_id]
 
-        max_seq_len = schema.get("max_seq_len", 50)
+        max_seq_len = schema.get("max_seq_len", 25)
         pad_h = heroes[:max_seq_len] + [0] * max(0, max_seq_len - len(heroes))
         pad_a = actions[:max_seq_len] + [0] * max(0, max_seq_len - len(actions))
 

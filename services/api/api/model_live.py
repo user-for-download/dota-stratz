@@ -17,7 +17,7 @@ class LiveDraftBERT(nn.Module):
         num_layers: int = 3,
         num_static_features: int = 59,
         num_dynamic_features: int = 35,
-        max_seq_len: int = 50,
+        max_seq_len: int = 25,
         dropout: float = 0.3,
         transformer_dropout: float = 0.1,
         static_hidden: int = 64,

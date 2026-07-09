@@ -40,7 +40,7 @@ def run_monte_carlo_rollouts(
         schema = predictor._schemas[patch_id]
 
     num_continuous = len(schema["aggregate_columns"])
-    max_seq_len = schema.get("max_seq_len", 50)
+    max_seq_len = schema.get("max_seq_len", 25)
 
     # Pre-fetch tabular features for team comparison (static across simulations)
     dummy_ctx = DraftContext(

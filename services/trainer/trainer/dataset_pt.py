@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class DraftSequenceDataset(Dataset):
     """Pre-tensorized dataset for zero-overhead __getitem__ lookups."""
 
-    def __init__(self, heroes_seqs, actions_seqs, tabular_feats, labels, max_len=50):
+    def __init__(self, heroes_seqs, actions_seqs, tabular_feats, labels, max_len=25):
         n = len(labels)
 
         # Pad sequences using NumPy (much faster than torch.tensor in loop)
@@ -65,7 +65,7 @@ def _build_augmented_data(df, agg_cols):
     return heroes_seqs, actions_seqs, tabular_feats, labels
 
 
-def load_sequence_dataset(cfg: TrainerConfig, engine, max_len: int = 50):
+def load_sequence_dataset(cfg: TrainerConfig, engine, max_len: int = 25):
     """Load, clean, split, and augment sequence data for DraftBERT.
 
     Uses fast aggregate tables (no LATERAL joins) for speed.
