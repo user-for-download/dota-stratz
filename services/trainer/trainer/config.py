@@ -50,7 +50,7 @@ class TrainerConfig:
     num_threads: int = int(os.getenv("TRAINER_NUM_THREADS", "12"))
     batch_size: int = int(os.getenv("TRAINER_BATCH_SIZE", "256"))
     epochs: int = int(os.getenv("TRAINER_EPOCHS", "15"))
-    lr: float = float(os.getenv("TRAINER_LR", "5e-4"))
+    lr: float = float(os.getenv("TRAINER_LR", "5e-3"))
     weight_decay: float = float(os.getenv("TRAINER_WEIGHT_DECAY", "1e-3"))
     max_seq_len: int = int(os.getenv("TRAINER_MAX_SEQ_LEN", "25"))
     d_model: int = int(os.getenv("TRAINER_D_MODEL", "128"))
