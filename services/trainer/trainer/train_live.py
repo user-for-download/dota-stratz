@@ -53,6 +53,97 @@ def _roc_auc(labels: torch.Tensor, probs: torch.Tensor) -> float:
 logger = logging.getLogger(__name__)
 
 
+def find_learning_rate_live(cfg: TrainerConfig, engine, init_value: float = 1e-7, final_value: float = 10.0, beta: float = 0.98):
+    """Runs an LR Range Test for LiveDraftBERT to empirically determine the optimal learning rate."""
+    import math
+    from pathlib import Path
+
+    torch.set_num_threads(cfg.num_threads)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info("Starting LR Finder (LiveDraftBERT) on device=%s", device)
+
+    train_ds, _, metadata = load_live_dataset(cfg, engine, max_len=cfg.max_seq_len)
+
+    model = LiveDraftBERT(
+        vocab_size=cfg.max_hero_id + 5, d_model=cfg.d_model, nhead=cfg.nhead,
+        num_layers=cfg.num_layers, num_static_features=metadata["n_static_features"],
+        num_dynamic_features=metadata["n_dynamic_features"], max_seq_len=cfg.max_seq_len,
+        dropout=cfg.dropout, transformer_dropout=cfg.transformer_dropout,
+        static_hidden=cfg.static_hidden, dynamic_hidden=cfg.dynamic_hidden,
+        fusion_hidden=cfg.fusion_hidden,
+    ).to(device)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=init_value, weight_decay=cfg.weight_decay)
+    criterion = nn.BCEWithLogitsLoss()
+
+    n_train = len(train_ds)
+    batch_size = cfg.batch_size
+    num_batches = n_train // batch_size
+    if num_batches == 0:
+        logger.error("Dataset too small for LR finder (need at least one full batch).")
+        return
+
+    num_steps = min(num_batches, 300)
+    mult = (final_value / init_value) ** (1 / num_steps)
+
+    lr = init_value
+    avg_loss = 0.0
+    best_loss = 0.0
+    batch_num = 0
+    losses, lrs = [], []
+
+    model.train()
+    indices = torch.randperm(n_train)
+
+    logger.info("Running LR Finder for %d steps (batch_size=%d)...", num_steps, batch_size)
+    for i in range(num_steps):
+        batch_num += 1
+        start = i * batch_size
+        end = start + batch_size
+
+        heroes = train_ds.heroes[indices[start:end]].to(device)
+        actions = train_ds.actions[indices[start:end]].to(device)
+        static = train_ds.static[indices[start:end]].to(device)
+        dynamic = train_ds.dynamic[indices[start:end]].to(device)
+        labels = train_ds.labels[indices[start:end]].to(device)
+
+        optimizer.zero_grad()
+        logits = model(heroes, actions, static, dynamic)
+        loss = criterion(logits, labels)
+
+        avg_loss = beta * avg_loss + (1 - beta) * loss.item()
+        smoothed_loss = avg_loss / (1 - beta**batch_num)
+
+        if batch_num > 1 and smoothed_loss > 4 * best_loss:
+            logger.info("Loss diverged at LR=%.2e. Stopping early.", lr)
+            break
+
+        if smoothed_loss < best_loss or batch_num == 1:
+            best_loss = smoothed_loss
+
+        losses.append(smoothed_loss)
+        lrs.append(lr)
+
+        loss.backward()
+        optimizer.step()
+
+        lr *= mult
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = lr
+
+    model_dir = Path(cfg.model_dir)
+    model_dir.mkdir(parents=True, exist_ok=True)
+    out_file = model_dir / f"lr_find_livedraftbert_patch_{cfg.patch_id}.csv"
+
+    with open(out_file, "w") as f:
+        f.write("learning_rate,loss\n")
+        for r, l in zip(lrs, losses):
+            f.write(f"{r:.8e},{l:.6f}\n")
+
+    logger.info("LR Finder complete! Results saved to %s", out_file)
+    logger.info("--> Look for the steepest downward slope in the CSV to find your optimal LR.")
+
+
 def train_live_model(cfg: TrainerConfig, engine) -> float:
     torch.set_num_threads(cfg.num_threads)
     patch_id = cfg.patch_id

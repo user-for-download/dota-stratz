@@ -14,6 +14,10 @@ Usage:
     # Skip aggregates and go straight to training
     python -m trainer.main --patch 134 --skip-agg
 
+    # Run LR Range Test before training
+    python -m trainer.main --patch 134 --lr-find
+    python -m trainer.main --patch 134 --live --lr-find
+
     # Override model directory
     python -m trainer.main --patch 134 --model-dir /tmp/models
 
@@ -66,6 +70,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Train LiveDraftBERT for live match prediction (instead of DraftBERT)",
     )
     parser.add_argument(
+        "--lr-find",
+        action="store_true",
+        help="Run the Learning Rate Range Test instead of full training",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable debug logging",
@@ -114,6 +123,17 @@ def main(argv: list[str] | None = None) -> int:
             logger.info("Step 1 Skipped (--skip-agg provided). Using existing database aggregates.")
 
         # Step 2: Train model
+        if args.lr_find:
+            logger.info("Step 2: Running Learning Rate Range Test ...")
+            if args.live:
+                from .train_live import find_learning_rate_live
+                find_learning_rate_live(cfg, eng)
+            else:
+                from .train_pt import find_learning_rate
+                find_learning_rate(cfg, eng)
+            logger.info("LR Finder complete. Exiting.")
+            return 0
+
         if args.live:
             logger.info("Step 2: Training LiveDraftBERT model ...")
             from .train_live import train_live_model
