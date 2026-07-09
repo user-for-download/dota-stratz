@@ -43,7 +43,7 @@ listener.start()
 API = "http://localhost:8080"
 PATCH = 60
 CONFIDENCE_RANGE = 0.125
-MAX_WORKERS = 32  # 32 is the sweet spot for heavy MCTS compute
+MAX_WORKERS = 6  # Must be ≤ API_POOL_MAX (8) to avoid connection exhaustion
 
 DRAFT_PATTERN = [
     (0, False), (0, False), (1, False), (1, False),  # Bans
