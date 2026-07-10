@@ -508,9 +508,29 @@ async def ws_draft(websocket: WebSocket):
                 mcts_task = asyncio.create_task(run_mcts_async())
                 drain_task = asyncio.create_task(drain_queue())
 
-                final_recs = await mcts_task
-                progress_queue.put(SENTINEL)  # Signal drain to stop
-                await drain_task
+                # Run both concurrently; if client disconnects during drain,
+                # cancel the MCTS task to avoid wasted CPU cycles.
+                done, pending = await asyncio.wait(
+                    {mcts_task, drain_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                # If drain_task failed (client disconnect), cancel MCTS
+                if drain_task.done() and drain_task.exception() is not None:
+                    if not mcts_task.done():
+                        mcts_task.cancel()
+                        try:
+                            await mcts_task
+                        except asyncio.CancelledError:
+                            pass
+                    raise WebSocketDisconnect()
+
+                # Normal path: MCTS completed first. Signal drain to stop.
+                progress_queue.put(SENTINEL)
+                if drain_task in pending:
+                    await drain_task
+
+                final_recs = mcts_task.result()
 
                 # Sort MCTS output by lookahead score
                 final_recs.sort(key=lambda r: r.get("lookahead_score", r.get("score", 0)), reverse=True)

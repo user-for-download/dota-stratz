@@ -44,7 +44,7 @@ def run_monte_carlo_rollouts(
 
     # Pre-fetch tabular features for team comparison (static across simulations)
     dummy_ctx = DraftContext(
-        turn=11, recommending_team=-1, is_pick_turn=False,
+        turn=11, recommending_team=0, is_pick_turn=False,
         radiant_picks=list(ctx.radiant_picks), dire_picks=list(ctx.dire_picks),
     )
     batch_data = pre_fetch_batch(patch_id, [1], radiant_team_id, dire_team_id, dummy_ctx)

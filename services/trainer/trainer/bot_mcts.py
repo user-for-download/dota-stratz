@@ -222,9 +222,10 @@ class MCTSDraftBot:
         acting_team_win_prob = torch.sigmoid(logits).item()
 
         # Convert to absolute Radiant win probability for consistent backprop
-        # The node represents the state where it's the NODE's turn
-        if not node.is_terminal and not node.is_radiant_turn:
-            return 1.0 - acting_team_win_prob
+        # The model predicts P(last acting team wins). Convert to P(Radiant wins).
+        if not node.is_terminal:
+            last_is_radiant = actions[-1] in (1, 3) if len(actions) > 0 else node.is_radiant_turn
+            return acting_team_win_prob if last_is_radiant else 1.0 - acting_team_win_prob
         return acting_team_win_prob
 
     def search(

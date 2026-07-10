@@ -93,7 +93,23 @@ class LivePredictor:
             prob = torch.sigmoid(model(t_h, t_a, t_s, t_d)).item()
         return {"radiant_win_probability": prob, "dire_win_probability": 1 - prob}
 
-    def encode_draft(self, patch_id, heroes, actions, static_feats):
+    def predict_with_cache(self, patch_id, match_id, seq_repr, static_repr, dynamic_feats):
+        """Fast inference using pre-computed transformer + static embeddings.
+
+        Only runs the Dynamic MLP and Fusion head — skips the expensive
+        Transformer and Static MLP branches that don't change between ticks.
+        """
+        if patch_id not in self._models:
+            if not self.load_model(patch_id):
+                raise ValueError(f"No live model for patch {patch_id}")
+        model = self._models[patch_id]
+        t_d = torch.tensor([dynamic_feats], dtype=torch.float32)
+        with torch.no_grad():
+            logits = model.forward_dynamic(seq_repr, static_repr, t_d)
+            prob = torch.sigmoid(logits).item()
+        return {"radiant_win_probability": prob, "dire_win_probability": 1 - prob}
+
+    def encode_draft(self, patch_id, match_id, heroes, actions, static_feats):
         if patch_id not in self._models:
             if not self.load_model(patch_id):
                 raise ValueError(f"No live model for patch {patch_id}")
@@ -142,12 +158,7 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
     r_deep = d_deep = 0
     r_bkb = d_bkb = r_blink = d_blink = r_aghs = d_aghs = r_rapier = d_rapier = 0
     r_buybacks = d_buybacks = 0
-    r_buffs = d_buffs = 0
     r_neutrals = d_neutrals = 0
-    r_stuns = d_stuns = 0.0
-    r_tfp_list = []
-    d_tfp_list = []
-    r_td = d_td = 0
     r_gold_t = []
     d_gold_t = []
     r_save = d_save = r_aura = d_aura = 0
@@ -209,10 +220,9 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
             if is_rad: r_buybacks += 1
             else: d_buybacks += 1
 
-        # Permanent buffs (scaling threats)
-        for pb in player.get("permanent_buffs", []):
-            if is_rad: r_buffs += pb.get("stack_count", 0)
-            else: d_buffs += pb.get("stack_count", 0)
+        # Permanent buffs (scaling threats) — NOTE: permanent_buffs show end-of-match
+        # stack counts in OpenDota JSON. No time field available for filtering.
+        # Set to 0.0 to prevent outcome leakage.
 
         # Neutral items
         for ni in player.get("neutral_item_history", []):
@@ -221,18 +231,9 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
             if is_rad: r_neutrals += 1
             else: d_neutrals += 1
 
-        # Stuns, TF participation, tower damage
-        stuns = player.get("stuns", 0) or 0
-        tfp = player.get("teamfight_participation", 0) or 0
-        td = player.get("tower_damage", 0) or 0
-        if is_rad:
-            r_stuns += stuns
-            r_tfp_list.append(tfp)
-            r_td += td
-        else:
-            d_stuns += stuns
-            d_tfp_list.append(tfp)
-            d_td += td
+        # NOTE: stuns, teamfight_participation, tower_damage are end-of-match
+        # totals from OpenDota — using them here would leak the final outcome.
+        # These features are intentionally set to 0.0 in the feature dict below.
 
         # Gold timeline (for carry % and support NW)
         gt = player.get("gold_t", [])
@@ -364,10 +365,10 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
     d_support_nw = sum(d_gold_t[:2]) if len(d_gold_t) >= 2 else 0
 
     # --- CC Effectiveness ---
-    r_avg_tfp = sum(r_tfp_list) / len(r_tfp_list) if r_tfp_list else 0.5
-    d_avg_tfp = sum(d_tfp_list) / len(d_tfp_list) if d_tfp_list else 0.5
-    r_cc = r_stuns * max(r_avg_tfp, 0.01)
-    d_cc = d_stuns * max(d_avg_tfp, 0.01)
+    # Placeholder: stuns/tf_participation are end-of-match totals from OpenDota.
+    # Cannot reliably compute per-minute CC without time-series data.
+    r_cc = 0.0
+    d_cc = 0.0
 
     # --- Mega Creeps ---
     mega_r = 1.0 if (d_melee + d_range) >= 6 else 0.0
@@ -415,8 +416,8 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
         "tf_gold_swing_1m": tf_gold_swing,
         "tf_xp_swing_1m": tf_xp_swing,
         "map_confinement_diff": 0.0,
-        "scaling_threat_diff": float(r_buffs - d_buffs),
-        "cc_effectiveness_diff": float(r_cc - d_cc),
+        "scaling_threat_diff": 0.0,
+        "cc_effectiveness_diff": 0.0,
         "neutral_tier_diff": float(r_neutrals - d_neutrals),
-        "tower_damage_diff": float(r_td - d_td),
+        "tower_damage_diff": 0.0,
     }

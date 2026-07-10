@@ -136,41 +136,16 @@ bbs AS (
     WHERE match_id IN (SELECT DISTINCT match_id FROM match_minutes)
     GROUP BY match_id, minute
 ),
-player_extras AS (
-    SELECT p.match_id, p.player_slot,
-           p.stuns, p.teamfight_participation, p.tower_damage, p.total_gold,
-           COALESCE(pb.buff_stacks, 0) AS buff_stacks,
-           COALESCE(ni.neutrals, 0) AS neutrals
-    FROM players p
-    LEFT JOIN (
-        SELECT match_id, player_slot, SUM(stack_count) AS buff_stacks
-        FROM player_permanent_buffs
-        WHERE match_id IN (SELECT DISTINCT match_id FROM match_minutes)
-        GROUP BY match_id, player_slot
-    ) pb ON pb.match_id = p.match_id AND pb.player_slot = p.player_slot
-    LEFT JOIN (
-        SELECT match_id, player_slot, COUNT(*) AS neutrals
+neutral_items AS (
+    SELECT ni.match_id, ni.minute,
+           COUNT(CASE WHEN ni.player_slot < 128 THEN 1 END) AS r_neutr,
+           COUNT(CASE WHEN ni.player_slot >= 128 THEN 1 END) AS d_neutr
+    FROM (
+        SELECT match_id, player_slot, (time / 60) AS minute
         FROM player_neutral_item_history
         WHERE match_id IN (SELECT DISTINCT match_id FROM match_minutes)
-        GROUP BY match_id, player_slot
-    ) ni ON ni.match_id = p.match_id AND ni.player_slot = p.player_slot
-    WHERE p.match_id IN (SELECT DISTINCT match_id FROM match_minutes)
-),
-team_extras AS (
-    SELECT match_id, 0 AS minute,
-           SUM(CASE WHEN player_slot < 128 THEN stuns ELSE 0 END) AS r_stuns,
-           SUM(CASE WHEN player_slot >= 128 THEN stuns ELSE 0 END) AS d_stuns,
-           AVG(CASE WHEN player_slot < 128 THEN teamfight_participation END) AS r_tf_part,
-           AVG(CASE WHEN player_slot >= 128 THEN teamfight_participation END) AS d_tf_part,
-           SUM(CASE WHEN player_slot < 128 THEN tower_damage ELSE 0 END) AS r_td,
-           SUM(CASE WHEN player_slot >= 128 THEN tower_damage ELSE 0 END) AS d_td,
-           SUM(CASE WHEN player_slot < 128 THEN total_gold ELSE 0 END) AS r_gold,
-           SUM(CASE WHEN player_slot >= 128 THEN total_gold ELSE 0 END) AS d_gold,
-           SUM(CASE WHEN player_slot < 128 THEN buff_stacks ELSE 0 END) AS r_buffs,
-           SUM(CASE WHEN player_slot >= 128 THEN buff_stacks ELSE 0 END) AS d_buffs,
-           SUM(CASE WHEN player_slot < 128 THEN neutrals ELSE 0 END) AS r_neutr,
-           SUM(CASE WHEN player_slot >= 128 THEN neutrals ELSE 0 END) AS d_neutr
-    FROM player_extras GROUP BY match_id
+    ) ni
+    GROUP BY ni.match_id, ni.minute
 )
 SELECT
     mm.match_id, mm.minute, mm.radiant_win,
@@ -194,18 +169,8 @@ SELECT
     COALESCE(i.r_aghs, 0) AS radiant_aghs_tick, COALESCE(i.d_aghs, 0) AS dire_aghs_tick,
     COALESCE(i.r_rapier, 0) AS radiant_rapier_tick, COALESCE(i.d_rapier, 0) AS dire_rapier_tick,
     COALESCE(b.r_buybacks, 0) AS radiant_buybacks_tick, COALESCE(b.d_buybacks, 0) AS dire_buybacks_tick,
-    COALESCE(te.r_stuns, 0) AS radiant_stuns,
-    COALESCE(te.d_stuns, 0) AS dire_stuns,
-    COALESCE(te.r_tf_part, 0) AS radiant_tf_part,
-    COALESCE(te.d_tf_part, 0) AS dire_tf_part,
-    COALESCE(te.r_td, 0) AS radiant_td,
-    COALESCE(te.d_td, 0) AS dire_td,
-    COALESCE(te.r_gold, 0) AS radiant_gold_total,
-    COALESCE(te.d_gold, 0) AS dire_gold_total,
-    COALESCE(te.r_buffs, 0) AS radiant_buffs,
-    COALESCE(te.d_buffs, 0) AS dire_buffs,
-    COALESCE(te.r_neutr, 0) AS radiant_neutr,
-    COALESCE(te.d_neutr, 0) AS dire_neutr
+    COALESCE(ni.r_neutr, 0) AS radiant_neutr_tick,
+    COALESCE(ni.d_neutr, 0) AS dire_neutr_tick
 FROM match_minutes mm
 LEFT JOIN gold_xp gx ON gx.match_id = mm.match_id AND gx.minute = mm.minute
 LEFT JOIN kills k ON k.match_id = mm.match_id AND k.minute = mm.minute
@@ -215,7 +180,7 @@ LEFT JOIN deep_wards dw ON dw.match_id = mm.match_id AND dw.minute = mm.minute
 LEFT JOIN tf ON tf.match_id = mm.match_id AND tf.minute = mm.minute
 LEFT JOIN items i ON i.match_id = mm.match_id AND i.minute = mm.minute
 LEFT JOIN bbs b ON b.match_id = mm.match_id AND b.minute = mm.minute
-LEFT JOIN team_extras te ON te.match_id = mm.match_id
+LEFT JOIN neutral_items ni ON ni.match_id = mm.match_id AND ni.minute = mm.minute
 ORDER BY mm.match_id, mm.minute
 """
 
@@ -283,11 +248,11 @@ def extract_dynamic_features(engine, patch_id: int, lookback: int = 2) -> pd.Dat
     df["xp_adv_diff_3m"] = df["radiant_xp_adv"] - df["radiant_xp_adv_prev3"]
     df["minute_sq"] = df["minute"] ** 2
 
-    # Economy (placeholders for gold_t-based features)
+    # Economy (placeholders — gold_t-based features require per-player row data not in SQL)
     df["rad_carry_nw_pct"] = 0.2
     df["dire_carry_nw_pct"] = 0.2
     df["carry_farm_diff"] = 0.0
-    df["support_nw_diff"] = df["radiant_gold_total"] - df["dire_gold_total"]
+    df["support_nw_diff"] = 0.0  # Requires per-player gold_t timeline (not available in SQL CTE)
     df["radiant_cs_adv"] = 0.0
     df["save_item_diff"] = 0.0
     df["aura_item_diff"] = 0.0
@@ -296,14 +261,17 @@ def extract_dynamic_features(engine, patch_id: int, lookback: int = 2) -> pd.Dat
     df["tf_gold_swing_1m"] = 0.0
     df["tf_xp_swing_1m"] = 0.0
 
-    # New features from player_extras
-    df["map_confinement_diff"] = 0.0  # Placeholder (complex SQL needed for deaths_pos)
-    df["scaling_threat_diff"] = df["radiant_buffs"] - df["dire_buffs"]
-    r_cc = df["radiant_stuns"] * df["radiant_tf_part"].clip(lower=0.01)
-    d_cc = df["dire_stuns"] * df["dire_tf_part"].clip(lower=0.01)
-    df["cc_effectiveness_diff"] = r_cc - d_cc
+    # New features — all set to 0.0 placeholders because source data is end-of-match:
+    # - scaling_threat_diff: permanent_buffs are end-of-match totals (no time column)
+    # - cc_effectiveness_diff: stuns/teamfight_participation are end-of-match totals
+    # - tower_damage_diff: tower_damage is end-of-match total
+    # These features leak the final game outcome if populated from players table.
+    # Neutral items are correctly time-filtered via player_neutral_item_history.
+    df["map_confinement_diff"] = 0.0
+    df["scaling_threat_diff"] = 0.0
+    df["cc_effectiveness_diff"] = 0.0
     df["neutral_tier_diff"] = df["radiant_neutr"] - df["dire_neutr"]
-    df["tower_damage_diff"] = df["radiant_td"] - df["dire_td"]
+    df["tower_damage_diff"] = 0.0
 
     df[TARGET_COLUMN] = df[TARGET_COLUMN].astype(float)
     logger.info("Final dataset: %d rows, %d matches, %.1f%% radiant win rate",

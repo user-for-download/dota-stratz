@@ -115,6 +115,12 @@ def put_conn(conn):
     with _pool_lock:
         pool = _pool
     if pool is None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        if _semaphore is not None:
+            _semaphore.release()
         return
     try:
         conn.rollback()

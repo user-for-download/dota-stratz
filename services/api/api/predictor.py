@@ -174,9 +174,6 @@ class Predictor:
             logits = model(t_h, t_a, t_f)
             probs = torch.sigmoid(logits).numpy()
 
-        if eval_team == 1:
-            probs = 1.0 - probs
-
         # Build recommendations with team-hero boost
         recs = []
         for i, hid in enumerate(eligible):
@@ -276,7 +273,7 @@ class Predictor:
         t_a = torch.tensor([seq_a], dtype=torch.long)
 
         # Fetch tabular features for team comparison
-        ctx = DraftContext(turn=11, recommending_team=-1, is_pick_turn=False,
+        ctx = DraftContext(turn=11, recommending_team=0, is_pick_turn=False,
                            radiant_picks=radiant_heroes, dire_picks=dire_heroes)
         batch = pre_fetch_batch(patch_id, [1], radiant_team_id, dire_team_id, ctx)
         fv = build_feature_vector(1, ctx, patch_id, batch, schema, {}, schema["max_hero_id"])
