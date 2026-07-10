@@ -150,18 +150,20 @@ def simulate_draft(team_a, team_b, first_pick_team):
                 "first_pick_team": first_pick_team,
                 "radiant_team_id": TEAMS_DB[rad_team_name],
                 "dire_team_id": TEAMS_DB[dire_team_name],
-                "num_recommendations": 10,
-                "run_mcts": False,  # MCTS too heavy for concurrent simulation — model scores sufficient
+                "num_recommendations": 5,
+                "run_mcts": is_pick,
             })
             recs = result.get("recommendations", [])
         except Exception:
-            logger.error("API is unrecoverable. Terminating simulation...")
-            os._exit(1)
+            recs = []
 
         valid_recs = [r for r in recs if r["hero_id"] not in taken]
 
         if valid_recs:
-            chosen = random.choice(valid_recs[:3])["hero_id"]
+            if is_pick:
+                chosen = random.choice(valid_recs[:2])["hero_id"]
+            else:
+                chosen = valid_recs[0]["hero_id"]
         else:
             available = [h for h in HERO_IDS if h not in taken]
             chosen = random.choice(available) if available else 1
