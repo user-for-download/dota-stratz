@@ -38,9 +38,9 @@ def populate_embeddings(cfg, engine) -> None:
     conn = engine.raw_connection()
     try:
         _ensure_tables(conn, patch_id)
-        _compute_hero_embeddings(conn, patch_id)
-        _compute_team_embeddings(conn, patch_id)
-        _compute_player_embeddings(conn, patch_id)
+        _compute_hero_embeddings(conn, engine, patch_id)
+        _compute_team_embeddings(conn, engine, patch_id)
+        _compute_player_embeddings(conn, engine, patch_id)
         _compute_spatial_embeddings(conn, engine, patch_id)
     finally:
         conn.close()
@@ -77,12 +77,12 @@ def _ensure_tables(conn, patch_id: int) -> None:
     conn.commit()
 
 
-def _compute_hero_embeddings(conn, patch_id: int) -> None:
+def _compute_hero_embeddings(conn, engine, patch_id: int) -> None:
     """SVD on hero co-occurrence matrix (synergy counts)."""
     logger.info("  Hero Embeddings (32-D)...")
     df = pd.read_sql(
         "SELECT hero_a, hero_b, games FROM ml.hero_synergy_agg WHERE patch_id = %s",
-        conn, params=(patch_id,),
+        engine, params=(patch_id,),
     )
     if df.empty:
         logger.warning("  No synergy data, skipping hero embeddings")
@@ -108,12 +108,12 @@ def _compute_hero_embeddings(conn, patch_id: int) -> None:
     logger.info("  Saved %d hero embeddings", len(rows))
 
 
-def _compute_team_embeddings(conn, patch_id: int) -> None:
+def _compute_team_embeddings(conn, engine, patch_id: int) -> None:
     """SVD on team×hero frequency matrix."""
     logger.info("  Team Embeddings (16-D)...")
     df = pd.read_sql(
         "SELECT team_id, hero_id, games FROM ml.team_hero_agg WHERE patch_id = %s",
-        conn, params=(patch_id,),
+        engine, params=(patch_id,),
     )
     if df.empty:
         logger.warning("  No team-hero data, skipping team embeddings")
@@ -146,12 +146,12 @@ def _compute_team_embeddings(conn, patch_id: int) -> None:
     logger.info("  Saved %d team embeddings", len(rows))
 
 
-def _compute_player_embeddings(conn, patch_id: int) -> None:
+def _compute_player_embeddings(conn, engine, patch_id: int) -> None:
     """SVD on player×hero frequency matrix (sparse)."""
     logger.info("  Player Embeddings (16-D)...")
     df = pd.read_sql(
         "SELECT account_id, hero_id, games FROM ml.player_hero_agg WHERE patch_id = %s",
-        conn, params=(patch_id,),
+        engine, params=(patch_id,),
     )
     if df.empty:
         logger.warning("  No player-hero data, skipping player embeddings")
