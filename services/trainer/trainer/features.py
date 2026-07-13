@@ -67,7 +67,7 @@ def training_features_sql_fast(extra: str = "") -> str:
         WHERE m.patch = :patch_id
           AND m.radiant_win IS NOT NULL AND m.duration >= 900
           {extra}
-          AND NOT EXISTS (SELECT 1 FROM players p2 WHERE p2.match_id = m.match_id AND p2.leaver_status IN (1,2,3,4))
+          AND NOT EXISTS (SELECT 1 FROM players p2 WHERE p2.match_id = m.match_id AND p2.leaver_status IN (2,3,4))
           AND pb."order" IS NOT NULL AND pb.hero_id IS NOT NULL AND pb.team IN (0,1)
     )
     SELECT
@@ -212,7 +212,7 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
           AND NOT EXISTS (
               SELECT 1 FROM players p2
               WHERE p2.match_id = m.match_id
-              AND p2.leaver_status IN (1, 2, 3, 4)
+              AND p2.leaver_status IN (2, 3, 4)
           )
           AND pb."order" IS NOT NULL
           AND pb.hero_id IS NOT NULL
