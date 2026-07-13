@@ -26,6 +26,7 @@ class LiveDraftBERT(nn.Module):
         static_hidden: int = 64,
         dynamic_hidden: int = 32,
         fusion_hidden: int = 64,
+        max_patch_id: int = 200,
     ):
         super().__init__()
 
@@ -59,8 +60,11 @@ class LiveDraftBERT(nn.Module):
             nn.Dropout(dropout),
         )
 
+        # Branch 4: Patch Embedding
+        self.patch_emb = nn.Embedding(max_patch_id, fusion_hidden, padding_idx=0)
+
         # Fusion Head (no gate — straight concatenation)
-        fusion_dim = d_model + static_hidden + dynamic_hidden
+        fusion_dim = d_model + static_hidden + dynamic_hidden + fusion_hidden
         self.fusion_head = nn.Sequential(
             nn.Linear(fusion_dim, fusion_hidden),
             nn.ReLU(),
@@ -68,7 +72,7 @@ class LiveDraftBERT(nn.Module):
             nn.Linear(fusion_hidden, 1),
         )
 
-    def forward(self, heroes, actions, static_features, dynamic_features):
+    def forward(self, heroes, actions, static_features, dynamic_features, patches):
         B, S = heroes.size()
         positions = torch.arange(S, device=heroes.device).unsqueeze(0).expand(B, S)
 
@@ -85,18 +89,20 @@ class LiveDraftBERT(nn.Module):
 
         static_repr = self.static_mlp(static_features)
         dynamic_repr = self.dynamic_mlp(dynamic_features)
+        patch_repr = self.patch_emb(patches)
 
-        fused = torch.cat([seq_repr, static_repr, dynamic_repr], dim=1)
+        fused = torch.cat([seq_repr, static_repr, dynamic_repr, patch_repr], dim=1)
         logits = self.fusion_head(fused).squeeze(-1)
         return logits
 
-    def forward_dynamic(self, seq_repr, static_repr, dynamic_features):
+    def forward_dynamic(self, seq_repr, static_repr, dynamic_features, patches):
         dynamic_repr = self.dynamic_mlp(dynamic_features)
-        fused = torch.cat([seq_repr, static_repr, dynamic_repr], dim=1)
+        patch_repr = self.patch_emb(patches)
+        fused = torch.cat([seq_repr, static_repr, dynamic_repr, patch_repr], dim=1)
         logits = self.fusion_head(fused).squeeze(-1)
         return logits
 
-    def encode_draft(self, heroes, actions, static_features):
+    def encode_draft(self, heroes, actions, static_features, patches):
         B, S = heroes.size()
         positions = torch.arange(S, device=heroes.device).unsqueeze(0).expand(B, S)
 
@@ -112,4 +118,5 @@ class LiveDraftBERT(nn.Module):
         seq_repr = sum_embeddings / valid_lengths
 
         static_repr = self.static_mlp(static_features)
-        return seq_repr, static_repr
+        patch_repr = self.patch_emb(patches)
+        return seq_repr, static_repr, patch_repr

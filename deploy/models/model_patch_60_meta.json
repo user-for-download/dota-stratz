@@ -1,0 +1,8 @@
+{
+  "patch_id": 60,
+  "best_val_loss": 0.38626860134634455,
+  "n_train_sequences": 84961,
+  "n_val_sequences": 15019,
+  "n_continuous_features": 143,
+  "model_type": "draftbert_pytorch"
+}

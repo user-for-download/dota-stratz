@@ -82,6 +82,7 @@ def run_interactive(patch_id, use_mcts, iterations):
                 max_seq_len=cfg.max_seq_len, dropout=cfg.dropout,
                 transformer_dropout=cfg.transformer_dropout,
                 fusion_hidden=cfg.fusion_hidden,
+                max_patch_id=200,
             )
             state_dict = torch.load(str(model_path), map_location="cpu", weights_only=True)
             model.load_state_dict(state_dict)
@@ -95,6 +96,7 @@ def run_interactive(patch_id, use_mcts, iterations):
             num_continuous_features=builder.num_features,
             max_seq_len=cfg.max_seq_len, dropout=0.0,
             transformer_dropout=0.0, fusion_hidden=cfg.fusion_hidden,
+            max_patch_id=200,
         )
         model.eval()
 
@@ -225,6 +227,7 @@ def run_interactive(patch_id, use_mcts, iterations):
                     torch.tensor([rad_picks + [0] * (cfg.max_seq_len - len(rad_picks))], dtype=torch.long),
                     torch.tensor([[3] * len(rad_picks) + [0] * (cfg.max_seq_len - len(rad_picks))], dtype=torch.long),
                     torch.tensor([feat], dtype=torch.float32),
+                    torch.tensor([patch_id], dtype=torch.long),
                 )
                 prob = torch.sigmoid(logit).item()
             print(f"  Radiant win probability: {prob*100:.1f}%")

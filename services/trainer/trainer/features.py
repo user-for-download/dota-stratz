@@ -45,13 +45,17 @@ logger = logging.getLogger(__name__)
 # SQL query: build training features
 # ---------------------------------------------------------------------------
 
-def training_features_sql_fast(extra: str = "") -> str:
+def training_features_sql_fast(extra: str = "", lookback: int = 0) -> str:
     """Fast training SQL using aggregate tables directly (no LATERAL joins).
 
     Uses ml.*_agg tables instead of ml.*_snapshot tables.
     Much faster (~30s vs ~20min) but slightly less PIT-safe.
     Good enough for training since aggregates are already populated.
     """
+    patch_cond = (
+        "m.patch BETWEEN :patch_id - :lookback AND :patch_id"
+        if lookback > 0 else "m.patch = :patch_id"
+    )
     return f"""
     WITH draft_slots AS (
         SELECT
@@ -64,14 +68,14 @@ def training_features_sql_fast(extra: str = "") -> str:
         FROM picks_bans pb
         INNER JOIN matches m ON pb.match_id = m.match_id
         LEFT JOIN players p ON p.match_id = pb.match_id AND p.hero_id = pb.hero_id AND p.is_radiant = (pb.team = 0)
-        WHERE m.patch = :patch_id
+        WHERE {patch_cond}
           AND m.radiant_win IS NOT NULL AND m.duration >= 900
           {extra}
           AND NOT EXISTS (SELECT 1 FROM players p2 WHERE p2.match_id = m.match_id AND p2.leaver_status IN (2,3,4))
           AND pb."order" IS NOT NULL AND pb.hero_id IS NOT NULL AND pb.team IN (0,1)
     )
     SELECT
-        ds.match_id, ds.hero_id, ds.is_pick::INT AS is_pick, ds.team,
+        ds.patch_id, ds.match_id, ds.hero_id, ds.is_pick::INT AS is_pick, ds.team,
         CASE WHEN ds."order" <= 7 THEN 0 WHEN ds."order" <= 9 THEN 1
              WHEN ds."order" <= 12 THEN 2 WHEN ds."order" <= 18 THEN 3
              WHEN ds."order" <= 22 THEN 4 ELSE 5 END AS draft_phase_id,
@@ -175,8 +179,11 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
         Number of previous patches for aggregate/snapshot data only.
         Draft data always uses exactly patch_id (current patch only).
     """
-    # Draft data: ONLY current patch (patch 60) — current gameplay only
-    patch_cond = "m.patch = :patch_id"
+    # Patch condition: current patch only, or lookback range
+    patch_cond = (
+        "m.patch BETWEEN :patch_id - :lookback AND :patch_id"
+        if lookback > 0 else "m.patch = :patch_id"
+    )
 
     return f"""
     WITH draft_slots AS (
@@ -219,11 +226,11 @@ def training_features_sql(extra: str = "", lookback: int = 0) -> str:
           AND pb.team IN (0, 1)
     )
     SELECT
+        ds.patch_id,
         ds.match_id,
         ds.hero_id,
         ds.is_pick::INT AS is_pick,
         ds.team,
-        -- CM draft phase: 0=Ban1, 1=Pick1, 2=Ban2, 3=Pick2, 4=Ban3, 5=FinalPick
         CASE
             WHEN ds."order" <= 7 THEN 0
             WHEN ds."order" <= 9 THEN 1

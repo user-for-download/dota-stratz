@@ -124,6 +124,8 @@ class GreedyDraftBot:
         batch_tabular = torch.zeros(
             (batch_size, self.state_builder.num_features), dtype=torch.float32
         )
+        patch_id = self.state_builder.cache.patch_id
+        batch_patches = torch.full((batch_size,), patch_id, dtype=torch.long)
 
         # 4. Populate the batch with hypothetical states
         for i, hero_id in enumerate(available_heroes):
@@ -159,8 +161,9 @@ class GreedyDraftBot:
         batch_heroes = batch_heroes.to(self.device)
         batch_actions = batch_actions.to(self.device)
         batch_tabular = batch_tabular.to(self.device)
+        batch_patches = batch_patches.to(self.device)
 
-        logits = self.model(batch_heroes, batch_actions, batch_tabular)
+        logits = self.model(batch_heroes, batch_actions, batch_tabular, batch_patches)
         win_probs = torch.sigmoid(logits).cpu().numpy()
 
         # 6. Sort and get Top K results

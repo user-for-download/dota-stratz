@@ -642,6 +642,7 @@ async def ws_live(websocket: WebSocket):
             loop = asyncio.get_running_loop()
             cached_seq = None
             cached_static = None
+            cached_patch_repr = None
             cached_match = None
             cached_patch = None
 
@@ -658,6 +659,7 @@ async def ws_live(websocket: WebSocket):
                         interval = raw.get("interval", interval)
                         cached_seq = None
                         cached_static = None
+                        cached_patch_repr = None
                         break
                     except asyncio.TimeoutError:
                         pass  # No new message, continue polling
@@ -691,11 +693,11 @@ async def ws_live(websocket: WebSocket):
                     )
                     dyn_feats = [features[col] for col in DYNAMIC_FEATURE_COLUMNS]
 
-                    # Encode draft once, cache transformer + static embeddings
+                    # Encode draft once, cache transformer + static + patch embeddings
                     if cached_seq is None or cached_match != match_id or cached_patch != patch_id:
                         def _encode():
                             return live_pred.encode_draft(patch_id, match_id, heroes, actions_list, static_feats)
-                        cached_seq, cached_static = await loop.run_in_executor(None, _encode)
+                        cached_seq, cached_static, cached_patch_repr = await loop.run_in_executor(None, _encode)
                         cached_match = match_id
                         cached_patch = patch_id
 
@@ -708,6 +710,7 @@ async def ws_live(websocket: WebSocket):
                             seq_repr=cached_seq,
                             static_repr=cached_static,
                             dynamic_feats=dyn_feats,
+                            patch_repr=cached_patch_repr,
                         ),
                     )
 

@@ -81,10 +81,11 @@ def find_learning_rate(cfg: TrainerConfig, engine, init_value: float = 1e-7, fin
         heroes = train_ds.heroes[indices[start:end]].to(device)
         actions = train_ds.actions[indices[start:end]].to(device)
         tabular = train_ds.tabular[indices[start:end]].to(device)
+        patches = train_ds.patches[indices[start:end]].to(device)
         labels = train_ds.labels[indices[start:end]].to(device)
 
         optimizer.zero_grad()
-        logits = model(heroes, actions, tabular)
+        logits = model(heroes, actions, tabular, patches)
         loss = criterion(logits, labels)
 
         avg_loss = beta * avg_loss + (1 - beta) * loss.item()
@@ -191,6 +192,7 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
         shuffled_heroes = train_ds.heroes[indices]
         shuffled_actions = train_ds.actions[indices]
         shuffled_tabular = train_ds.tabular[indices]
+        shuffled_patches = train_ds.patches[indices]
         shuffled_labels = train_ds.labels[indices]
 
         for start in range(0, n_train, batch_size):
@@ -198,10 +200,11 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
             heroes = shuffled_heroes[start:end].to(device)
             actions = shuffled_actions[start:end].to(device)
             tabular = shuffled_tabular[start:end].to(device)
+            patches = shuffled_patches[start:end].to(device)
             labels = shuffled_labels[start:end].to(device)
 
             optimizer.zero_grad()
-            logits = model(heroes, actions, tabular)
+            logits = model(heroes, actions, tabular, patches)
             loss = criterion(logits, labels)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
@@ -219,8 +222,9 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
                 heroes = val_ds.heroes[start:end].to(device)
                 actions = val_ds.actions[start:end].to(device)
                 tabular = val_ds.tabular[start:end].to(device)
+                patches = val_ds.patches[start:end].to(device)
                 labels = val_ds.labels[start:end].to(device)
-                logits = model(heroes, actions, tabular)
+                logits = model(heroes, actions, tabular, patches)
                 loss = criterion(logits, labels)
                 val_loss += loss.item() * len(labels)
                 val_samples += len(labels)
@@ -246,7 +250,8 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
                 dummy_h = torch.tensor([[5, 10, 15] + [0] * (cfg.max_seq_len - 3)], dtype=torch.long)
                 dummy_a = torch.tensor([[3, 4, 1] + [0] * (cfg.max_seq_len - 3)], dtype=torch.long)
                 dummy_f = torch.zeros((1, num_continuous), dtype=torch.float32)
-                traced = torch.jit.trace(model_eval, (dummy_h, dummy_a, dummy_f))
+                dummy_p = torch.tensor([cfg.patch_id], dtype=torch.long)
+                traced = torch.jit.trace(model_eval, (dummy_h, dummy_a, dummy_f, dummy_p))
                 traced.save(model_dir / f"draftbert_compiled_{cfg.patch_id}_{run_id}.pt")
 
             torch.save(model.state_dict(), model_dir / f"draftbert_weights_{cfg.patch_id}.pt")

@@ -105,10 +105,11 @@ def find_learning_rate_live(cfg: TrainerConfig, engine, init_value: float = 1e-7
         actions = train_ds.actions[indices[start:end]].to(device)
         static = train_ds.static[indices[start:end]].to(device)
         dynamic = train_ds.dynamic[indices[start:end]].to(device)
+        patches = train_ds.patches[indices[start:end]].to(device)
         labels = train_ds.labels[indices[start:end]].to(device)
 
         optimizer.zero_grad()
-        logits = model(heroes, actions, static, dynamic)
+        logits = model(heroes, actions, static, dynamic, patches)
         loss = criterion(logits, labels)
 
         avg_loss = beta * avg_loss + (1 - beta) * loss.item()
@@ -205,10 +206,11 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
             actions = train_ds.actions[idx].to(device)
             static = train_ds.static[idx].to(device)
             dynamic = train_ds.dynamic[idx].to(device)
+            patches = train_ds.patches[idx].to(device)
             labels = train_ds.labels[idx].to(device)
 
             optimizer.zero_grad()
-            logits = model(heroes, actions, static, dynamic)
+            logits = model(heroes, actions, static, dynamic, patches)
             loss = criterion(logits, labels)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
@@ -238,9 +240,10 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
                 actions = val_ds.actions[idx].to(device)
                 static = val_ds.static[idx].to(device)
                 dynamic = val_ds.dynamic[idx].to(device)
+                patches = val_ds.patches[idx].to(device)
                 labels = val_ds.labels[idx].to(device)
 
-                logits = model(heroes, actions, static, dynamic)
+                logits = model(heroes, actions, static, dynamic, patches)
                 loss = criterion(logits, labels)
                 val_loss += loss.item() * len(labels)
                 val_n += len(labels)

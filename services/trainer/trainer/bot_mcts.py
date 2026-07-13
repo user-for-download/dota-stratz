@@ -212,11 +212,13 @@ class MCTSDraftBot:
         )
 
         batch_tabular = torch.from_numpy(tabular_array).unsqueeze(0)
+        batch_patch = torch.tensor([self.state_builder.cache.patch_id], dtype=torch.long)
 
         logits = self.model(
             batch_heroes.to(self.device),
             batch_actions.to(self.device),
             batch_tabular.to(self.device),
+            batch_patch.to(self.device),
         )
         # DraftBERT predicts win prob for the ACTING team
         acting_team_win_prob = torch.sigmoid(logits).item()

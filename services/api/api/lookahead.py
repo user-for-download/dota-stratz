@@ -121,9 +121,10 @@ def run_monte_carlo_rollouts(
     t_h = torch.tensor(batch_h, dtype=torch.long)
     t_a = torch.tensor(batch_a, dtype=torch.long)
     t_f = torch.tensor(np.array(batch_f), dtype=torch.float32)
+    t_p = torch.full((len(batch_h),), patch_id, dtype=torch.long)
 
     with torch.no_grad():
-        logits = model(t_h, t_a, t_f)
+        logits = model(t_h, t_a, t_f, t_p)
         probs = torch.sigmoid(logits).numpy()
 
     # Aggregate per-candidate

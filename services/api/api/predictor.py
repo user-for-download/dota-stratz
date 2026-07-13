@@ -169,9 +169,10 @@ class Predictor:
         t_h = torch.tensor(batch_h, dtype=torch.long)
         t_a = torch.tensor(batch_a, dtype=torch.long)
         t_f = torch.tensor(np.array(batch_f), dtype=torch.float32)
+        t_p = torch.full((len(batch_h),), patch_id, dtype=torch.long)
 
         with torch.no_grad():
-            logits = model(t_h, t_a, t_f)
+            logits = model(t_h, t_a, t_f, t_p)
             probs = torch.sigmoid(logits).numpy()
 
         # Build recommendations with team-hero boost
@@ -279,9 +280,10 @@ class Predictor:
         fv = build_feature_vector(1, ctx, patch_id, batch, schema, {}, schema["max_hero_id"])
         num_continuous = len(schema["aggregate_columns"])
         t_f = torch.tensor([fv[:num_continuous]], dtype=torch.float32)
+        t_p = torch.tensor([patch_id], dtype=torch.long)
 
         with torch.no_grad():
-            logits = model(t_h, t_a, t_f)
+            logits = model(t_h, t_a, t_f, t_p)
             return float(torch.sigmoid(logits)[0])
 
     def _build_reasoning(self, hero_id, score, ctx, patch_id,

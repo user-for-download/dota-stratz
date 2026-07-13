@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 class LiveDraftDataset(Dataset):
-    """Pre-tensorized dataset for LiveDraftBERT with 4-tuple inputs."""
+    """Pre-tensorized dataset for LiveDraftBERT with 5-tuple inputs."""
 
     def __init__(
         self,
@@ -42,6 +42,7 @@ class LiveDraftDataset(Dataset):
         actions_seqs,
         static_feats,
         dynamic_feats,
+        patches,
         labels,
         max_len=25,
     ):
@@ -59,6 +60,7 @@ class LiveDraftDataset(Dataset):
         self.actions = torch.from_numpy(np.array(a_padded, dtype=np.int64))
         self.static = torch.from_numpy(np.array(static_feats, dtype=np.float32))
         self.dynamic = torch.from_numpy(np.array(dynamic_feats, dtype=np.float32))
+        self.patches = torch.tensor(patches, dtype=torch.long)
         self.labels = torch.tensor(labels, dtype=torch.float32)
 
     def __len__(self):
@@ -70,6 +72,7 @@ class LiveDraftDataset(Dataset):
             self.actions[idx],
             self.static[idx],
             self.dynamic[idx],
+            self.patches[idx],
             self.labels[idx],
         )
 
@@ -113,16 +116,18 @@ def load_live_dataset(cfg: TrainerConfig, engine, max_len: int = 25):
     # 2. Per-minute dynamic features
     dynamic_df = extract_dynamic_features(engine, cfg.patch_id, cfg.lookback_patches)
 
-    # 3. Build draft lookup: match_id → (hero_ids, actions, static_row)
+    # 3. Build draft lookup: match_id → (hero_ids, actions, static_row, patch_id, label)
     # Use final_steps for static features (fully completed draft synergies/counters)
     final_lookup = final_steps.set_index("match_id")
+    patch_lookup = draft_df.groupby("match_id")["patch_id"].first().to_dict()
     draft_lookup = {}
     for mid, group in draft_df.groupby("match_id", sort=False):
         mh = group["hero_id"].astype(int).tolist()
         ma = (group["team"].astype(int) * 1 + group["is_pick"].astype(int) * 2 + 1).tolist()
         mt = final_lookup.loc[mid, fill_cols].values.astype(np.float32)
+        mp = int(patch_lookup.get(mid, cfg.patch_id))
         ml = final_lookup.loc[mid, "radiant_win"]
-        draft_lookup[mid] = (mh, ma, mt, ml)
+        draft_lookup[mid] = (mh, ma, mt, mp, ml)
 
     # 4. Chronological split by match start time (use draft_df start_time, not game minute)
     match_start = draft_df.groupby("match_id")["start_time"].first().sort_values()
@@ -134,8 +139,8 @@ def load_live_dataset(cfg: TrainerConfig, engine, max_len: int = 25):
     logger.info("Split: %d train, %d val matches", len(train_matches), len(val_matches))
 
     # 5. Build train/val lists
-    t_h, t_a, t_s, t_d, t_l = [], [], [], [], []
-    v_h, v_a, v_s, v_d, v_l = [], [], [], [], []
+    t_h, t_a, t_s, t_d, t_p, t_l = [], [], [], [], [], []
+    v_h, v_a, v_s, v_d, v_p, v_l = [], [], [], [], [], []
 
     # --- FAST NUMPY EXTRACTION (bypasses Pandas iterrows overhead) ---
     mids = dynamic_df["match_id"].values
@@ -149,7 +154,7 @@ def load_live_dataset(cfg: TrainerConfig, engine, max_len: int = 25):
 
     for i in valid_indices:
         mid = mids[i]
-        mh, ma, mt, ml = draft_lookup[mid]
+        mh, ma, mt, mp, ml = draft_lookup[mid]
         dyn = dyn_matrix[i]
 
         if mid in train_matches:
@@ -157,19 +162,21 @@ def load_live_dataset(cfg: TrainerConfig, engine, max_len: int = 25):
             t_a.append(ma)
             t_s.append(mt)
             t_d.append(dyn)
+            t_p.append(mp)
             t_l.append(float(ml))
         elif mid in val_matches:
             v_h.append(mh)
             v_a.append(ma)
             v_s.append(mt)
             v_d.append(dyn)
+            v_p.append(mp)
             v_l.append(float(ml))
 
     if not t_l:
         raise ValueError("No training samples after merge")
 
-    train_ds = LiveDraftDataset(t_h, t_a, t_s, t_d, t_l, max_len)
-    val_ds = LiveDraftDataset(v_h, v_a, v_s, v_d, v_l, max_len)
+    train_ds = LiveDraftDataset(t_h, t_a, t_s, t_d, t_p, t_l, max_len)
+    val_ds = LiveDraftDataset(v_h, v_a, v_s, v_d, v_p, v_l, max_len)
 
     metadata = {
         "n_train_matches": len(train_matches),
@@ -238,12 +245,13 @@ class StreamingLiveDataset(IterableDataset):
                         continue
                     if mid not in draft_lookup:
                         draft_lookup[mid] = {
-                            "heroes": [], "actions": [], "static": None, "label": None
+                            "heroes": [], "actions": [], "static": None, "patch_id": cfg.patch_id, "label": None
                         }
                     dl = draft_lookup[mid]
                     dl["heroes"].append(int(row_dict["hero_id"]))
                     dl["actions"].append(int(row_dict["team"]) * 1 + int(row_dict["is_pick"]) * 2 + 1)
                     dl["static"] = np.array([float(row_dict.get(c, 0) or 0) for c in agg_cols], dtype=np.float32)
+                    dl["patch_id"] = int(row_dict.get("patch_id", cfg.patch_id))
                     dl["label"] = float(row_dict["radiant_win"])
 
             # Extract dynamic features
@@ -260,6 +268,7 @@ class StreamingLiveDataset(IterableDataset):
                 mh = dl["heroes"]
                 ma = dl["actions"]
                 mt = dl["static"]
+                mp = dl["patch_id"]
                 ml = dl["label"]
 
                 # Find matching dynamic features
@@ -275,6 +284,7 @@ class StreamingLiveDataset(IterableDataset):
                         torch.tensor(a_padded, dtype=torch.long),
                         torch.tensor(mt, dtype=torch.float32),
                         torch.tensor(dyn, dtype=torch.float32),
+                        torch.tensor(mp, dtype=torch.long),
                         torch.tensor(ml, dtype=torch.float32),
                     )
         finally:

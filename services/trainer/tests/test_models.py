@@ -19,7 +19,8 @@ class TestMultiModalDraftBERT:
         heroes = torch.randint(1, 160, (4, 5))
         actions = torch.randint(1, 5, (4, 5))
         tabular = torch.randn((4, 61))
-        logits = model(heroes, actions, tabular)
+        patches = torch.randint(55, 61, (4,))
+        logits = model(heroes, actions, tabular, patches)
         assert logits.shape == (4,), f"Expected (4,), got {logits.shape}"
         assert not torch.isnan(logits).any(), "Model produced NaN"
 
@@ -28,7 +29,8 @@ class TestMultiModalDraftBERT:
         h = torch.tensor([[14, 53, 0, 0, 0]])
         a = torch.tensor([[3, 4, 0, 0, 0]])
         f = torch.zeros((1, 61))
-        out = model(h, a, f)
+        p = torch.tensor([60])
+        out = model(h, a, f, p)
         assert out.shape == (1,)
 
     def test_full_draft(self):
@@ -36,7 +38,8 @@ class TestMultiModalDraftBERT:
         h = torch.randint(1, 160, (2, 50))
         a = torch.randint(1, 5, (2, 50))
         f = torch.randn((2, 61))
-        out = model(h, a, f)
+        p = torch.tensor([60, 59])
+        out = model(h, a, f, p)
         assert out.shape == (2,)
 
     def test_all_padding(self):
@@ -45,7 +48,8 @@ class TestMultiModalDraftBERT:
         h = torch.zeros((1, 50), dtype=torch.long)
         a = torch.zeros((1, 50), dtype=torch.long)
         f = torch.zeros((1, 61))
-        out = model(h, a, f)
+        p = torch.tensor([0])
+        out = model(h, a, f, p)
         assert out.shape == (1,)
         assert not torch.isnan(out).any()
 
@@ -55,9 +59,10 @@ class TestMultiModalDraftBERT:
         h = torch.randint(1, 160, (1, 10))
         a = torch.randint(1, 5, (1, 10))
         f = torch.randn((1, 61))
+        p = torch.tensor([60])
         with torch.no_grad():
-            out1 = model(h, a, f)
-            out2 = model(h, a, f)
+            out1 = model(h, a, f, p)
+            out2 = model(h, a, f, p)
         assert torch.allclose(out1, out2), "eval mode should be deterministic"
 
 
@@ -70,7 +75,8 @@ class TestLiveDraftBERT:
         actions = torch.randint(1, 5, (2, 24))
         static = torch.randn((2, 61))
         dynamic = torch.randn((2, 35))
-        out = model(heroes, actions, static, dynamic)
+        patches = torch.tensor([60, 59])
+        out = model(heroes, actions, static, dynamic, patches)
         assert out.shape == (2,), f"Expected (2,), got {out.shape}"
         assert not torch.isnan(out).any()
 
@@ -80,7 +86,8 @@ class TestLiveDraftBERT:
         a = torch.tensor([[3, 4, 0, 0, 0]])
         s = torch.zeros((1, 61))
         d = torch.randn((1, 35))
-        out = model(h, a, s, d)
+        p = torch.tensor([60])
+        out = model(h, a, s, d, p)
         assert out.shape == (1,)
 
     def test_dynamic_features_matter(self):
@@ -92,7 +99,8 @@ class TestLiveDraftBERT:
         s = torch.randn((1, 61))
         d1 = torch.zeros((1, 35))
         d2 = torch.ones((1, 35))
+        p = torch.tensor([60])
         with torch.no_grad():
-            out1 = model(h, a, s, d1)
-            out2 = model(h, a, s, d2)
+            out1 = model(h, a, s, d1, p)
+            out2 = model(h, a, s, d2, p)
         assert not torch.allclose(out1, out2), "Dynamic features should affect output"

@@ -66,6 +66,7 @@ class LivePredictor:
                     static_hidden=schema.get("static_hidden", 64),
                     dynamic_hidden=schema.get("dynamic_hidden", 32),
                     fusion_hidden=schema.get("fusion_hidden", 64),
+                    max_patch_id=200,
                 )
                 model.load_state_dict(torch.load(str(weights_path), map_location="cpu", weights_only=True))
                 model.eval()
@@ -89,11 +90,12 @@ class LivePredictor:
         t_a = torch.tensor([pad_a], dtype=torch.long)
         t_s = torch.tensor([static_feats], dtype=torch.float32)
         t_d = torch.tensor([dynamic_feats], dtype=torch.float32)
+        t_p = torch.tensor([patch_id], dtype=torch.long)
         with torch.no_grad():
-            prob = torch.sigmoid(model(t_h, t_a, t_s, t_d)).item()
+            prob = torch.sigmoid(model(t_h, t_a, t_s, t_d, t_p)).item()
         return {"radiant_win_probability": prob, "dire_win_probability": 1 - prob}
 
-    def predict_with_cache(self, patch_id, match_id, seq_repr, static_repr, dynamic_feats):
+    def predict_with_cache(self, patch_id, match_id, seq_repr, static_repr, dynamic_feats, patch_repr):
         """Fast inference using pre-computed transformer + static embeddings.
 
         Only runs the Dynamic MLP and Fusion head — skips the expensive
@@ -105,7 +107,7 @@ class LivePredictor:
         model = self._models[patch_id]
         t_d = torch.tensor([dynamic_feats], dtype=torch.float32)
         with torch.no_grad():
-            logits = model.forward_dynamic(seq_repr, static_repr, t_d)
+            logits = model.forward_dynamic(seq_repr, static_repr, t_d, patch_repr)
             prob = torch.sigmoid(logits).item()
         return {"radiant_win_probability": prob, "dire_win_probability": 1 - prob}
 
@@ -122,9 +124,10 @@ class LivePredictor:
         t_h = torch.tensor([pad_h], dtype=torch.long)
         t_a = torch.tensor([pad_a], dtype=torch.long)
         t_s = torch.tensor([static_feats], dtype=torch.float32)
+        t_p = torch.tensor([patch_id], dtype=torch.long)
         with torch.no_grad():
-            seq_repr, static_repr = model.encode_draft(t_h, t_a, t_s)
-        return seq_repr, static_repr
+            seq_repr, static_repr, patch_repr = model.encode_draft(t_h, t_a, t_s, t_p)
+        return seq_repr, static_repr, patch_repr
 
 
 def fetch_live_matches() -> list[dict]:

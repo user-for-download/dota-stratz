@@ -22,6 +22,7 @@ class MultiModalDraftBERT(nn.Module):
         dropout: float = 0.3,
         transformer_dropout: float = 0.1,
         fusion_hidden: int = 64,
+        max_patch_id: int = 200,
     ):
         super().__init__()
 
@@ -49,8 +50,11 @@ class MultiModalDraftBERT(nn.Module):
             nn.Dropout(tabular_dropout),
         )
 
-        # --- 3. Fusion Head ---
-        fusion_dim = d_model + fusion_hidden
+        # --- 3. Patch Embedding ---
+        self.patch_emb = nn.Embedding(max_patch_id, fusion_hidden, padding_idx=0)
+
+        # --- 4. Fusion Head ---
+        fusion_dim = d_model + fusion_hidden + fusion_hidden
         self.fusion_head = nn.Sequential(
             nn.Linear(fusion_dim, fusion_hidden),
             nn.ReLU(),
@@ -58,7 +62,7 @@ class MultiModalDraftBERT(nn.Module):
             nn.Linear(fusion_hidden, 1),
         )
 
-    def forward(self, heroes, actions, continuous_features):
+    def forward(self, heroes, actions, continuous_features, patches):
         B, S = heroes.size()
         positions = torch.arange(S, device=heroes.device).unsqueeze(0).expand(B, S)
 
@@ -74,7 +78,8 @@ class MultiModalDraftBERT(nn.Module):
         seq_repr = sum_embeddings / valid_lengths
 
         tab_repr = self.tabular_mlp(continuous_features)
+        patch_repr = self.patch_emb(patches)
 
-        fused = torch.cat([seq_repr, tab_repr], dim=1)
+        fused = torch.cat([seq_repr, tab_repr, patch_repr], dim=1)
         logits = self.fusion_head(fused).view(-1)
         return logits
