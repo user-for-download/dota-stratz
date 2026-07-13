@@ -26,7 +26,7 @@ OpenDota API  ──►  ID Fetcher  ──►  Detail Fetcher  ──►  Parse
                                                   (Draft Predictor UI)
 ```
 
-Six microservices (4 Go + 2 Python) + 1 Nginx frontend, connected via RabbitMQ message queues, with a Redis-backed proxy pool for API rate-limit avoidance. The ML pipeline uses PyTorch DraftBERT (Transformer + MLP multi-modal architecture) for draft prediction with Monte Carlo rollouts for strategic lookahead. LiveDraftBERT adds economy/CS/defensive item features for real-time match prediction.
+Six microservices (4 Go + 2 Python) + 1 Nginx frontend, connected via RabbitMQ message queues, with a Redis-backed proxy pool for API rate-limit avoidance. The ML pipeline uses PyTorch DraftBERT (Transformer + MLP multi-modal architecture) for draft prediction with Monte Carlo rollouts for strategic lookahead. LiveDraftBERT adds 30 dynamic game state features for real-time match prediction.
 
 **See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full system design, service details, database schema, and deployment topology.**
 
@@ -85,7 +85,7 @@ make downv                # Stop and remove volumes (destructive)
 | Component | Technology | Description |
 |-----------|-----------|-------------|
 | **Trainer** | PyTorch DraftBERT | Transformer (128d, 4 heads, 3 layers) + MLP (63 tabular features) |
-| **Live Trainer** | PyTorch LiveDraftBERT | Transformer + Tabular + Live branches (35 dynamic features) |
+| **Live Trainer** | PyTorch LiveDraftBERT | Transformer + Tabular + Live branches (30 dynamic features) |
 | **Inference** | TorchScript JIT | <2ms batched CPU inference via C++ graph |
 | **Lookahead** | Monte Carlo Rollouts | 40 simulations per top-15 candidate, batch-evaluated |
 | **Features** | 63 aggregate + sequence | Team/player hero stats, team composition, economy budget, draft propensity |
@@ -108,7 +108,7 @@ Configuration is managed through `deploy/.env`. See `deploy/.env.example` for al
 | `TRAINER_BATCH_SIZE` | 256 | Training batch size |
 | `TRAINER_EPOCHS` | 15 | Training epochs |
 | `TRAINER_LR` | 5e-4 | Learning rate (normalized features) |
-| `TRAINER_WEIGHT_DECAY` | 1e-3 | AdamW weight decay |
+| `TRAINER_WEIGHT_DECAY` | 3e-3 | AdamW weight decay |
 | `TRAINER_MAX_SEQ_LEN` | 25 | Max draft sequence length (matches=24) |
 | `TRAINER_D_MODEL` | 128 | Transformer embedding dimension |
 | `TRAINER_NHEAD` | 4 | Attention heads |
@@ -116,6 +116,8 @@ Configuration is managed through `deploy/.env`. See `deploy/.env.example` for al
 | `TRAINER_GPU` | auto | GPU device (auto/cuda/cpu) |
 | `TRAINER_SKIP_AGG` | false | Skip aggregate population |
 | `TRAINER_LOOKBACK_PATCHES` | 2 | Patches for cross-patch lookback |
+| `TRAINER_DYNAMIC_HIDDEN` | 24 | LiveDraftBERT dynamic MLP hidden dim |
+| `TRAINER_LR_SCHEDULER_PATIENCE` | 1 | Epochs before LR reduction |
 
 ## Project Structure
 
@@ -151,7 +153,7 @@ Configuration is managed through `deploy/.env`. See `deploy/.env.example` for al
 │   │   │   ├── model_live.py    # LiveDraftBERT inference
 │   │   │   ├── lookahead.py     # MCTS rollouts
 │   │   │   ├── draft_state.py   # DraftContext
-│   │   │   ├── live_features.py # 35 dynamic features
+│   │   │   ├── live_features.py # 30 dynamic features
 │   │   │   └── live_predict.py  # Live feature extraction
 │   │   └── tests/
 │   └── frontend/          # Nginx draft predictor UI (:80)

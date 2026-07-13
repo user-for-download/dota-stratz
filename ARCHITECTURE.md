@@ -102,9 +102,9 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 
 **Model architecture — LiveDraftBERT:**
 - **Sequence branch:** Same as DraftBERT (Transformer encoder)
-- **Tabular branch:** MLP for 24 static features (hero stats, synergy, counter)
-- **Live branch:** MLP for 35 dynamic features (economy, CS, defensive items, vision, runes, teamfight)
-- **Fusion:** 3-way concatenation → Linear(224, 64) → ReLU → Dropout(0.3) → Linear(64, 1)
+- **Tabular branch:** MLP for 143 static features (aggregates + SVD embeddings)
+- **Live branch:** MLP for 30 dynamic features (gold/xp, towers, Roshan, teamfights, power spikes, vision, neutral items)
+- **Fusion:** 4-way concatenation (seq + static + dynamic + patch_emb) → Linear(248, 64) → ReLU → Dropout(0.3) → Linear(64, 1)
 
 **Training configuration (all from `deploy/.env`):**
 
@@ -114,13 +114,13 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 | Batch size | `TRAINER_BATCH_SIZE` | 256 | Training batch size |
 | Epochs | `TRAINER_EPOCHS` | 15 | Training epochs |
 | Learning rate | `TRAINER_LR` | 5e-4 | AdamW learning rate (normalized features) |
-| Weight decay | `TRAINER_WEIGHT_DECAY` | 1e-3 | AdamW weight decay |
+| Weight decay | `TRAINER_WEIGHT_DECAY` | 3e-3 | AdamW weight decay |
 | Max sequence length | `TRAINER_MAX_SEQ_LEN` | 25 | Draft sequence padding (matches=24) |
 | Transformer dim | `TRAINER_D_MODEL` | 128 | Embedding dimension |
 | Attention heads | `TRAINER_NHEAD` | 4 | Multi-head attention |
 | Transformer layers | `TRAINER_NUM_LAYERS` | 3 | Encoder depth |
 | Early stop patience | `TRAINER_EARLY_STOP_PATIENCE` | 5 | Epochs to wait before stopping |
-| LR scheduler patience | `TRAINER_LR_SCHEDULER_PATIENCE` | 2 | Epochs before reducing LR |
+| LR scheduler patience | `TRAINER_LR_SCHEDULER_PATIENCE` | 1 | Epochs before reducing LR |
 | LR scheduler factor | `TRAINER_LR_SCHEDULER_FACTOR` | 0.5 | LR reduction factor |
 | GPU device | `TRAINER_GPU` | auto | GPU device (auto/cuda/cpu) |
 | Skip aggregates | `TRAINER_SKIP_AGG` | false | Skip aggregate population |
@@ -129,7 +129,7 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 **Key behaviors:**
 - TorchScript export uses `copy.deepcopy()` before `.cpu()` to avoid severing optimizer references
 - Dummy tensors use non-zero hero IDs (5, 10, 15) to prevent `to_padded_tensor` crash
-- `ReduceLROnPlateau(patience=2, factor=0.5)` for adaptive learning rate
+- `ReduceLROnPlateau(patience=1, factor=0.5)` for adaptive learning rate
 - **Early stopping** with configurable patience (`TRAINER_EARLY_STOP_PATIENCE=5`)
 - **Correct label handling** via `make_target()` — Dire picks labeled as success when Dire wins
 - Chronological train/val split (oldest → train, newest → val)
@@ -401,7 +401,7 @@ A comprehensive audit across ~100 source files found **55 items** — 9 blockers
 - StandardScaler normalization (faster convergence)
 - Feature drift detection (early warning for data quality)
 - Model versioning (experiment tracking)
-- Dynamic feature sizing (24→35 for LiveDraftBERT)
+- Dynamic feature sizing (24→35→30 for LiveDraftBERT) — removed 15 constant-zero placeholders
 - Team composition features (gpm_budget, xpm_budget)
 - Draft phase awareness (draft_phase_id)
 - Team pick propensity (team_pick_propensity)
@@ -439,10 +439,10 @@ cd services/trainer && python -m pytest trainer/test_bot.py -v
 
 ## Known Issues
 
-1. **LiveDraftBERT training** — Currently running on CUDA machine with 35 dynamic features
-2. **Full data training** — Patches 58-60 being processed
-3. **Retrain DraftBERT** — Needs new 64-feature schema (63 features + hero_id)
-4. **Model deployment** — Updated models need to be deployed to API
+1. **LiveDraftBERT training** — Currently running on CUDA machine with 30 dynamic features
+2. **Full data training** — Patches 58-60 processed
+3. **Retrain DraftBERT** — Done (cross-patch with patch_id embedding)
+4. **Model deployment** — Updated models deployed to API
 
 ---
 
