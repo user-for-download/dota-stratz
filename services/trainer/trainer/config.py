@@ -55,7 +55,7 @@ class TrainerConfig:
     batch_size: int = int(os.getenv("TRAINER_BATCH_SIZE", "256"))
     epochs: int = int(os.getenv("TRAINER_EPOCHS", "15"))
     lr: float = float(os.getenv("TRAINER_LR", "5e-3"))
-    weight_decay: float = float(os.getenv("TRAINER_WEIGHT_DECAY", "1e-3"))
+    weight_decay: float = float(os.getenv("TRAINER_WEIGHT_DECAY", "3e-3"))
     max_seq_len: int = int(os.getenv("TRAINER_MAX_SEQ_LEN", "25"))
     d_model: int = int(os.getenv("TRAINER_D_MODEL", "128"))
     nhead: int = int(os.getenv("TRAINER_NHEAD", "4"))
@@ -75,7 +75,7 @@ class TrainerConfig:
     """Dropout rate inside TransformerEncoderLayer."""
     static_hidden: int = int(os.getenv("TRAINER_STATIC_HIDDEN", "64"))
     """Hidden dim for the static MLP branch. Only used by LiveDraftBERT."""
-    dynamic_hidden: int = int(os.getenv("TRAINER_DYNAMIC_HIDDEN", "32"))
+    dynamic_hidden: int = int(os.getenv("TRAINER_DYNAMIC_HIDDEN", "24"))
     """Hidden dim for the dynamic MLP branch. Only used by LiveDraftBERT."""
     fusion_hidden: int = int(os.getenv("TRAINER_FUSION_HIDDEN", "64"))
     """Hidden dim for the fusion head."""
@@ -85,7 +85,7 @@ class TrainerConfig:
     """Max gradient norm for clipping."""
     early_stop_patience: int = int(os.getenv("TRAINER_EARLY_STOP_PATIENCE", "5"))
     """Epochs to wait before early stopping."""
-    lr_scheduler_patience: int = int(os.getenv("TRAINER_LR_SCHEDULER_PATIENCE", "2"))
+    lr_scheduler_patience: int = int(os.getenv("TRAINER_LR_SCHEDULER_PATIENCE", "1"))
     """Epochs to wait before reducing LR."""
     lr_scheduler_factor: float = float(os.getenv("TRAINER_LR_SCHEDULER_FACTOR", "0.5"))
     """Factor by which LR is reduced."""

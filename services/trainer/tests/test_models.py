@@ -69,36 +69,36 @@ class TestMultiModalDraftBERT:
 class TestLiveDraftBERT:
     def test_basic_forward_shape(self):
         model = LiveDraftBERT(
-            num_static_features=61, num_dynamic_features=35
+            num_static_features=61, num_dynamic_features=30
         )
         heroes = torch.randint(1, 160, (2, 24))
         actions = torch.randint(1, 5, (2, 24))
         static = torch.randn((2, 61))
-        dynamic = torch.randn((2, 35))
+        dynamic = torch.randn((2, 30))
         patches = torch.tensor([60, 59])
         out = model(heroes, actions, static, dynamic, patches)
         assert out.shape == (2,), f"Expected (2,), got {out.shape}"
         assert not torch.isnan(out).any()
 
     def test_single_sample(self):
-        model = LiveDraftBERT(num_static_features=61, num_dynamic_features=35)
+        model = LiveDraftBERT(num_static_features=61, num_dynamic_features=30)
         h = torch.tensor([[14, 53, 0, 0, 0]])
         a = torch.tensor([[3, 4, 0, 0, 0]])
         s = torch.zeros((1, 61))
-        d = torch.randn((1, 35))
+        d = torch.randn((1, 30))
         p = torch.tensor([60])
         out = model(h, a, s, d, p)
         assert out.shape == (1,)
 
     def test_dynamic_features_matter(self):
         """Changing only dynamic features should change the output."""
-        model = LiveDraftBERT(num_static_features=61, num_dynamic_features=35)
+        model = LiveDraftBERT(num_static_features=61, num_dynamic_features=30)
         model.eval()
         h = torch.randint(1, 160, (1, 10))
         a = torch.randint(1, 5, (1, 10))
         s = torch.randn((1, 61))
-        d1 = torch.zeros((1, 35))
-        d2 = torch.ones((1, 35))
+        d1 = torch.zeros((1, 30))
+        d2 = torch.ones((1, 30))
         p = torch.tensor([60])
         with torch.no_grad():
             out1 = model(h, a, s, d1, p)

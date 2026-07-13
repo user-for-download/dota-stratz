@@ -6,12 +6,9 @@ Extracts per-minute dynamic features capturing the full game state:
 3. Objectives (Towers, Barracks, Roshan, Courier)
 4. Win Conditions (Mega Creeps)
 5. Vision & Map Control (Wards, Deep Vision)
-6. Economy Distribution & Laning (Carry/Support NW, Scaling Threats)
-7. Teamfight Execution (CC Effectiveness, Cohesion)
-8. Neutral Item Control
-9. Map Pressure (Tower Damage)
+6. Neutral Item Control
 
-45 dynamic features that capture actual game state, not just gold.
+30 real dynamic features (non-placeholder).
 """
 
 from __future__ import annotations
@@ -31,14 +28,8 @@ DYNAMIC_FEATURE_COLUMNS = [
     "radiant_dead_now", "dire_dead_now", "buyback_diff",
     "bkb_diff", "blink_diff", "aghs_diff", "rapier_diff",
     "mega_creeps_radiant", "mega_creeps_dire", "courier_lost_diff", "aegis_diff",
-    "rad_carry_nw_pct", "dire_carry_nw_pct", "carry_farm_diff", "support_nw_diff",
-    "radiant_cs_adv",
-    "save_item_diff", "aura_item_diff",
-    "dewards_diff", "deep_ward_diff",
-    "rune_control_diff",
-    "tf_gold_swing_1m", "tf_xp_swing_1m",
-    "map_confinement_diff", "scaling_threat_diff",
-    "cc_effectiveness_diff", "neutral_tier_diff", "tower_damage_diff",
+    "deep_ward_diff",
+    "neutral_tier_diff",
 ]
 
 TARGET_COLUMN = "radiant_win"
@@ -248,30 +239,8 @@ def extract_dynamic_features(engine, patch_id: int, lookback: int = 2) -> pd.Dat
     df["xp_adv_diff_3m"] = df["radiant_xp_adv"] - df["radiant_xp_adv_prev3"]
     df["minute_sq"] = df["minute"] ** 2
 
-    # Economy (placeholders — gold_t-based features require per-player row data not in SQL)
-    df["rad_carry_nw_pct"] = 0.2
-    df["dire_carry_nw_pct"] = 0.2
-    df["carry_farm_diff"] = 0.0
-    df["support_nw_diff"] = 0.0  # Requires per-player gold_t timeline (not available in SQL CTE)
-    df["radiant_cs_adv"] = 0.0
-    df["save_item_diff"] = 0.0
-    df["aura_item_diff"] = 0.0
-    df["dewards_diff"] = 0.0
-    df["rune_control_diff"] = 0.0
-    df["tf_gold_swing_1m"] = 0.0
-    df["tf_xp_swing_1m"] = 0.0
-
-    # New features — all set to 0.0 placeholders because source data is end-of-match:
-    # - scaling_threat_diff: permanent_buffs are end-of-match totals (no time column)
-    # - cc_effectiveness_diff: stuns/teamfight_participation are end-of-match totals
-    # - tower_damage_diff: tower_damage is end-of-match total
-    # These features leak the final game outcome if populated from players table.
-    # Neutral items are correctly time-filtered via player_neutral_item_history.
-    df["map_confinement_diff"] = 0.0
-    df["scaling_threat_diff"] = 0.0
-    df["cc_effectiveness_diff"] = 0.0
+    # Neutral items (real — time-filtered via player_neutral_item_history)
     df["neutral_tier_diff"] = df["radiant_neutr"] - df["dire_neutr"]
-    df["tower_damage_diff"] = 0.0
 
     df[TARGET_COLUMN] = df[TARGET_COLUMN].astype(float)
     logger.info("Final dataset: %d rows, %d matches, %.1f%% radiant win rate",

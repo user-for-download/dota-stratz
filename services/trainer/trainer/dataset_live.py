@@ -3,12 +3,13 @@
 Each sample contains:
 - heroes: draft hero IDs (same for all minutes of a match)
 - actions: action tokens (same for all minutes)
-- static_features: 61 pre-game aggregates (same for all minutes)
-- dynamic_features: 35 live game state features (CHANGES per minute)
+- static_features: pre-game aggregates (same for all minutes)
+- dynamic_features: live game state features (CHANGES per minute)
+- patch_id: which patch this match belongs to
 - label: who won (same for all minutes)
 
-Multiple samples per match (one per minute), sharing the same draft
-and static features but with different dynamic features.
+Multiple samples per match (up to 12 randomly sampled minutes),
+sharing the same draft, static features, and outcome.
 
 Supports both map-style (Dataset) and streaming (IterableDataset) loading.
 """
@@ -147,12 +148,31 @@ def load_live_dataset(cfg: TrainerConfig, engine, max_len: int = 25):
     minutes_arr = dynamic_df["minute"].values
     dyn_matrix = dynamic_df[DYNAMIC_FEATURE_COLUMNS].values.astype(np.float32)
 
-    # Vectorized filtering: skip minute 0 and missing draft_lookup entries
-    # Skip minute 0 — no dynamic game state yet (gold/xp advantages are 0)
+    # --- SUBSAMPLE PER-MATCH MINUTES ---
+    # Randomly sample up to PER_MATCH_SAMPLES minutes per match to reduce
+    # within-match correlation (near-duplicate rows sharing draft/outcome).
+    PER_MATCH_SAMPLES = 12
+    rng = np.random.RandomState(42)
     valid_mask = (minutes_arr != 0) & np.array([mid in draft_lookup for mid in mids])
     valid_indices = np.where(valid_mask)[0]
 
-    for i in valid_indices:
+    # Group contiguous valid_indices by match_id (data is ORDER BY match_id, minute)
+    sampled_indices = []
+    i = 0
+    while i < len(valid_indices):
+        mid = mids[valid_indices[i]]
+        j = i
+        while j < len(valid_indices) and mids[valid_indices[j]] == mid:
+            j += 1
+        match_iv = valid_indices[i:j]
+        n_sample = min(len(match_iv), PER_MATCH_SAMPLES)
+        sampled_indices.extend(match_iv[rng.choice(len(match_iv), size=n_sample, replace=False)])
+        i = j
+
+    logger.info("Subsampled dynamic features: %d → %d rows (max %d per match)",
+                 len(valid_indices), len(sampled_indices), PER_MATCH_SAMPLES)
+
+    for i in sampled_indices:
         mid = mids[i]
         mh, ma, mt, mp, ml = draft_lookup[mid]
         dyn = dyn_matrix[i]
@@ -260,7 +280,8 @@ class StreamingLiveDataset(IterableDataset):
             dyn_mids = dynamic_df["match_id"].values
             dyn_minutes = dynamic_df["minute"].values
 
-            # Yield samples one at a time
+            # Yield samples one at a time (subsampled per match)
+            rng = np.random.RandomState(42)
             for mid in match_list:
                 if mid not in draft_lookup:
                     continue
@@ -271,9 +292,11 @@ class StreamingLiveDataset(IterableDataset):
                 mp = dl["patch_id"]
                 ml = dl["label"]
 
-                # Find matching dynamic features
+                # Find matching dynamic features, subsample up to 12 per match
                 mask = (dyn_mids == mid) & (dyn_minutes > 0)
                 indices = np.where(mask)[0]
+                if len(indices) > 12:
+                    indices = rng.choice(indices, size=12, replace=False)
 
                 for idx in indices:
                     dyn = dyn_matrix[idx]

@@ -161,6 +161,18 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
         metadata["n_train_samples"], metadata["n_val_samples"],
     )
 
+    # --- Standardize Static Features ---
+    logger.info("Normalizing static features (Mean/Std Scaling)...")
+    static_means = train_ds.static.mean(dim=0)
+    static_stds = train_ds.static.std(dim=0).clamp(min=1e-6)
+
+    train_ds.static = (train_ds.static - static_means) / static_stds
+    val_ds.static = (val_ds.static - static_means) / static_stds
+
+    static_means_list = static_means.numpy().tolist()
+    static_stds_list = static_stds.numpy().tolist()
+    logger.info("Static feature normalization done.")
+
     # 2. Create model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("LiveDraftBERT: using device=%s", device)
@@ -294,12 +306,14 @@ def train_live_model(cfg: TrainerConfig, engine) -> float:
         "dropout": cfg.dropout, "transformer_dropout": cfg.transformer_dropout,
         "static_hidden": cfg.static_hidden, "dynamic_hidden": cfg.dynamic_hidden,
         "fusion_hidden": cfg.fusion_hidden,
+        "drift_stats": {"mean": static_means_list, "std": static_stds_list},
     }
 
     with open(model_dir / f"live_model_patch_{patch_id}_meta.json", "w") as f:
         json.dump(meta, f, indent=2)
 
-    write_schema(model_dir, patch_id, cfg.max_hero_id, n_embeddings=0, max_seq_len=cfg.max_seq_len)
+    write_schema(model_dir, patch_id, cfg.max_hero_id, n_embeddings=0, max_seq_len=cfg.max_seq_len,
+                 drift_stats={"mean": static_means_list, "std": static_stds_list})
     _upsert_model_meta(cfg, patch_id, meta, engine)
 
     logger.info("Training complete. Best val_loss: %.4f", best_val_loss)

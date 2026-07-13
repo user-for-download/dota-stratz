@@ -37,7 +37,19 @@ class LivePredictor:
         self._model_dir = Path(model_dir)
         self._models: dict[int, Any] = {}
         self._schemas: dict[int, dict] = {}
+        self._static_drift: dict[int, dict] = {}
         self._lock = threading.RLock()
+
+    def _normalize_static(self, static_feats: list[float], patch_id: int) -> list[float]:
+        """Apply training-time mean/std scaling to static features."""
+        drift = self._static_drift.get(patch_id)
+        if drift is None:
+            return static_feats
+        mean = drift.get("mean", [])
+        std = drift.get("std", [])
+        if not mean or not std:
+            return static_feats
+        return [(v - m) / s for v, m, s in zip(static_feats, mean, std)]
 
     def load_model(self, patch_id: int) -> bool:
         import json
@@ -59,12 +71,12 @@ class LivePredictor:
                     nhead=schema.get("nhead", 4),
                     num_layers=schema.get("num_layers", 3),
                     num_static_features=schema.get("n_static_features", 61),
-                    num_dynamic_features=schema.get("n_dynamic_features", 35),
+                    num_dynamic_features=schema.get("n_dynamic_features", 30),
                     max_seq_len=schema.get("max_seq_len", 25),
                     dropout=schema.get("dropout", 0.3),
                     transformer_dropout=schema.get("transformer_dropout", 0.1),
                     static_hidden=schema.get("static_hidden", 64),
-                    dynamic_hidden=schema.get("dynamic_hidden", 32),
+                    dynamic_hidden=schema.get("dynamic_hidden", 24),
                     fusion_hidden=schema.get("fusion_hidden", 64),
                     max_patch_id=200,
                 )
@@ -72,6 +84,7 @@ class LivePredictor:
                 model.eval()
                 self._models[patch_id] = model
                 self._schemas[patch_id] = schema
+                self._static_drift[patch_id] = schema.get("drift_stats")
                 return True
             except Exception:
                 logger.exception("Failed to load live model for patch %s", patch_id)
@@ -86,6 +99,7 @@ class LivePredictor:
         max_seq_len = schema.get("max_seq_len", 25)
         pad_h = heroes[:max_seq_len] + [0] * max(0, max_seq_len - len(heroes))
         pad_a = actions[:max_seq_len] + [0] * max(0, max_seq_len - len(actions))
+        static_feats = self._normalize_static(static_feats, patch_id)
         t_h = torch.tensor([pad_h], dtype=torch.long)
         t_a = torch.tensor([pad_a], dtype=torch.long)
         t_s = torch.tensor([static_feats], dtype=torch.float32)
@@ -121,6 +135,7 @@ class LivePredictor:
         max_seq_len = schema.get("max_seq_len", 25)
         pad_h = heroes[:max_seq_len] + [0] * max(0, max_seq_len - len(heroes))
         pad_a = actions[:max_seq_len] + [0] * max(0, max_seq_len - len(actions))
+        static_feats = self._normalize_static(static_feats, patch_id)
         t_h = torch.tensor([pad_h], dtype=torch.long)
         t_a = torch.tensor([pad_a], dtype=torch.long)
         t_s = torch.tensor([static_feats], dtype=torch.float32)
@@ -149,7 +164,7 @@ def fetch_match_state(match_id: int) -> dict | None:
 
 
 def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str, float]:
-    """Compute 45 dynamic features from OpenDota match JSON."""
+    """Compute 30 dynamic features from OpenDota match JSON."""
     radiant_gold_adv = match_data.get("radiant_gold_adv", [])
     radiant_xp_adv = match_data.get("radiant_xp_adv", [])
     gold_adv = radiant_gold_adv[current_minute] if current_minute < len(radiant_gold_adv) else 0
@@ -162,14 +177,6 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
     r_bkb = d_bkb = r_blink = d_blink = r_aghs = d_aghs = r_rapier = d_rapier = 0
     r_buybacks = d_buybacks = 0
     r_neutrals = d_neutrals = 0
-    r_gold_t = []
-    d_gold_t = []
-    r_save = d_save = r_aura = d_aura = 0
-    r_runes = d_runes = 0
-    r_dewards = d_dewards = 0
-
-    _SAVE_ITEMS = {"glimmer_cape", "force_staff", "eul_scepter", "ghost_scepter", "aeon_disk"}
-    _AURA_ITEMS = {"pipe_of_insight", "crimson_guard", "guardian_greaves", "vladmir", "mekansm", "assault"}
 
     for player in match_data.get("players", []):
         is_rad = player.get("player_slot", 0) < 128
@@ -192,7 +199,7 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
                 if obs.get("y", 128) < 128:
                     d_deep += 1
 
-        # Purchases (BKB, Blink, Aghs, Rapier, Save, Aura)
+        # Purchases (BKB, Blink, Aghs, Rapier)
         for purchase in player.get("purchase_log", []):
             if purchase.get("time", 0) > current_minute * 60:
                 continue
@@ -209,12 +216,6 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
             elif key == "rapier":
                 if is_rad: r_rapier += 1
                 else: d_rapier += 1
-            elif key in _SAVE_ITEMS:
-                if is_rad: r_save += 1
-                else: d_save += 1
-            elif key in _AURA_ITEMS:
-                if is_rad: r_aura += 1
-                else: d_aura += 1
 
         # Buybacks
         for bb in player.get("buyback_log", []):
@@ -223,37 +224,12 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
             if is_rad: r_buybacks += 1
             else: d_buybacks += 1
 
-        # Permanent buffs (scaling threats) — NOTE: permanent_buffs show end-of-match
-        # stack counts in OpenDota JSON. No time field available for filtering.
-        # Set to 0.0 to prevent outcome leakage.
-
         # Neutral items
         for ni in player.get("neutral_item_history", []):
             if ni.get("time", 0) > current_minute * 60:
                 continue
             if is_rad: r_neutrals += 1
             else: d_neutrals += 1
-
-        # NOTE: stuns, teamfight_participation, tower_damage are end-of-match
-        # totals from OpenDota — using them here would leak the final outcome.
-        # These features are intentionally set to 0.0 in the feature dict below.
-
-        # Gold timeline (for carry % and support NW)
-        gt = player.get("gold_t", [])
-        hero_gold = gt[current_minute] if current_minute < len(gt) else 0
-        if is_rad: r_gold_t.append(hero_gold)
-        else: d_gold_t.append(hero_gold)
-
-        # Dewards
-        r_dewards += (player.get("observer_kills", 0) or 0) + (player.get("sentry_kills", 0) or 0) if is_rad else 0
-        d_dewards += (player.get("observer_kills", 0) or 0) + (player.get("sentry_kills", 0) or 0) if not is_rad else 0
-
-        # Runes
-        for rune in player.get("runes_log", []):
-            if rune.get("time", 0) > current_minute * 60:
-                continue
-            if is_rad: r_runes += 1
-            else: d_runes += 1
 
     # --- Objectives ---
     r_t1 = d_t1 = r_t2 = d_t2 = r_t3 = d_t3 = r_t4 = d_t4 = 0
@@ -295,7 +271,6 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
 
     # --- Teamfights ---
     r_tf_wins = d_tf_wins = 0
-    tf_gold_swing = tf_xp_swing = 0.0
     for tf in match_data.get("teamfights", []):
         tf_time = tf.get("start", 0)
         if tf_time > current_minute * 60:
@@ -312,13 +287,6 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
                 if pdata.get("gold_delta", 0) > 0:
                     d_tf_wins += 1
                     break
-        # Teamfight swing (last minute only)
-        if tf_time >= (current_minute - 1) * 60:
-            if isinstance(players, list):
-                for pid in range(5):
-                    pdata = players[pid] if pid < len(players) and isinstance(players[pid], dict) else {}
-                    tf_gold_swing += pdata.get("gold_delta", 0)
-                    tf_xp_swing += pdata.get("xp_delta", 0)
 
     # --- Aegis ---
     r_aegis = d_aegis = 0
@@ -355,24 +323,6 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
     prev3_g = radiant_gold_adv[current_minute - 3] if current_minute >= 3 and current_minute - 3 < len(radiant_gold_adv) else 0
     prev3_x = radiant_xp_adv[current_minute - 3] if current_minute >= 3 and current_minute - 3 < len(radiant_xp_adv) else 0
 
-    # --- Carry / Support NW ---
-    r_gold_t.sort()
-    d_gold_t.sort()
-    r_total = sum(r_gold_t) if r_gold_t else 1
-    d_total = sum(d_gold_t) if d_gold_t else 1
-    r_max = r_gold_t[-1] if r_gold_t else 0
-    d_max = d_gold_t[-1] if d_gold_t else 0
-    r_carry_pct = r_max / r_total if r_total > 0 else 0.2
-    d_carry_pct = d_max / d_total if d_total > 0 else 0.2
-    r_support_nw = sum(r_gold_t[:2]) if len(r_gold_t) >= 2 else 0
-    d_support_nw = sum(d_gold_t[:2]) if len(d_gold_t) >= 2 else 0
-
-    # --- CC Effectiveness ---
-    # Placeholder: stuns/tf_participation are end-of-match totals from OpenDota.
-    # Cannot reliably compute per-minute CC without time-series data.
-    r_cc = 0.0
-    d_cc = 0.0
-
     # --- Mega Creeps ---
     mega_r = 1.0 if (d_melee + d_range) >= 6 else 0.0
     mega_d = 1.0 if (r_melee + r_range) >= 6 else 0.0
@@ -406,21 +356,6 @@ def compute_dynamic_features(match_data: dict, current_minute: int) -> dict[str,
         "mega_creeps_dire": mega_d,
         "courier_lost_diff": float(r_couriers - d_couriers),
         "aegis_diff": float(r_aegis - d_aegis),
-        "rad_carry_nw_pct": r_carry_pct,
-        "dire_carry_nw_pct": d_carry_pct,
-        "carry_farm_diff": r_carry_pct - d_carry_pct,
-        "support_nw_diff": float(r_support_nw - d_support_nw),
-        "radiant_cs_adv": 0.0,
-        "save_item_diff": float(r_save - d_save),
-        "aura_item_diff": float(r_aura - d_aura),
-        "dewards_diff": float(r_dewards - d_dewards),
         "deep_ward_diff": float(r_deep - d_deep),
-        "rune_control_diff": float(r_runes - d_runes),
-        "tf_gold_swing_1m": tf_gold_swing,
-        "tf_xp_swing_1m": tf_xp_swing,
-        "map_confinement_diff": 0.0,
-        "scaling_threat_diff": 0.0,
-        "cc_effectiveness_diff": 0.0,
         "neutral_tier_diff": float(r_neutrals - d_neutrals),
-        "tower_damage_diff": 0.0,
     }
