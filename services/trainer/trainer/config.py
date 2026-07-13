@@ -7,6 +7,10 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from dotenv import load_dotenv
+
+# Load local .env file if running natively outside of Docker (e.g. Windows GPU Node)
+load_dotenv()
 
 
 @dataclass
