@@ -56,6 +56,30 @@ class GreedyDraftBot:
         # Valid heroes: those with >0 games in baseline cache
         self.valid_heroes = state_builder.cache.valid_hero_ids
 
+    def _filter_valid_composition(
+        self, available_heroes: list[int], team_picks: list[int]
+    ) -> list[int]:
+        """Prevent the bot from evaluating comps that exceed 3 cores or 2 supports."""
+        if len(team_picks) == 0:
+            return available_heroes
+
+        current_cores = sum(
+            1 for h in team_picks
+            if self.state_builder.cache.get_baseline(h).get("avg_gpm", 0.0) > 420.0
+        )
+        current_supports = len(team_picks) - current_cores
+
+        filtered = []
+        for h in available_heroes:
+            is_core = self.state_builder.cache.get_baseline(h).get("avg_gpm", 0.0) > 420.0
+            if is_core and current_cores >= 3:
+                continue   # no 4th carry
+            if not is_core and current_supports >= 2:
+                continue   # no 3rd support
+            filtered.append(h)
+
+        return filtered if filtered else available_heroes
+
     @torch.no_grad()
     def suggest_next_action(
         self,
@@ -102,6 +126,12 @@ class GreedyDraftBot:
         """
         # 1. Determine available heroes
         available_heroes = [h for h in self.valid_heroes if h not in current_heroes]
+
+        # 1b. Composition constraint: prevent 5-carry OOD drafts on pick turns
+        if is_pick:
+            team_picks = radiant_picks if is_radiant_turn else dire_picks
+            available_heroes = self._filter_valid_composition(available_heroes, team_picks)
+
         batch_size = len(available_heroes)
         seq_len = len(current_heroes) + 1
 

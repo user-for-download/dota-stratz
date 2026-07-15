@@ -103,6 +103,16 @@ HERO_NAMES = {
 }
 HERO_IDS = list(HERO_NAMES.keys())
 
+# Define Core/Carry Heroes (Roles 1, 2, and 3).
+# Anyone not in this set is treated as a Support (Roles 4 and 5).
+CORE_HEROES = {
+    1, 2, 4, 6, 8, 10, 11, 12, 13, 15, 16, 17, 18, 19, 21, 22, 23, 25, 28, 29,
+    32, 33, 34, 35, 36, 38, 39, 41, 42, 43, 44, 46, 47, 48, 49, 52, 53, 54, 55,
+    56, 59, 60, 61, 63, 65, 67, 69, 70, 72, 73, 74, 76, 77, 78, 80, 81, 82,
+    89, 93, 94, 95, 96, 97, 98, 99, 104, 106, 108, 109, 113, 114, 120, 126, 129,
+    135, 137, 138, 145, 155
+}
+
 
 # ============================================================
 # 3. CORE SIMULATION ENGINE
@@ -148,22 +158,48 @@ def simulate_draft(team_a, team_b, first_pick_team):
                 "first_pick_team": first_pick_team,
                 "radiant_team_id": TEAMS_DB[rad_team_name],
                 "dire_team_id": TEAMS_DB[dire_team_name],
-                "num_recommendations": 5,
+                "num_recommendations": 30,  # <-- Increased to 30 so we can filter down by role!
                 "run_mcts": is_pick,
             })
             recs = result.get("recommendations", [])
         except Exception:
             recs = []
 
-        valid_recs = [r for r in recs if r["hero_id"] not in taken]
+        # -- ROLE CONSTRAINT LOGIC --
+        my_picks = rad_picks if recommending_team == 0 else dire_picks
+        cores_count = sum(1 for h in my_picks if h in CORE_HEROES)
+        supps_count = len(my_picks) - cores_count
+
+        valid_recs = []
+        for r in recs:
+            hid = r["hero_id"]
+            if hid in taken:
+                continue
+
+            if is_pick:
+                is_core = hid in CORE_HEROES
+                if is_core and cores_count >= 3:
+                    continue  # Stop picking carries!
+                if not is_core and supps_count >= 2:
+                    continue  # Stop picking supports!
+
+            valid_recs.append(r)
 
         if valid_recs:
             if is_pick:
+                # Pick one of the top 2 matching the needed role
                 chosen = random.choice(valid_recs[:2])["hero_id"]
             else:
+                # Always ban the #1 recommended threat
                 chosen = valid_recs[0]["hero_id"]
         else:
+            # Fallback: manually find a hero of the correct role from the remaining pool
             available = [h for h in HERO_IDS if h not in taken]
+            if is_pick:
+                needed_core = cores_count < 3
+                role_pool = [h for h in available if (h in CORE_HEROES) == needed_core]
+                if role_pool:
+                    available = role_pool
             chosen = random.choice(available) if available else 1
 
         taken.add(chosen)

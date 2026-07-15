@@ -230,6 +230,30 @@ class MCTSDraftBot:
             return acting_team_win_prob if last_is_radiant else 1.0 - acting_team_win_prob
         return acting_team_win_prob
 
+    def _filter_valid_composition(
+        self, available_heroes: list[int], team_picks: list[int]
+    ) -> list[int]:
+        """Prevent the bot from exploring comps that exceed 3 cores or 2 supports."""
+        if len(team_picks) == 0:
+            return available_heroes
+
+        current_cores = sum(
+            1 for h in team_picks
+            if self.state_builder.cache.get_baseline(h).get("avg_gpm", 0.0) > 420.0
+        )
+        current_supports = len(team_picks) - current_cores
+
+        filtered = []
+        for h in available_heroes:
+            is_core = self.state_builder.cache.get_baseline(h).get("avg_gpm", 0.0) > 420.0
+            if is_core and current_cores >= 3:
+                continue
+            if not is_core and current_supports >= 2:
+                continue
+            filtered.append(h)
+
+        return filtered if filtered else available_heroes
+
     def search(
         self,
         current_heroes: list[int],
@@ -271,6 +295,12 @@ class MCTSDraftBot:
             draft_format=self.draft_format,
         )
         root.untried_heroes = [h for h in self.valid_heroes if h not in current_heroes]
+
+        # Apply composition constraint for pick turns at root
+        if root.is_pick:
+            team_picks = radiant_picks if root.is_radiant_turn else dire_picks
+            root.untried_heroes = self._filter_valid_composition(root.untried_heroes, team_picks)
+
         random.shuffle(root.untried_heroes)
 
         logger.info(
@@ -296,12 +326,20 @@ class MCTSDraftBot:
                 )
 
                 # Setup untried heroes for the child
-                path_heroes, _, _, _ = self._get_state_from_node(
+                path_heroes, _, path_rad, path_dire = self._get_state_from_node(
                     child_node, current_heroes, current_actions, radiant_picks, dire_picks
                 )
                 child_node.untried_heroes = [
                     h for h in self.valid_heroes if h not in path_heroes
                 ]
+
+                # Apply composition constraint for pick turns in expansion
+                if child_node.is_pick:
+                    child_team_picks = path_rad if child_node.is_radiant_turn else path_dire
+                    child_node.untried_heroes = self._filter_valid_composition(
+                        child_node.untried_heroes, child_team_picks
+                    )
+
                 random.shuffle(child_node.untried_heroes)
 
                 node.children[hero_to_try] = child_node
@@ -367,6 +405,12 @@ class MCTSDraftBot:
             draft_format=self.draft_format,
         )
         root.untried_heroes = [h for h in self.valid_heroes if h not in current_heroes]
+
+        # Apply composition constraint for pick turns at root
+        if root.is_pick:
+            team_picks = radiant_picks if root.is_radiant_turn else dire_picks
+            root.untried_heroes = self._filter_valid_composition(root.untried_heroes, team_picks)
+
         random.shuffle(root.untried_heroes)
 
         for _ in range(iterations):
@@ -385,12 +429,20 @@ class MCTSDraftBot:
                     turn_idx=node.turn_idx + 1,
                     draft_format=self.draft_format,
                 )
-                path_heroes, _, _, _ = self._get_state_from_node(
+                path_heroes, _, path_rad, path_dire = self._get_state_from_node(
                     child_node, current_heroes, current_actions, radiant_picks, dire_picks
                 )
                 child_node.untried_heroes = [
                     h for h in self.valid_heroes if h not in path_heroes
                 ]
+
+                # Apply composition constraint for pick turns in expansion
+                if child_node.is_pick:
+                    child_team_picks = path_rad if child_node.is_radiant_turn else path_dire
+                    child_node.untried_heroes = self._filter_valid_composition(
+                        child_node.untried_heroes, child_team_picks
+                    )
+
                 random.shuffle(child_node.untried_heroes)
                 node.children[hero_to_try] = child_node
                 node = child_node
