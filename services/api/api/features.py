@@ -168,7 +168,10 @@ def pre_fetch_batch(
     ``fetch_h2h``, and ``fetch_hero_draft_slot_batch`` calls
     with 7 batched queries.
     """
-    baselines = db_.fetch_baselines_batch(patch_id, hero_ids) if hero_ids else {}
+    all_baseline_heroes = set(hero_ids)
+    if ctx:
+        all_baseline_heroes.update(ctx.ally_picks)
+    baselines = db_.fetch_baselines_batch(patch_id, list(all_baseline_heroes)) if all_baseline_heroes else {}
     team_hero_agg = (
         db_.fetch_team_hero_agg_batch(patch_id, team_id, hero_ids)
         if team_id is not None and hero_ids

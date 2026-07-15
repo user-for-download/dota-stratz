@@ -2,7 +2,8 @@
 
 Runs random rollouts for average-case analysis, PLUS an Adversarial Minimax
 (Paranoia) pass to detect devastating last-pick counters ("Cheese" heroes).
-Applies a Macro Composition Penalty to prevent 4-carry or 4-support drafts.
+Composition penalties are inherited from the base policy in predictor.py
+so they are not duplicated here.
 """
 
 import logging
@@ -43,16 +44,14 @@ def run_monte_carlo_rollouts(
     max_seq_len = schema.get("max_seq_len", 25)
 
     # Pre-fetch tabular features for team comparison (static across simulations)
+    # Important: Set recommending_team=ctx.recommending_team so pre_fetch_batch gets the correct ally_picks' baselines
     dummy_ctx = DraftContext(
-        turn=11, recommending_team=0, is_pick_turn=False,
+        turn=11, recommending_team=ctx.recommending_team, is_pick_turn=False,
         radiant_picks=list(ctx.radiant_picks), dire_picks=list(ctx.dire_picks),
     )
     batch_data = pre_fetch_batch(patch_id, [1], radiant_team_id, dire_team_id, dummy_ctx)
     base_fv = build_feature_vector(1, dummy_ctx, patch_id, batch_data, schema, {}, schema["max_hero_id"])
     base_tabular = base_fv[:num_continuous]
-
-    # Fetch baselines for already-picked heroes (for macro composition checks)
-    taken_baselines = db_.fetch_baselines_batch(patch_id, list(ctx.all_taken)) if ctx.all_taken else {}
 
     batch_h, batch_a, batch_f, batch_cid = [], [], [], []
     is_worst_case_flag = []
@@ -150,49 +149,12 @@ def run_monte_carlo_rollouts(
         wc = worst_case_scores[cid]
         worst_case_win_rate = min(wc) if wc else mc_avg
 
-        # --- MACRO COMPOSITION PENALTY (ROLES & FARM STARVATION) ---
-        is_rad = ctx.recommending_team == 0
-        ally_picks = ctx.radiant_picks if is_rad else ctx.dire_picks
-
-        def _get_gpm(h_id):
-            row = batch_data.baselines.get(h_id) or taken_baselines.get(h_id) or {}
-            val = row.get("avg_gpm", 440.0)
-            return float(val) if val is not None else 440.0
-
-        cand_gpm = _get_gpm(cid)
-        ally_gpms = [_get_gpm(h) for h in ally_picks]
-
-        current_cores = sum(1 for g in ally_gpms if g > 440.0)
-        current_supps = sum(1 for g in ally_gpms if g <= 440.0)
-
-        is_core = cand_gpm > 440.0
-        is_supp = cand_gpm <= 440.0
-
-        current_total_gpm = sum(ally_gpms) + cand_gpm
-        remaining_slots = max(0, 4 - len(ally_picks))
-        projected_gpm = current_total_gpm + (430.0 * remaining_slots)
-
-        comp_penalty = 0.0
-        comp_reason = None
-
-        # Hard Role Limits (Extreme Penalty to completely forbid)
-        if is_core and current_cores >= 3:
-            comp_penalty += 0.80
-            comp_reason = "Draft Invalid: Too Many Cores (>3)"
-        elif is_supp and current_supps >= 2:
-            comp_penalty += 0.80
-            comp_reason = "Draft Invalid: Too Many Supports (>2)"
-
-        # Overall Farm Budget (Soft Penalty)
-        if projected_gpm > 2450.0:
-            comp_penalty += 0.10 + ((projected_gpm - 2450.0) / 500.0)
-            if not comp_reason: comp_reason = "Farm Starved"
-        elif projected_gpm < 2000.0:
-            comp_penalty += 0.10 + ((2000.0 - projected_gpm) / 500.0)
-            if not comp_reason: comp_reason = "No Scaling"
+        comp_penalty = cand.get("comp_penalty_value", 0.0)
 
         # 40% Base + 40% Average Rollouts + 20% Worst-Case Paranoia
-        blended = (cand["score"] * 0.40) + (mc_avg * 0.40) + (worst_case_win_rate * 0.20)
+        # (Using raw_score so we do not double-penalize)
+        base_sc = cand.get("raw_score", cand.get("score", 0.0))
+        blended = (base_sc * 0.40) + (mc_avg * 0.40) + (worst_case_win_rate * 0.20)
 
         # Hard-veto if worst-case enemy counter drops WR below 35%
         if worst_case_win_rate < 0.35:
@@ -203,9 +165,6 @@ def run_monte_carlo_rollouts(
         cand["lookahead_score"] = round(blended, 4)
         cand["mc_win_probability"] = round(mc_avg, 4)
         cand["worst_case_nemesis_wr"] = round(worst_case_win_rate, 4)
-
-        if comp_penalty > 0:
-            cand["comp_penalty"] = comp_reason
 
         if progress_cb:
             progress_cb({

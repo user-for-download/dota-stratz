@@ -59,6 +59,12 @@ class HeroScore(BaseModel):
 
     hero_id: int = Field(..., description="Hero ID")
     score: float = Field(..., description="Model score (higher = better for the recommending team)")
+    raw_score: float | None = Field(None, description="Raw prediction score before penalties/boosts")
+    lookahead_score: float | None = Field(None, description="MCTS blended score")
+    comp_penalty_value: float | None = Field(None, description="Penalty applied to score")
+    comp_penalty: str | None = Field(None, description="Reason for composition penalty (if any)")
+    mc_win_probability: float | None = Field(None, description="Monte Carlo average win probability")
+    worst_case_nemesis_wr: float | None = Field(None, description="Worst-case enemy counter win probability")
     pick_probability: float | None = Field(None, description="Estimated pick probability (0-1)")
     win_probability: float | None = Field(None, description="Estimated win probability (0-1)")
     team_games: int | None = Field(None, description="Team's games on this hero")

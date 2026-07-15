@@ -145,6 +145,20 @@ class Predictor:
 
         batch = pre_fetch_batch(patch_id, eligible, team_id, enemy_team_id, eval_ctx, account_id)
 
+        # Precompute Macro Composition logic
+        eval_ally_picks = eval_ctx.ally_picks
+        
+        ally_gpms = []
+        for ah in eval_ally_picks:
+            ab = batch.baselines.get(ah, {})
+            val = ab.get("avg_gpm", 440.0)
+            ally_gpms.append(float(val) if val is not None else 440.0)
+            
+        current_cores = sum(1 for g in ally_gpms if g > 440.0)
+        current_supps = sum(1 for g in ally_gpms if g <= 440.0)
+        current_total_gpm = sum(ally_gpms)
+        remaining_slots = max(0, 4 - len(eval_ally_picks))
+
         # Build base sequence from draft history
         sorted_draft = sorted(draft_slots, key=lambda x: x.order)
         base_heroes = [d.hero_id for d in sorted_draft]
@@ -175,7 +189,7 @@ class Predictor:
             logits = model(t_h, t_a, t_f, t_p)
             probs = torch.sigmoid(logits).numpy()
 
-        # Build recommendations with team-hero boost
+        # Build recommendations with team-hero boost and Composition Penalties
         recs = []
         for i, hid in enumerate(eligible):
             eval_team_wr = float(probs[i])
@@ -193,11 +207,45 @@ class Predictor:
                 elif twr >= 0.70 and tg >= 3: sc = min(1.0, sc + 0.15); boosted = True
                 elif twr >= 0.65 and tg >= 3: sc = min(1.0, sc + 0.10); boosted = True
 
+            raw_sc = sc
+
+            # --- MACRO COMPOSITION PENALTY ---
+            comp_penalty = 0.0
+            comp_reason = None
+            
+            cand_bl = batch.baselines.get(hid, {})
+            cand_gpm = cand_bl.get("avg_gpm", 440.0)
+            if cand_gpm is None: cand_gpm = 440.0
+            cand_gpm = float(cand_gpm)
+            
+            is_core = cand_gpm > 440.0
+            is_supp = cand_gpm <= 440.0
+            
+            if is_core and current_cores >= 3:
+                comp_penalty += 0.80
+                comp_reason = "Draft Invalid: Too Many Cores (>3)"
+            elif is_supp and current_supps >= 2:
+                comp_penalty += 0.80
+                comp_reason = "Draft Invalid: Too Many Supports (>2)"
+                
+            projected_gpm = current_total_gpm + cand_gpm + (430.0 * remaining_slots)
+            if projected_gpm > 2450.0:
+                comp_penalty += 0.10 + ((projected_gpm - 2450.0) / 500.0)
+                if not comp_reason: comp_reason = "Farm Starved"
+            elif projected_gpm < 2000.0:
+                comp_penalty += 0.10 + ((2000.0 - projected_gpm) / 500.0)
+                if not comp_reason: comp_reason = "No Scaling"
+                
+            sc -= comp_penalty
+
             if boosted:
-                display_wr = sc
+                display_wr = raw_sc
 
             recs.append({
                 "hero_id": hid, "score": sc,
+                "raw_score": raw_sc,
+                "comp_penalty_value": comp_penalty,
+                "comp_penalty": comp_reason,
                 "pick_probability": round(sc, 4), "win_probability": round(display_wr, 4),
                 "team_games": int(th.get("games") or 0) if th else 0,
                 "team_win_rate": round(th.get("win_rate") or 0, 4) if th else None,
