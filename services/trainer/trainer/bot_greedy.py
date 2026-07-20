@@ -63,15 +63,16 @@ class GreedyDraftBot:
         if len(team_picks) == 0:
             return available_heroes
 
+        threshold = self.state_builder.cache.core_gpm_threshold
         current_cores = sum(
             1 for h in team_picks
-            if self.state_builder.cache.get_baseline(h).get("avg_gpm", 0.0) > 420.0
+            if self.state_builder.cache.get_baseline(h).get("avg_gpm", 0.0) > threshold
         )
         current_supports = len(team_picks) - current_cores
 
         filtered = []
         for h in available_heroes:
-            is_core = self.state_builder.cache.get_baseline(h).get("avg_gpm", 0.0) > 420.0
+            is_core = self.state_builder.cache.get_baseline(h).get("avg_gpm", 0.0) > threshold
             if is_core and current_cores >= 3:
                 continue   # no 4th carry
             if not is_core and current_supports >= 2:

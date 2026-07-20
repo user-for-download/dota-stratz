@@ -62,10 +62,10 @@ class TestChronologicalSplit:
         assert n_val_matches == 4, f"Expected 4 val matches, got {n_val_matches}"
         assert n_train_matches == 16, f"Expected 16 train matches, got {n_train_matches}"
 
-        # 16 matches × 5 slots × 2 (symmetry augmentation) = 160 prefix sequences
-        assert metadata["n_train_sequences"] == 16 * 5 * 2
-        # 4 matches × 5 slots × 2 = 40 prefix sequences
-        assert metadata["n_val_sequences"] == 4 * 5 * 2
+        # 16 matches × 5 slots = 80 prefix sequences
+        assert metadata["n_train_sequences"] == 16 * 5
+        # 4 matches × 5 slots = 20 prefix sequences
+        assert metadata["n_val_sequences"] == 4 * 5
 
     def test_datasets_are_tensorized(self, trainer_config, mock_engine, synthetic_match_df):
         """Train and val are pre-tensorized DraftSequenceDataset instances."""

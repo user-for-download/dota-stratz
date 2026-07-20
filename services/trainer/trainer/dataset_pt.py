@@ -45,18 +45,11 @@ class DraftSequenceDataset(Dataset):
 
 
 def _build_augmented_data(df, agg_cols):
-    """Prefix Augmentation + Symmetry: 1 match → 2N sequences (one per draft step, mirrored).
+    """Prefix Augmentation: 1 match → N sequences (one per draft step).
 
     Action tokens: 1=RadBan, 2=DireBan, 3=RadPick, 4=DirePick.
-    Symmetry: mirrors Radiant↔Dire to double data and prevent Radiant bias.
     """
     heroes_seqs, actions_seqs, tabular_feats, patches, labels = [], [], [], [], []
-
-    # Action mirror map: swap Radiant↔Dire
-    action_map = {1: 2, 2: 1, 3: 4, 4: 3}
-
-    # Find the index of the 'team' column to flip it in mirrored samples
-    team_col_idx = agg_cols.index("team") if "team" in agg_cols else -1
 
     for _, group in df.groupby("match_id", sort=False):
         mh = group["hero_id"].astype(int).tolist()
@@ -65,27 +58,12 @@ def _build_augmented_data(df, agg_cols):
         mp = int(group["patch_id"].iloc[0])
         ml = make_target(group).tolist()
 
-        # Mirrored sequence (swap Radiant↔Dire)
-        mirrored_actions = [action_map[a] for a in ma]
-        mirrored_labels = [1.0 - l for l in ml]
-
         for i in range(1, len(group) + 1):
-            # Original sequence
             heroes_seqs.append(mh[:i])
             actions_seqs.append(ma[:i])
             tabular_feats.append(mt[i - 1])
             patches.append(mp)
             labels.append(ml[i - 1])
-
-            # Mirrored sequence (same heroes, flipped actions + target + team column)
-            heroes_seqs.append(mh[:i])
-            actions_seqs.append(mirrored_actions[:i])
-            mirrored_row = mt[i - 1].copy()
-            if team_col_idx >= 0:
-                mirrored_row[team_col_idx] = 1.0 - mirrored_row[team_col_idx]
-            tabular_feats.append(mirrored_row)
-            patches.append(mp)
-            labels.append(mirrored_labels[i - 1])
 
     return heroes_seqs, actions_seqs, tabular_feats, patches, labels
 
