@@ -167,7 +167,7 @@ class Predictor:
 
         # Vectorize: batch all candidates at once
         num_continuous = len(schema["aggregate_columns"])
-        max_seq_len = schema.get("max_seq_len", 25)
+        max_seq_len = min(schema.get("max_seq_len", 25), 25)  # Model has 25 positional embeddings
         batch_h, batch_a, batch_f = [], [], []
 
         for hid in eligible:
@@ -187,7 +187,7 @@ class Predictor:
         t_p = torch.full((len(batch_h),), patch_id, dtype=torch.long)
 
         with torch.no_grad():
-            logits = model(t_h, t_a, t_f, t_p)
+            logits = model(t_h, t_a, t_f)
             probs = torch.sigmoid(logits).numpy()
 
         # Build recommendations with team-hero boost and Composition Penalties
@@ -310,7 +310,7 @@ class Predictor:
             schema = self._schemas[patch_id]
 
         # Build sequence: alternating Rad/Dire picks
-        max_seq_len = schema.get("max_seq_len", 25)
+        max_seq_len = min(schema.get("max_seq_len", 25), 25)  # Model has 25 positional embeddings
         seq_h, seq_a = [], []
         for i in range(5):
             seq_h.extend([radiant_heroes[i], dire_heroes[i]])
@@ -329,10 +329,8 @@ class Predictor:
         fv = build_feature_vector(1, ctx, patch_id, batch, schema, {}, schema["max_hero_id"])
         num_continuous = len(schema["aggregate_columns"])
         t_f = torch.tensor([fv[:num_continuous]], dtype=torch.float32)
-        t_p = torch.tensor([patch_id], dtype=torch.long)
-
         with torch.no_grad():
-            logits = model(t_h, t_a, t_f, t_p)
+            logits = model(t_h, t_a, t_f)
             raw_prob = float(torch.sigmoid(logits)[0])
 
         # Elo post-hoc calibration (NOT a neural network feature)

@@ -43,6 +43,9 @@ class APIConfig:
     pool_min: int = int(os.getenv("API_POOL_MIN", "1"))
     pool_max: int = int(os.getenv("API_POOL_MAX", "8"))
 
+    # ── Elo Calibration ──────────────────────────────────────────────────
+    elo_calibration_weight: float = float(os.getenv("TRAINER_ELO_CALIBRATION_WEIGHT", "0.15"))
+
     @property
     def pg_dsn(self) -> str:
         return (

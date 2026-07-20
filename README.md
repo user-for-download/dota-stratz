@@ -95,6 +95,9 @@ make downv                # Stop and remove volumes (destructive)
 | **Label Fix** | make_target() | Correctly handles Dire team labels (1 - radiant_win) |
 | **Drafting Bots** | PyTorch MCTS | Greedy + MCTS + Interactive bots using DraftBERT as value network |
 | **GPU Support** | CUDA auto-detect | Training auto-moves tensors to GPU when available |
+| **Elo Calibration** | Post-hoc | Team strength adjustment via tanh(elo_diff/400) in predict-match |
+| **Time Decay** | Exponential | Aggregate tables weight recent matches higher (half-life ~14 days) |
+| **Real Rosters** | OpenDota API | Simulation injects actual player account_ids for ph_* features |
 
 ## Configuration
 
@@ -116,6 +119,8 @@ Configuration is managed through `deploy/.env`. See `deploy/.env.example` for al
 | `TRAINER_GPU` | auto | GPU device (auto/cuda/cpu) |
 | `TRAINER_SKIP_AGG` | false | Skip aggregate population |
 | `TRAINER_LOOKBACK_PATCHES` | 2 | Patches for cross-patch lookback |
+| `TRAINER_DECAY_REF_TIME` | 0 (NOW) | Unix timestamp for time-decay reference |
+| `TRAINER_ELO_CALIBRATION_WEIGHT` | 0.15 | Max probability swing from Elo calibration |
 | `TRAINER_DYNAMIC_HIDDEN` | 24 | LiveDraftBERT dynamic MLP hidden dim |
 | `TRAINER_LR_SCHEDULER_PATIENCE` | 1 | Epochs before LR reduction |
 
@@ -157,6 +162,8 @@ Configuration is managed through `deploy/.env`. See `deploy/.env.example` for al
 │   │   │   └── live_predict.py  # Live feature extraction
 │   │   └── tests/
 │   └── frontend/          # Nginx draft predictor UI (:80)
+├── ewc_sim.py             # EWC tournament simulation (real rosters + Elo)
+├── ewc_bracket.json       # Real EWC 2026 bracket data
 ├── shared/go-common/      # Shared Go library (mq, db, proxypool)
 ├── deploy/                # Docker Compose, migrations, monitoring
 ├── Makefile               # Build/deploy/test orchestration

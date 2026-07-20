@@ -81,7 +81,8 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 | Config | Environment variables (`TRAINER_*`) |
 
 **Pipeline stages:**
-1. **Aggregate population** — 7 populator functions compute `ml.*_agg` tables per patch
+1. **Elo computation** — Chronological Elo ratings for all teams (K=32) into `ml.team_elo`
+2. **Aggregate population** — 7 populator functions with **exponential time decay** (half-life ~14 days) compute `ml.*_agg` tables per patch
 2. **Snapshot population** — 7 PIT-safe snapshot tables with cross-patch lookback and SCD state caching
 3. **Training** — PyTorch DraftBERT or LiveDraftBERT models with configurable hyperparameters
 4. **Export** — TorchScript JIT compilation for CPU inference
@@ -125,6 +126,8 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 | GPU device | `TRAINER_GPU` | auto | GPU device (auto/cuda/cpu) |
 | Skip aggregates | `TRAINER_SKIP_AGG` | false | Skip aggregate population |
 | Lookback patches | `TRAINER_LOOKBACK_PATCHES` | 2 | Patches for cross-patch lookback |
+| Decay ref time | `TRAINER_DECAY_REF_TIME` | 0 (NOW) | Unix timestamp for time-decay reference |
+| Elo calibration weight | `TRAINER_ELO_CALIBRATION_WEIGHT` | 0.15 | Max probability swing from Elo calibration |
 
 **Key behaviors:**
 - TorchScript export uses `copy.deepcopy()` before `.cpu()` to avoid severing optimizer references
@@ -145,7 +148,7 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 - `draftbert_compiled_{patch_id}.pt` — TorchScript model for API
 - `draftbert_weights_{patch_id}.pt` — PyTorch state dict for resume
 - `model_patch_{patch_id}_meta.json` — Training metadata
-- `feature_schema_patch_{patch_id}.json` — Feature contract (63 aggregate columns + `max_seq_len`)
+- `feature_schema_patch_{patch_id}.json` — Feature contract (143 aggregate columns + SVD embeddings + `max_seq_len`)
 
 ---
 
@@ -177,7 +180,8 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 6. **Feature drift detection** — Z-scores computed, warnings for anomalous data
 7. **Batched TorchScript inference** — single matrix multiply for all candidates (~2ms)
 8. Team-hero proficiency boosts (65%+ WR → +0.25 score boost)
-9. **Monte Carlo rollouts** — 40 simulations × 15 top candidates, batch-evaluated
+9. **Elo post-hoc calibration** (predict-match only) — `tanh(elo_diff/400) * 0.15` adjusts composition evaluation by team strength
+10. **Monte Carlo rollouts** — 40 simulations × 15 top candidates, batch-evaluated
 10. Returns top-N recommendations with reasoning
 
 **WebSocket streaming (`/ws/draft`):**
@@ -187,7 +191,7 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 - Thread-safe: `asyncio.Semaphore(2)` limits concurrent evaluations
 - `turnId` mechanism prevents stale responses from overwriting current state
 
-**Feature categories (63 aggregate + sequence):**
+**Feature categories (143 aggregate + sequence + SVD embeddings):**
 - `th_*` (14): Team-hero aggregate
 - `ph_*` (15): Player-hero aggregate
 - `tc_*` (2): Team composition (gpm_budget, xpm_budget)
@@ -217,6 +221,8 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 | Proxy | `/api/*` → `dota2-ml-api:8080`, `/ws/*` → WebSocket upgrade |
 
 **Features:**
+- Real roster injection from OpenDota API (player account_ids for ph_* features)
+- Elo-based team strength calibration
 - Team selection (1000 teams) with mutual exclusion
 - First-pick side toggle (changes draft order pattern)
 - Real-time MCTS progress overlay (WebSocket streaming)
@@ -285,10 +291,13 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 | `013_time_series_arrays.sql` | Moves gold_t/xp_t to dedicated table (PK conflict fix) |
 | `014_performance_optimization.sql` | Generated columns + composite indexes for GROUP BY performance |
 | `006_minutely_snapshots.sql` | Minutely snapshot materialized view |
+| `007_team_elo.sql` | `ml.team_elo` table for team strength ratings (chronological Elo) |
 
 ### ML Schema (`ml`)
 
-**7 aggregate tables** (per-patch, re-populated on each training run):
+**Elo table** (`ml.team_elo`): Chronological Elo ratings for all teams. Used for post-hoc calibration in predict-match only.
+
+**7 aggregate tables** (per-patch, re-populated on each training run with exponential time decay):
 - `team_hero_agg`, `player_hero_agg`, `hero_synergy_agg`, `hero_counter_agg`
 - `team_h2h_agg`, `hero_baseline_agg`, `hero_draft_slot_agg`
 
@@ -354,6 +363,9 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 13. **Feature drift detection** — Z-scores at inference, warnings for anomalous data
 14. **Model versioning** — Run IDs, experiment_logs table, versioned model files
 15. **CUDA auto-detect** — Training auto-moves tensors to GPU when available
+16. **Exponential time decay** — Aggregate tables weight recent matches higher (half-life ~14 days)
+17. **Elo post-hoc calibration** — Team strength adjustment in predict-match (not NN feature)
+18. **Real roster injection** — Simulation passes actual player account_ids for ph_* features
 
 ---
 
