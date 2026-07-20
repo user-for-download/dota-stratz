@@ -608,3 +608,19 @@ def fetch_embeddings(
         return hero_embs, team_emb, player_emb, hero_spatial_embs
     finally:
         put_conn(conn)
+
+
+def fetch_elo(team_id: int | None) -> float:
+    """Fetch team Elo rating from ml.team_elo. Returns 1500.0 if not found."""
+    if not team_id:
+        return 1500.0
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT elo FROM ml.team_elo WHERE team_id = %s", (team_id,))
+            row = cur.fetchone()
+            return float(row[0]) if row else 1500.0
+    except Exception:
+        return 1500.0
+    finally:
+        put_conn(conn)

@@ -7,6 +7,7 @@
 - Greedy enabled for Bans (maintains API speed).
 """
 
+import argparse
 import json
 import random
 import time
@@ -21,16 +22,13 @@ import os
 # ============================================================
 # 1. ASYNC LOGGING SETUP
 # ============================================================
-# Create a thread-safe queue for logs
 log_queue = queue.Queue(-1)
 queue_handler = logging.handlers.QueueHandler(log_queue)
 
-# Configure the root logger
 logger = logging.getLogger("EWC2026")
 logger.setLevel(logging.INFO)
 logger.addHandler(queue_handler)
 
-# Configure the listener (runs in a background thread to print logs)
 console_handler = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s.%(msecs)03d | %(levelname)-7s | %(message)s', datefmt='%H:%M:%S')
 console_handler.setFormatter(formatter)
@@ -40,40 +38,42 @@ listener.start()
 # ============================================================
 # 2. CONSTANTS & DATABASE
 # ============================================================
-API = "http://localhost:8080"
-PATCH = 60
 CONFIDENCE_RANGE = 0.125
-MAX_WORKERS = 6  # Must be ≤ API_POOL_MAX (8) to avoid connection exhaustion
 
+# Patch 60 draft pattern — 24 actions, normalized so team 0 = first-pick team
+# Source: services/api/api/draft_state.py DRAFT_PATTERNS[60]
+# Raw: "B1 B1 B0 B0 B1 B0 B0 P1 P0 B1 B1 B0 P0 P1 P1 P0 P0 P1 B1 B0 B1 B0 P1 P0"
+# After parse_draft_pattern normalization (first_team=1 → flip all teams):
 DRAFT_PATTERN = [
-    (0, False), (0, False), (1, False), (1, False),  # Bans
-    (0, False), (1, False), (1, False),
-    (0, True), (1, True),                            # Picks
-    (0, False), (0, False), (1, False),              # Bans
-    (1, True), (0, True), (0, True), (1, True), (1, True), (0, True), # Picks
-    (0, False), (1, False), (0, False), (1, False),  # Bans
-    (0, True), (1, True),                            # Picks
+    (0, False), (0, False), (1, False), (1, False),   # Phase 1: 4 bans
+    (0, False), (1, False), (1, False),                # Phase 1: 3 bans
+    (0, True), (1, True),                              # Phase 1: 2 picks
+    (0, False), (0, False), (1, False),                # Phase 2: 3 bans
+    (1, True), (0, True), (0, True), (1, True),        # Phase 2: 4 picks
+    (1, True), (0, True),                              # Phase 2: 2 picks
+    (0, False), (1, False), (0, False), (1, False),    # Phase 3: 4 bans
+    (0, True), (1, True),                              # Phase 3: 2 picks
 ]
+assert len(DRAFT_PATTERN) == 24, f"Draft pattern must have 24 actions, got {len(DRAFT_PATTERN)}"
 
 TEAMS_DB = {
     "Team Spirit": 7119388, "1w": 10182357, "PVISION": 9824702,
     "Aurora Gaming": 9467224, "Xtreme Gaming": 8261500, "Team Yandex": 9823272,
-    "Team Falcons": 9247354, "Team Liquid": 2163, "BB Team": 9131584,
-    "MOUZ": 9338413, "PTime": 10020555, "OG": 2586976,
-    "Virtus.pro": 1883502, "LGD Gaming": 10150538, "Rune Eaters": 9758040,
-    "Level UP": 8359797, "Poor Rangers": 55, "L1 TEAM": 9303383,
-    "IC x Insanity": 8168562, "Vici Gaming": 726228, "REKONIX": 9828897,
-    "GamerLegion": 9964962, "Team Nemesis": 9691969, "Nigma Galaxy": 7554697
+    "Team Falcons": 9247354, "Team Liquid": 2163, "BoomEsports": 8255888,
+    "MOUZ": 9338413, "PTime": 10182309, "OG": 2586976,
+    "Virtus.pro": 9895392, "LGD Gaming": 10150538, "Rune Eaters": 9895247,
+    "Level UP": 9256405, "Poor Rangers": 55, "L1 TEAM": 10182299,
+    "Inner Circle": 10019843, "Vici Gaming": 726228, "REKONIX": 9828897,
+    "GamerLegion": 9964962, "Team Nemesis": 9691969, "Nigma Galaxy": 10136357
 }
 
 REAL_GROUPS = {
-    "A": ["BB Team", "Team Falcons", "Xtreme Gaming", "GamerLegion", "Rune Eaters", "Poor Rangers"],
-    "B": ["Aurora Gaming", "Nigma Galaxy", "Team Liquid", "PTime", "L1 TEAM", "Level UP"],
-    "C": ["PVISION", "MOUZ", "Team Spirit", "Vici Gaming", "REKONIX", "Team Nemesis"],
-    "D": ["1w", "LGD Gaming", "Team Yandex", "OG", "Virtus.pro", "IC x Insanity"]
+    "A": ["Team Yandex", "1w", "LGD Gaming", "Virtus.pro", "OG", "Inner Circle"],
+    "B": ["PVISION", "Team Spirit", "Vici Gaming", "MOUZ", "REKONIX", "Team Nemesis"],
+    "C": ["Nigma Galaxy", "Aurora Gaming", "Team Liquid", "PTime", "Level UP", "L1 TEAM"],
+    "D": ["Team Falcons", "BoomEsports", "Rune Eaters", "Xtreme Gaming", "GamerLegion", "Poor Rangers"],
 }
 
-# Cleaned Hero Dictionary!
 HERO_NAMES = {
     1: "Anti-Mage", 2: "Axe", 3: "Bane", 4: "Bloodseeker", 5: "Crystal Maiden",
     6: "Drow Ranger", 7: "Earthshaker", 8: "Juggernaut", 9: "Mirana", 10: "Morphling",
@@ -104,16 +104,36 @@ HERO_NAMES = {
 }
 HERO_IDS = list(HERO_NAMES.keys())
 
+# ============================================================
+# ROSTER FETCHING (Real player account_ids from OpenDota)
+# ============================================================
+def fetch_team_rosters():
+    """Fetch real EWC team rosters from OpenDota API."""
+    rosters = {}
+    for team_name, team_id in TEAMS_DB.items():
+        try:
+            url = f"https://api.opendota.com/api/teams/{team_id}/players"
+            req = urllib.request.Request(url, headers={"User-Agent": "EWC-Sim/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                players = json.loads(resp.read())
+            active = sorted(players, key=lambda p: p.get("games_played", 0), reverse=True)[:5]
+            rosters[team_name] = [p["account_id"] for p in active if p.get("account_id")]
+        except Exception:
+            rosters[team_name] = []
+    return rosters
 
 # ============================================================
 # 3. CORE SIMULATION ENGINE
 # ============================================================
-def api_post(endpoint, body, retries=5):
-    data = json.dumps(body).encode()
-    req = urllib.request.Request(f"{API}{endpoint}", data=data, headers={"Content-Type": "application/json"})
-
+def api_post(endpoint, body, api_base, retries=5):
     for attempt in range(retries):
         try:
+            data = json.dumps(body).encode()
+            req = urllib.request.Request(
+                f"{api_base}{endpoint}",
+                data=data,
+                headers={"Content-Type": "application/json"},
+            )
             with urllib.request.urlopen(req, timeout=120) as resp:
                 return json.loads(resp.read())
         except Exception as e:
@@ -129,7 +149,7 @@ def hero_name(hid):
 def format_draft_string(team_name, picks):
     return f"{team_name:<16} | " + ", ".join(hero_name(h) for h in picks)
 
-def simulate_draft(team_a, team_b, first_pick_team):
+def simulate_draft(team_a, team_b, first_pick_team, api_base, patch):
     draft_slots = []
     taken = set()
     rad_picks, dire_picks = [], []
@@ -142,17 +162,28 @@ def simulate_draft(team_a, team_b, first_pick_team):
         recommending_team = team if first_pick_team == 0 else 1 - team
         draft_for_api = [{"hero_id": s[0], "is_pick": s[1], "team": s[2], "order": i + 1} for i, s in enumerate(draft_slots)]
 
+        # Determine which player is picking (pick order -> role mapping)
+        account_id = None
+        if is_pick:
+            my_picks = len(rad_picks) if recommending_team == 0 else len(dire_picks)
+            if my_picks < 5:
+                team_name = rad_team_name if recommending_team == 0 else dire_team_name
+                roster = ROSTERS.get(team_name, [])
+                if my_picks < len(roster):
+                    account_id = roster[my_picks]  # Pick 0->Pos5, Pick 4->Pos1
+
         try:
             result = api_post("/predict", {
-                "patch_id": PATCH,
+                "patch_id": patch,
                 "draft": draft_for_api,
                 "for_team": recommending_team,
                 "first_pick_team": first_pick_team,
                 "radiant_team_id": TEAMS_DB[rad_team_name],
                 "dire_team_id": TEAMS_DB[dire_team_name],
+                "account_id": account_id,
                 "num_recommendations": 5,
                 "run_mcts": is_pick,
-            })
+            }, api_base)
             recs = result.get("recommendations", [])
         except Exception:
             recs = []
@@ -180,26 +211,28 @@ def simulate_draft(team_a, team_b, first_pick_team):
 
     return draft_slots, rad_picks, dire_picks, rad_bans, dire_bans
 
-def simulate_match(team_a, team_b, first_pick_team=0):
+def simulate_match(team_a, team_b, first_pick_team, api_base, patch, confidence_range):
     t_start = time.time()
-    draft_slots, rad_picks, dire_picks, rad_bans, dire_bans = simulate_draft(team_a, team_b, first_pick_team)
+    draft_slots, rad_picks, dire_picks, rad_bans, dire_bans = simulate_draft(
+        team_a, team_b, first_pick_team, api_base, patch
+    )
     rad_team_name = team_a if first_pick_team == 0 else team_b
     dire_team_name = team_b if first_pick_team == 0 else team_a
 
     try:
         result = api_post("/predict-match", {
-            "patch_id": PATCH,
+            "patch_id": patch,
             "radiant_heroes": rad_picks,
             "dire_heroes": dire_picks,
             "radiant_team_id": TEAMS_DB[rad_team_name],
             "dire_team_id": TEAMS_DB[dire_team_name],
-        })
+        }, api_base)
         raw_prob = result["radiant_win_probability"]
     except Exception:
         logger.error("API is unrecoverable. Terminating simulation...")
         os._exit(1)
 
-    noise = random.uniform(-CONFIDENCE_RANGE, CONFIDENCE_RANGE)
+    noise = random.uniform(-confidence_range, confidence_range)
     adjusted_prob = max(0.05, min(0.95, raw_prob + noise))
 
     if first_pick_team == 0:
@@ -218,22 +251,21 @@ def simulate_match(team_a, team_b, first_pick_team=0):
         "compute_time": duration
     }
 
-def sim_series(team_a, team_b, num_games=2, label=""):
+def sim_series(team_a, team_b, num_games, label, api_base, patch, confidence_range):
     logger.info(f"[{label}] MATCH START: {team_a} vs {team_b} (Bo{num_games})")
     wins_a, wins_b = 0, 0
     games = []
-    required_wins = (num_games // 2) + 1 if num_games % 2 != 0 else num_games + 1
+    needed = (num_games // 2) + 1  # Bo2→2, Bo3→2, Bo5→3
 
     for i in range(num_games):
-        if wins_a == required_wins or wins_b == required_wins:
+        if wins_a >= needed or wins_b >= needed:
             break
         fp = i % 2
         rad, dire = (team_a, team_b) if fp == 0 else (team_b, team_a)
 
-        res = simulate_match(rad, dire, first_pick_team=fp)
+        res = simulate_match(rad, dire, fp, api_base, patch, confidence_range)
         games.append(res)
 
-        # Build nice log formatting
         win_str = f"WIN: {res['winner']}"
         conf = f"{res['adjusted_prob']*100:.1f}% (Delta: {res['noise']*100:+.1f}%)"
 
@@ -245,7 +277,11 @@ def sim_series(team_a, team_b, num_games=2, label=""):
         if res["winner"] == team_a: wins_a += 1
         else: wins_b += 1
 
-    winner = team_a if wins_a > wins_b else team_b if wins_b > wins_a else "Draw"
+    # Bo2: allow draw (1-1); Bo3/Bo5: always decisive
+    if num_games == 2 and wins_a == 1 and wins_b == 1:
+        winner = "Draw"
+    else:
+        winner = team_a if wins_a > wins_b else team_b if wins_b > wins_a else "Draw"
     logger.info(f"[{label}] SERIES END : {team_a} {wins_a}-{wins_b} {team_b} -> Advance: {winner}")
     return winner, wins_a, wins_b, games
 
@@ -253,7 +289,7 @@ def sim_series(team_a, team_b, num_games=2, label=""):
 # MULTI-THREADED TOURNAMENT STAGES
 # ============================================================
 
-def run_group_stage(groups, executor):
+def run_group_stage(groups, executor, api_base, patch, confidence_range):
     logger.info(f"{'='*70}")
     logger.info(f" STAGE 1: REAL GROUP STAGE (Bo2 Round Robin)")
     logger.info(f"{'='*70}")
@@ -262,7 +298,10 @@ def run_group_stage(groups, executor):
     for g_name, g_teams in groups.items():
         for i in range(len(g_teams)):
             for j in range(i + 1, len(g_teams)):
-                fut = executor.submit(sim_series, g_teams[i], g_teams[j], 2, f"Group {g_name}")
+                fut = executor.submit(
+                    sim_series, g_teams[i], g_teams[j], 2,
+                    f"Group {g_name}", api_base, patch, confidence_range,
+                )
                 futures[g_name].append((g_teams[i], g_teams[j], fut))
 
     logger.info(f"--> Dispatched all 60 group matches to the AI Thread Pool...")
@@ -291,7 +330,7 @@ def run_group_stage(groups, executor):
 
     return standings
 
-def run_survival_stage(standings, executor):
+def run_survival_stage(standings, executor, api_base, patch, confidence_range):
     logger.info(f"\n{'='*70}")
     logger.info(f" STAGE 2: SURVIVAL STAGE (Bo3)")
     logger.info(f"{'='*70}")
@@ -300,7 +339,10 @@ def run_survival_stage(standings, executor):
     r1_futures = {}
 
     for g_name, g_teams in standings.items():
-        r1_futures[g_name] = executor.submit(sim_series, g_teams[2], g_teams[3], 3, f"LB R1 Grp {g_name}")
+        r1_futures[g_name] = executor.submit(
+            sim_series, g_teams[2], g_teams[3], 3,
+            f"LB R1 Grp {g_name}", api_base, patch, confidence_range,
+        )
 
     r1_results = {}
     for g_name, fut in r1_futures.items():
@@ -309,7 +351,10 @@ def run_survival_stage(standings, executor):
     r2_futures = {}
     for g_name, g_teams in standings.items():
         w1 = r1_results[g_name][0]
-        r2_futures[g_name] = executor.submit(sim_series, g_teams[1], w1, 3, f"LB R2 Grp {g_name}")
+        r2_futures[g_name] = executor.submit(
+            sim_series, g_teams[1], w1, 3,
+            f"LB R2 Grp {g_name}", api_base, patch, confidence_range,
+        )
 
     for g_name, g_teams in standings.items():
         w1, w_a, w_b, games = r1_results[g_name]
@@ -322,7 +367,7 @@ def run_survival_stage(standings, executor):
 
     return survival_winners
 
-def run_playoffs(standings, survival_winners, executor):
+def run_playoffs(standings, survival_winners, executor, api_base, patch, confidence_range):
     logger.info(f"\n{'='*70}")
     logger.info(f" STAGE 3: PLAYOFFS (Single Elimination)")
     logger.info(f"{'='*70}")
@@ -331,10 +376,10 @@ def run_playoffs(standings, survival_winners, executor):
     s_win = {sw["group"]: sw["team"] for sw in survival_winners}
 
     # Quarterfinals
-    qf1_fut = executor.submit(sim_series, g1["A"], s_win["B"], 3, "Quarterfinal 1")
-    qf2_fut = executor.submit(sim_series, g1["C"], s_win["D"], 3, "Quarterfinal 2")
-    qf3_fut = executor.submit(sim_series, g1["B"], s_win["A"], 3, "Quarterfinal 3")
-    qf4_fut = executor.submit(sim_series, g1["D"], s_win["C"], 3, "Quarterfinal 4")
+    qf1_fut = executor.submit(sim_series, g1["A"], s_win["B"], 3, "Quarterfinal 1", api_base, patch, confidence_range)
+    qf2_fut = executor.submit(sim_series, g1["C"], s_win["D"], 3, "Quarterfinal 2", api_base, patch, confidence_range)
+    qf3_fut = executor.submit(sim_series, g1["B"], s_win["A"], 3, "Quarterfinal 3", api_base, patch, confidence_range)
+    qf4_fut = executor.submit(sim_series, g1["D"], s_win["C"], 3, "Quarterfinal 4", api_base, patch, confidence_range)
 
     qf1 = qf1_fut.result()[0]
     qf2 = qf2_fut.result()[0]
@@ -342,8 +387,8 @@ def run_playoffs(standings, survival_winners, executor):
     qf4 = qf4_fut.result()[0]
 
     # Semifinals
-    sf1_fut = executor.submit(sim_series, qf1, qf2, 3, "Semifinal 1")
-    sf2_fut = executor.submit(sim_series, qf3, qf4, 3, "Semifinal 2")
+    sf1_fut = executor.submit(sim_series, qf1, qf2, 3, "Semifinal 1", api_base, patch, confidence_range)
+    sf2_fut = executor.submit(sim_series, qf3, qf4, 3, "Semifinal 2", api_base, patch, confidence_range)
 
     sf1 = sf1_fut.result()[0]
     sf2 = sf2_fut.result()[0]
@@ -353,10 +398,9 @@ def run_playoffs(standings, survival_winners, executor):
     logger.info(f"  GRAND FINAL (Bo5): {sf1} vs {sf2}")
     logger.info(f"{'*'*40}")
 
-    gf_fut = executor.submit(sim_series, sf1, sf2, 5, "Grand Final")
+    gf_fut = executor.submit(sim_series, sf1, sf2, 5, "Grand Final", api_base, patch, confidence_range)
     champion, ga, gb, games = gf_fut.result()
 
-    # Print out the final majestic drafts of the Grand Final
     for i, res in enumerate(games, 1):
         logger.info(f"\n[CHAMPIONSHIP GAME {i}]")
         logger.info(f"    Radiant: {format_draft_string(res['radiant_team'], res['rad_picks'])}")
@@ -364,27 +408,70 @@ def run_playoffs(standings, survival_winners, executor):
         logger.info(f"    Winner : {res['winner']} ({res['adjusted_prob']*100:.1f}%)")
 
     logger.info(f"\n{'*'*70}")
-    logger.info(f"  🏆 ESPORTS WORLD CUP 2026 CHAMPION: {champion.upper()} 🏆")
+    logger.info(f"  ESPORTS WORLD CUP 2026 CHAMPION: {champion.upper()}")
     logger.info(f"{'*'*70}\n")
 
+    return champion
+
+def parse_args():
+    p = argparse.ArgumentParser(description="EWC 2026 AI Draft Simulation")
+    p.add_argument("--api", default="http://localhost:8080", help="API base URL (default: http://localhost:8080)")
+    p.add_argument("--patch", type=int, default=60, help="Patch ID (default: 60)")
+    p.add_argument("--workers", type=int, default=6, help="Thread pool size, max 8 (default: 6)")
+    p.add_argument("--confidence", type=float, default=0.125, help="Noise range ± (default: 0.125)")
+    p.add_argument("--output", "-o", default=None, help="Save JSON results to file")
+    p.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
+    p.add_argument("--verbose", action="store_true", help="Enable debug logging (draft details)")
+    return p.parse_args()
+
 if __name__ == "__main__":
+    args = parse_args()
+
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
+
+    if args.seed is not None:
+        random.seed(args.seed)
+
     # Wait for API to be ready
     try:
-        urllib.request.urlopen(f"{API}/health", timeout=5)
-    except:
+        urllib.request.urlopen(f"{args.api}/health", timeout=5)
+    except Exception:
         logger.error("API is offline! Start it via `uvicorn api.main:app` first.")
         listener.stop()
         sys.exit(1)
 
-    t_start = time.time()
+    logger.info(f"Config: api={args.api} patch={args.patch} workers={args.workers} confidence=±{args.confidence}")
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        standings = run_group_stage(REAL_GROUPS, executor)
-        survival_advancers = run_survival_stage(standings, executor)
-        run_playoffs(standings, survival_advancers, executor)
+    # Fetch real team rosters from OpenDota
+    logger.info("Fetching real team rosters from OpenDota...")
+    ROSTERS = fetch_team_rosters()
+    teams_with_rosters = sum(1 for v in ROSTERS.values() if v)
+    logger.info(f"Loaded rosters for {teams_with_rosters}/{len(TEAMS_DB)} teams")
+
+    t_start = time.time()
+    results = {"config": vars(args), "groups": {}, "survival": [], "playoffs": {}}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(args.workers, 8)) as executor:
+        standings = run_group_stage(REAL_GROUPS, executor, args.api, args.patch, args.confidence)
+        results["groups"] = {
+            g: [{"team": t, "rank": i + 1} for i, t in enumerate(teams)]
+            for g, teams in standings.items()
+        }
+
+        survival_advancers = run_survival_stage(standings, executor, args.api, args.patch, args.confidence)
+        results["survival"] = survival_advancers
+
+        champion = run_playoffs(standings, survival_advancers, executor, args.api, args.patch, args.confidence)
+        results["champion"] = champion
 
     t_elapsed = time.time() - t_start
+    results["elapsed_seconds"] = round(t_elapsed, 1)
     logger.info(f"EWC 2026 AI Simulation completed in {t_elapsed:.0f}s ({t_elapsed/60:.1f}min)")
 
-    # Gracefully shutdown async logger
+    if args.output:
+        with open(args.output, "w") as f:
+            json.dump(results, f, indent=2)
+        logger.info(f"Results saved to {args.output}")
+
     listener.stop()

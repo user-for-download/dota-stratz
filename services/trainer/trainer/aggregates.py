@@ -66,6 +66,7 @@ _VALID_TABLES = frozenset({
     "ml.hero_synergy_snapshot", "ml.hero_counter_snapshot",
     "ml.team_h2h_snapshot", "ml.hero_baseline_snapshot",
     "ml.hero_draft_slot_snapshot",
+    "ml.team_elo",
 })
 
 
@@ -104,6 +105,44 @@ def _match_extra_where(cfg: TrainerConfig, alias: str = "m") -> str:
     return " AND " + " AND ".join(parts)
 
 
+
+
+# ---------------------------------------------------------------------------
+# 0. ml.team_elo (chronological Elo, K=32)
+# ---------------------------------------------------------------------------
+
+def populate_team_elo(cfg: TrainerConfig, conn) -> int:
+    """Compute chronological Elo ratings for all teams from match results."""
+    logger.info("Computing Team Elo ratings chronologically...")
+    with conn.cursor() as cur:
+        cur.execute("CREATE TABLE IF NOT EXISTS ml.team_elo (team_id BIGINT PRIMARY KEY, elo FLOAT)")
+        cur.execute("""
+            SELECT radiant_team_id, dire_team_id, radiant_win
+            FROM matches
+            WHERE radiant_team_id IS NOT NULL AND dire_team_id IS NOT NULL
+              AND radiant_win IS NOT NULL
+            ORDER BY start_time ASC
+        """)
+        matches = cur.fetchall()
+
+    elos: dict[int, float] = {}
+    for rad, dire, r_win in matches:
+        r_elo = elos.get(rad, 1500.0)
+        d_elo = elos.get(dire, 1500.0)
+        e_rad = 1.0 / (1.0 + 10 ** ((d_elo - r_elo) / 400.0))
+        s_rad = 1.0 if r_win else 0.0
+        elos[rad] = r_elo + 32 * (s_rad - e_rad)
+        elos[dire] = d_elo + ((1.0 - s_rad) - (1.0 - e_rad)) * 32
+
+    rows = [(t, e) for t, e in elos.items()]
+    with conn.cursor() as cur:
+        cur.execute("TRUNCATE TABLE ml.team_elo")
+        psycopg2.extras.execute_values(cur, "INSERT INTO ml.team_elo (team_id, elo) VALUES %s", rows)
+    conn.commit()
+    logger.info("populate_team_elo: computed Elo for %d teams", len(rows))
+    return len(rows)
+
+
 # ---------------------------------------------------------------------------
 # 1. ml.team_hero_agg
 # ---------------------------------------------------------------------------
@@ -120,26 +159,41 @@ POPULATE_TEAM_HERO = """
         avg_xp_10=EXCLUDED.avg_xp_10, last_played=EXCLUDED.last_played;
 """
 
+def _decay_expr(cfg: TrainerConfig, alias: str = "m") -> str:
+    """Return SQL expression for exponential time decay weight.
+    Uses cfg.decay_ref_time as reference (0 = NOW()). Half-life ~14 days."""
+    if cfg.decay_ref_time:
+        ref = str(cfg.decay_ref_time)
+    else:
+        ref = "EXTRACT(EPOCH FROM NOW())"
+    return f"EXP(-0.05 * ({ref} - {alias}.start_time) / 86400.0)"
+
+
 def populate_team_hero(cfg: TrainerConfig, conn) -> int:
     patch_id = cfg.patch_id
     pg = cfg.prior_games
     pw = cfg.prior_win_rate
     _clean_patch_rows(conn, "ml.team_hero_agg", patch_id)
     extra = _match_extra_where(cfg, "m")
+    decay = _decay_expr(cfg, "m")
     with conn.cursor() as cur:
         cur.execute(f"""
             WITH team_hero_picks AS (
                 SELECT
                     CASE WHEN p.is_radiant THEN m.radiant_team_id ELSE m.dire_team_id END AS team_id,
                     p.hero_id,
-                    COUNT(*) AS games, SUM(CASE WHEN p.win = 1 THEN 1 ELSE 0 END) AS wins,
-                    AVG(p.gold_per_min)::FLOAT AS avg_gpm, AVG(p.xp_per_min)::FLOAT AS avg_xpm,
-                    AVG(p.kills)::FLOAT AS avg_kills, AVG(p.deaths)::FLOAT AS avg_deaths,
-                    AVG(p.assists)::FLOAT AS avg_assists, AVG(p.firstblood_claimed)::FLOAT AS firstblood_rate,
-                    AVG(p.camps_stacked)::FLOAT AS avg_camps_stacked,
-                    AVG(p.obs_placed + p.sen_placed)::FLOAT AS avg_vision_placed,
-                    COALESCE(AVG(gold10.avg_gold_10)::FLOAT, 0) AS avg_gold_10,
-                    COALESCE(AVG(xp10.avg_xp_10)::FLOAT, 0) AS avg_xp_10,
+                    SUM({decay})::FLOAT AS games,
+                    SUM(CASE WHEN p.win = 1 THEN {decay} ELSE 0 END)::FLOAT AS wins,
+                    SUM(p.gold_per_min * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_gpm,
+                    SUM(p.xp_per_min * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_xpm,
+                    SUM(p.kills * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_kills,
+                    SUM(p.deaths * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_deaths,
+                    SUM(p.assists * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_assists,
+                    SUM(p.firstblood_claimed * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS firstblood_rate,
+                    SUM(p.camps_stacked * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_camps_stacked,
+                    SUM((p.obs_placed + p.sen_placed) * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_vision_placed,
+                    COALESCE(SUM(gold10.avg_gold_10 * {decay}) / NULLIF(SUM({decay}), 0), 0)::FLOAT AS avg_gold_10,
+                    COALESCE(SUM(xp10.avg_xp_10 * {decay}) / NULLIF(SUM({decay}), 0), 0)::FLOAT AS avg_xp_10,
                     MAX(m.start_time) AS last_played
                 FROM matches m INNER JOIN players p ON p.match_id = m.match_id
                 LEFT JOIN LATERAL (SELECT AVG((pta.gold_t ->> 10)::numeric) AS avg_gold_10 FROM player_time_series_arrays pta WHERE pta.match_id = m.match_id AND pta.player_slot = p.player_slot) gold10 ON TRUE
@@ -147,15 +201,17 @@ def populate_team_hero(cfg: TrainerConfig, conn) -> int:
                 WHERE m.patch = %s AND m.radiant_win IS NOT NULL{extra}
                   AND CASE WHEN p.is_radiant THEN m.radiant_team_id ELSE m.dire_team_id END IS NOT NULL
                 GROUP BY team_id, p.hero_id
+                HAVING SUM({decay}) >= 1
             ),
             team_hero_bans AS (
                 SELECT CASE WHEN pb.team = 0 THEN m.radiant_team_id ELSE m.dire_team_id END AS team_id,
-                       pb.hero_id, COUNT(*) AS bans
+                       pb.hero_id, SUM({decay})::FLOAT AS bans
                 FROM matches m INNER JOIN picks_bans pb ON pb.match_id = m.match_id
                 WHERE m.patch = %s AND m.radiant_win IS NOT NULL{extra}
                   AND pb.is_pick = FALSE AND pb.team IN (0, 1) AND pb.hero_id IS NOT NULL
                   AND CASE WHEN pb.team = 0 THEN m.radiant_team_id ELSE m.dire_team_id END IS NOT NULL
                 GROUP BY team_id, pb.hero_id
+                HAVING SUM({decay}) >= 1
             )
             SELECT p.team_id, p.hero_id, p.games, p.wins, COALESCE(b.bans, 0) AS bans,
                    p.avg_gpm, p.avg_xpm, p.avg_kills, p.avg_deaths, p.avg_assists,
@@ -200,25 +256,32 @@ def populate_player_hero(cfg: TrainerConfig, conn) -> int:
     pw = cfg.prior_win_rate
     _clean_patch_rows(conn, "ml.player_hero_agg", patch_id)
     extra = _match_extra_where(cfg, "m")
+    decay = _decay_expr(cfg, "m")
     with conn.cursor() as cur:
         cur.execute(f"""
-            SELECT p.account_id, p.hero_id, COUNT(*) AS games,
-                   SUM(CASE WHEN p.win = 1 THEN 1 ELSE 0 END) AS wins,
-                   AVG(p.gold_per_min)::FLOAT AS avg_gpm, AVG(p.xp_per_min)::FLOAT AS avg_xpm,
-                   AVG(p.kills)::FLOAT AS avg_kills, AVG(p.deaths)::FLOAT AS avg_deaths,
-                   AVG(p.assists)::FLOAT AS avg_assists, AVG(p.kda)::FLOAT AS avg_kda,
+            SELECT p.account_id, p.hero_id,
+                   SUM({decay})::FLOAT AS games,
+                   SUM(CASE WHEN p.win = 1 THEN {decay} ELSE 0 END)::FLOAT AS wins,
+                   SUM(p.gold_per_min * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_gpm,
+                   SUM(p.xp_per_min * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_xpm,
+                   SUM(p.kills * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_kills,
+                   SUM(p.deaths * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_deaths,
+                   SUM(p.assists * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_assists,
+                   SUM(p.kda * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_kda,
                    MODE() WITHIN GROUP (ORDER BY p.lane_role) AS lane_role,
-                   AVG(p.firstblood_claimed)::FLOAT AS firstblood_rate,
-                   AVG(p.camps_stacked)::FLOAT AS avg_camps_stacked,
-                   AVG(p.obs_placed + p.sen_placed)::FLOAT AS avg_vision_placed,
-                   COALESCE(AVG(gold10.avg_gold_10)::FLOAT, 0) AS avg_gold_10,
-                   COALESCE(AVG(xp10.avg_xp_10)::FLOAT, 0) AS avg_xp_10,
+                   SUM(p.firstblood_claimed * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS firstblood_rate,
+                   SUM(p.camps_stacked * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_camps_stacked,
+                   SUM((p.obs_placed + p.sen_placed) * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_vision_placed,
+                   COALESCE(SUM(gold10.avg_gold_10 * {decay}) / NULLIF(SUM({decay}), 0), 0)::FLOAT AS avg_gold_10,
+                   COALESCE(SUM(xp10.avg_xp_10 * {decay}) / NULLIF(SUM({decay}), 0), 0)::FLOAT AS avg_xp_10,
                    MAX(m.start_time) AS last_played
             FROM matches m INNER JOIN players p ON p.match_id = m.match_id
             LEFT JOIN LATERAL (SELECT AVG((pta.gold_t ->> 10)::numeric) AS avg_gold_10 FROM player_time_series_arrays pta WHERE pta.match_id = m.match_id AND pta.player_slot = p.player_slot) gold10 ON TRUE
             LEFT JOIN LATERAL (SELECT AVG((pta.xp_t ->> 10)::numeric) AS avg_xp_10 FROM player_time_series_arrays pta WHERE pta.match_id = m.match_id AND pta.player_slot = p.player_slot) xp10 ON TRUE
             WHERE m.patch = %s AND m.radiant_win IS NOT NULL{extra} AND p.account_id IS NOT NULL
-            GROUP BY p.account_id, p.hero_id ORDER BY p.account_id, p.hero_id
+            GROUP BY p.account_id, p.hero_id
+            HAVING SUM({decay}) >= 1
+            ORDER BY p.account_id, p.hero_id
         """, (patch_id,))
         rows = []
         for r in cur.fetchall():
@@ -249,14 +312,16 @@ def populate_synergy(cfg: TrainerConfig, conn) -> int:
     pw = cfg.prior_win_rate
     _clean_patch_rows(conn, "ml.hero_synergy_agg", patch_id)
     extra = _match_extra_where(cfg, "m")
+    decay = _decay_expr(cfg, "m")
     with conn.cursor() as cur:
         cur.execute(f"""
-            SELECT p1.hero_id AS hero_a, p2.hero_id AS hero_b, COUNT(*) AS games,
-                   SUM(CASE WHEN CASE WHEN p1.is_radiant THEN m.radiant_win ELSE NOT m.radiant_win END THEN 1 ELSE 0 END) AS wins
+            SELECT p1.hero_id AS hero_a, p2.hero_id AS hero_b,
+                   SUM({decay})::FLOAT AS games,
+                   SUM(CASE WHEN CASE WHEN p1.is_radiant THEN m.radiant_win ELSE NOT m.radiant_win END THEN {decay} ELSE 0 END)::FLOAT AS wins
             FROM matches m INNER JOIN players p1 ON p1.match_id = m.match_id
             INNER JOIN players p2 ON p2.match_id = m.match_id AND p2.is_radiant = p1.is_radiant AND p2.hero_id > p1.hero_id
             WHERE m.patch = %s AND m.radiant_win IS NOT NULL{extra}
-            GROUP BY p1.hero_id, p2.hero_id HAVING COUNT(*) >= 3 ORDER BY p1.hero_id, p2.hero_id
+            GROUP BY p1.hero_id, p2.hero_id HAVING SUM({decay}) >= 1 ORDER BY p1.hero_id, p2.hero_id
         """, (patch_id,))
         rows = []
         for r in cur.fetchall():
@@ -287,15 +352,17 @@ def populate_counter(cfg: TrainerConfig, conn) -> int:
     pw = cfg.prior_win_rate
     _clean_patch_rows(conn, "ml.hero_counter_agg", patch_id)
     extra = _match_extra_where(cfg, "m")
+    decay = _decay_expr(cfg, "m")
     with conn.cursor() as cur:
         cur.execute(f"""
-            SELECT p1.hero_id, p2.hero_id AS enemy_hero_id, COUNT(*) AS games,
-                   SUM(CASE WHEN CASE WHEN p1.is_radiant THEN m.radiant_win ELSE NOT m.radiant_win END THEN 1 ELSE 0 END) AS wins,
-                   AVG(p1.kills - p1.deaths)::FLOAT AS avg_kd_diff
+            SELECT p1.hero_id, p2.hero_id AS enemy_hero_id,
+                   SUM({decay})::FLOAT AS games,
+                   SUM(CASE WHEN CASE WHEN p1.is_radiant THEN m.radiant_win ELSE NOT m.radiant_win END THEN {decay} ELSE 0 END)::FLOAT AS wins,
+                   SUM((p1.kills - p1.deaths) * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_kd_diff
             FROM matches m INNER JOIN players p1 ON p1.match_id = m.match_id
             INNER JOIN players p2 ON p2.match_id = m.match_id AND p2.is_radiant != p1.is_radiant
             WHERE m.patch = %s AND m.radiant_win IS NOT NULL{extra}
-            GROUP BY p1.hero_id, p2.hero_id HAVING COUNT(*) >= 3 ORDER BY p1.hero_id, p2.hero_id
+            GROUP BY p1.hero_id, p2.hero_id HAVING SUM({decay}) >= 1 ORDER BY p1.hero_id, p2.hero_id
         """, (patch_id,))
         rows = []
         for r in cur.fetchall():
@@ -369,20 +436,38 @@ def populate_baseline(cfg: TrainerConfig, conn) -> int:
     pw = cfg.prior_win_rate
     _clean_patch_rows(conn, "ml.hero_baseline_agg", patch_id)
     extra = _match_extra_where(cfg, "m")
+    decay = _decay_expr(cfg, "m")
     with conn.cursor() as cur:
         cur.execute(f"""
             WITH hero_picks AS (
-                SELECT p.hero_id, COUNT(*) AS total_picks, SUM(CASE WHEN p.win = 1 THEN 1 ELSE 0 END) AS total_wins,
-                       AVG(p.gold_per_min)::FLOAT AS avg_gpm, AVG(p.xp_per_min)::FLOAT AS avg_xpm,
-                       AVG(p.kills)::FLOAT AS avg_kills, AVG(p.deaths)::FLOAT AS avg_deaths, AVG(p.assists)::FLOAT AS avg_assists,
-                       COALESCE(AVG(gold10.avg_gold_10)::FLOAT, 0) AS avg_gold_10, COALESCE(AVG(xp10.avg_xp_10)::FLOAT, 0) AS avg_xp_10
+                SELECT p.hero_id,
+                       SUM({decay})::FLOAT AS total_picks,
+                       SUM(CASE WHEN p.win = 1 THEN {decay} ELSE 0 END)::FLOAT AS total_wins,
+                       SUM(p.gold_per_min * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_gpm,
+                       SUM(p.xp_per_min * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_xpm,
+                       SUM(p.kills * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_kills,
+                       SUM(p.deaths * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_deaths,
+                       SUM(p.assists * {decay}) / NULLIF(SUM({decay}), 0)::FLOAT AS avg_assists,
+                       COALESCE(SUM(gold10.avg_gold_10 * {decay}) / NULLIF(SUM({decay}), 0), 0)::FLOAT AS avg_gold_10,
+                       COALESCE(SUM(xp10.avg_xp_10 * {decay}) / NULLIF(SUM({decay}), 0), 0)::FLOAT AS avg_xp_10
                 FROM matches m INNER JOIN players p ON p.match_id = m.match_id
                 LEFT JOIN LATERAL (SELECT AVG((pta.gold_t ->> 10)::numeric) AS avg_gold_10 FROM player_time_series_arrays pta WHERE pta.match_id = m.match_id AND pta.player_slot = p.player_slot) gold10 ON TRUE
                 LEFT JOIN LATERAL (SELECT AVG((pta.xp_t ->> 10)::numeric) AS avg_xp_10 FROM player_time_series_arrays pta WHERE pta.match_id = m.match_id AND pta.player_slot = p.player_slot) xp10 ON TRUE
-                WHERE m.patch = %s AND m.radiant_win IS NOT NULL{extra} GROUP BY p.hero_id
+                WHERE m.patch = %s AND m.radiant_win IS NOT NULL{extra}
+                GROUP BY p.hero_id
+                HAVING SUM({decay}) >= 1
             ),
-            hero_bans AS (SELECT pb.hero_id, COUNT(*) AS total_bans FROM matches m INNER JOIN picks_bans pb ON pb.match_id = m.match_id AND pb.is_pick = FALSE WHERE m.patch = %s AND m.radiant_win IS NOT NULL{extra} GROUP BY pb.hero_id),
-            total_matches AS (SELECT COUNT(DISTINCT match_id) AS total FROM matches WHERE patch = %s AND radiant_win IS NOT NULL{extra})
+            hero_bans AS (
+                SELECT pb.hero_id, SUM({decay})::FLOAT AS total_bans
+                FROM matches m INNER JOIN picks_bans pb ON pb.match_id = m.match_id AND pb.is_pick = FALSE
+                WHERE m.patch = %s AND m.radiant_win IS NOT NULL{extra}
+                GROUP BY pb.hero_id
+                HAVING SUM({decay}) >= 1
+            ),
+            total_matches AS (
+                SELECT SUM({decay})::FLOAT AS total
+                FROM matches m WHERE patch = %s AND radiant_win IS NOT NULL{extra}
+            )
             SELECT COALESCE(p.hero_id, b.hero_id) AS hero_id, COALESCE(p.total_picks, 0), COALESCE(p.total_wins, 0), COALESCE(b.total_bans, 0),
                    p.avg_gpm, p.avg_xpm, p.avg_kills, p.avg_deaths, p.avg_assists, p.avg_gold_10, p.avg_xp_10, tm.total
             FROM hero_picks p FULL OUTER JOIN hero_bans b ON b.hero_id = p.hero_id CROSS JOIN total_matches tm ORDER BY hero_id
@@ -416,17 +501,19 @@ def populate_hero_draft_slot(cfg: TrainerConfig, conn) -> int:
     pw = cfg.prior_win_rate
     _clean_patch_rows(conn, "ml.hero_draft_slot_agg", patch_id)
     extra = _match_extra_where(cfg, "m")
+    decay = _decay_expr(cfg, "m")
     with conn.cursor() as cur:
         cur.execute(f"""
-            SELECT ds.hero_id, ds.team_pick_ordinal, COUNT(*) AS games, SUM(CASE WHEN ds.won THEN 1 ELSE 0 END) AS wins
+            SELECT ds.hero_id, ds.team_pick_ordinal, SUM(ds.dw) AS games, SUM(CASE WHEN ds.won THEN ds.dw ELSE 0 END) AS wins
             FROM (
                 SELECT pb.match_id, pb.hero_id, pb.team, pb."order", pb.is_pick,
+                       {decay} AS dw,
                        ROW_NUMBER() OVER (PARTITION BY pb.match_id, pb.team, pb.is_pick ORDER BY pb."order") AS team_pick_ordinal,
                        CASE WHEN (pb.team = 0 AND m.radiant_win) OR (pb.team = 1 AND NOT m.radiant_win) THEN TRUE ELSE FALSE END AS won
                 FROM picks_bans pb INNER JOIN matches m ON m.match_id = pb.match_id
                 WHERE m.patch = %s AND m.radiant_win IS NOT NULL{extra} AND pb.is_pick = TRUE
             ) ds WHERE ds.team_pick_ordinal <= 5
-            GROUP BY ds.hero_id, ds.team_pick_ordinal HAVING COUNT(*) >= 3 ORDER BY ds.hero_id, ds.team_pick_ordinal
+            GROUP BY ds.hero_id, ds.team_pick_ordinal HAVING SUM(ds.dw) >= 1 ORDER BY ds.hero_id, ds.team_pick_ordinal
         """, (patch_id,))
         rows = []
         for r in cur.fetchall():
@@ -903,6 +990,7 @@ def populate_hero_draft_slot_snapshot(cfg, conn) -> int:
 # ---------------------------------------------------------------------------
 
 ALL_POPULATORS = [
+    ("ml.team_elo", populate_team_elo),
     ("ml.team_hero_agg", populate_team_hero), ("ml.player_hero_agg", populate_player_hero),
     ("ml.hero_synergy_agg", populate_synergy), ("ml.hero_counter_agg", populate_counter),
     ("ml.team_h2h_agg", populate_h2h), ("ml.hero_baseline_agg", populate_baseline),

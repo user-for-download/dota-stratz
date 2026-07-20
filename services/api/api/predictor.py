@@ -13,6 +13,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
+import math
 import torch
 import numpy as np
 
@@ -332,7 +333,16 @@ class Predictor:
 
         with torch.no_grad():
             logits = model(t_h, t_a, t_f, t_p)
-            return float(torch.sigmoid(logits)[0])
+            raw_prob = float(torch.sigmoid(logits)[0])
+
+        # Elo post-hoc calibration (NOT a neural network feature)
+        elo_r = db_.fetch_elo(radiant_team_id)
+        elo_d = db_.fetch_elo(dire_team_id)
+        elo_diff = elo_r - elo_d
+        elo_adjustment = math.tanh(elo_diff / 400.0) * self._cfg.elo_calibration_weight
+        adjusted_prob = max(0.05, min(0.95, raw_prob + elo_adjustment))
+
+        return adjusted_prob
 
     def _build_reasoning(self, hero_id, score, ctx, patch_id,
                          radiant_team_id=None, dire_team_id=None, batch=None):

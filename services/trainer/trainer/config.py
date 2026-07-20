@@ -111,6 +111,15 @@ class TrainerConfig:
     """Comma-separated lobby_type IDs to whitelist (e.g. '7,8' for ranked).
     Empty string means no lobby_type filter."""
 
+    # ── Time decay & Elo ──────────────────────────────────────────────────
+    decay_ref_time: int = int(os.getenv("TRAINER_DECAY_REF_TIME", "0"))
+    """Unix timestamp for time-decay reference point. 0 = use
+    EXTRACT(EPOCH FROM NOW()) at query time."""
+
+    elo_calibration_weight: float = float(os.getenv("TRAINER_ELO_CALIBRATION_WEIGHT", "0.15"))
+    """Max probability swing from Elo calibration in predict-match (0.0-1.0).
+    elo_adjustment = tanh(elo_diff / 400) * weight."""
+
     @property
     def pg_dsn(self) -> str:
         return (

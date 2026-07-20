@@ -1,0 +1,897 @@
+{
+  "tournament": "Esports World Cup 2026",
+  "league_id": 19785,
+  "total_matches": 157,
+  "champion": "PVISION",
+  "groups": {
+    "A": [
+      {
+        "rank": 1,
+        "team": "Team Yandex",
+        "pts": 13,
+        "w": 4,
+        "d": 1,
+        "l": 0,
+        "gw": 9,
+        "gl": 1
+      },
+      {
+        "rank": 2,
+        "team": "1w",
+        "pts": 10,
+        "w": 3,
+        "d": 1,
+        "l": 1,
+        "gw": 7,
+        "gl": 3
+      },
+      {
+        "rank": 3,
+        "team": "LGD Gaming",
+        "pts": 7,
+        "w": 2,
+        "d": 1,
+        "l": 2,
+        "gw": 5,
+        "gl": 5
+      },
+      {
+        "rank": 4,
+        "team": "Virtus.pro",
+        "pts": 7,
+        "w": 2,
+        "d": 1,
+        "l": 2,
+        "gw": 5,
+        "gl": 5
+      },
+      {
+        "rank": 5,
+        "team": "OG",
+        "pts": 5,
+        "w": 1,
+        "d": 2,
+        "l": 2,
+        "gw": 4,
+        "gl": 6
+      },
+      {
+        "rank": 6,
+        "team": "Inner Circle",
+        "pts": 0,
+        "w": 0,
+        "d": 0,
+        "l": 5,
+        "gw": 0,
+        "gl": 10
+      }
+    ],
+    "B": [
+      {
+        "rank": 1,
+        "team": "PVISION",
+        "pts": 13,
+        "w": 4,
+        "d": 1,
+        "l": 0,
+        "gw": 9,
+        "gl": 1
+      },
+      {
+        "rank": 2,
+        "team": "Team Spirit",
+        "pts": 11,
+        "w": 3,
+        "d": 2,
+        "l": 0,
+        "gw": 8,
+        "gl": 2
+      },
+      {
+        "rank": 3,
+        "team": "Vici Gaming",
+        "pts": 9,
+        "w": 3,
+        "d": 0,
+        "l": 2,
+        "gw": 6,
+        "gl": 4
+      },
+      {
+        "rank": 4,
+        "team": "MOUZ",
+        "pts": 5,
+        "w": 1,
+        "d": 2,
+        "l": 2,
+        "gw": 4,
+        "gl": 6
+      },
+      {
+        "rank": 5,
+        "team": "REKONIX",
+        "pts": 3,
+        "w": 1,
+        "d": 0,
+        "l": 4,
+        "gw": 2,
+        "gl": 8
+      },
+      {
+        "rank": 6,
+        "team": "Team Nemesis",
+        "pts": 1,
+        "w": 0,
+        "d": 1,
+        "l": 4,
+        "gw": 1,
+        "gl": 9
+      }
+    ],
+    "C": [
+      {
+        "rank": 1,
+        "team": "Nigma Galaxy",
+        "pts": 13,
+        "w": 4,
+        "d": 1,
+        "l": 0,
+        "gw": 9,
+        "gl": 1
+      },
+      {
+        "rank": 2,
+        "team": "Aurora Gaming",
+        "pts": 11,
+        "w": 3,
+        "d": 2,
+        "l": 0,
+        "gw": 8,
+        "gl": 2
+      },
+      {
+        "rank": 3,
+        "team": "Team Liquid",
+        "pts": 8,
+        "w": 2,
+        "d": 2,
+        "l": 1,
+        "gw": 6,
+        "gl": 4
+      },
+      {
+        "rank": 4,
+        "team": "PTime",
+        "pts": 5,
+        "w": 1,
+        "d": 2,
+        "l": 2,
+        "gw": 4,
+        "gl": 6
+      },
+      {
+        "rank": 5,
+        "team": "Level UP",
+        "pts": 3,
+        "w": 1,
+        "d": 0,
+        "l": 4,
+        "gw": 2,
+        "gl": 8
+      },
+      {
+        "rank": 6,
+        "team": "L1 TEAM",
+        "pts": 1,
+        "w": 0,
+        "d": 1,
+        "l": 4,
+        "gw": 1,
+        "gl": 9
+      }
+    ],
+    "D": [
+      {
+        "rank": 1,
+        "team": "Team Falcons",
+        "pts": 13,
+        "w": 4,
+        "d": 1,
+        "l": 0,
+        "gw": 9,
+        "gl": 1
+      },
+      {
+        "rank": 2,
+        "team": "BoomEsports",
+        "pts": 11,
+        "w": 3,
+        "d": 2,
+        "l": 0,
+        "gw": 8,
+        "gl": 2
+      },
+      {
+        "rank": 3,
+        "team": "Rune Eaters",
+        "pts": 6,
+        "w": 1,
+        "d": 3,
+        "l": 1,
+        "gw": 5,
+        "gl": 5
+      },
+      {
+        "rank": 4,
+        "team": "Xtreme Gaming",
+        "pts": 5,
+        "w": 1,
+        "d": 2,
+        "l": 2,
+        "gw": 4,
+        "gl": 6
+      },
+      {
+        "rank": 5,
+        "team": "GamerLegion",
+        "pts": 4,
+        "w": 1,
+        "d": 1,
+        "l": 3,
+        "gw": 3,
+        "gl": 7
+      },
+      {
+        "rank": 6,
+        "team": "Poor Rangers",
+        "pts": 1,
+        "w": 0,
+        "d": 1,
+        "l": 4,
+        "gw": 1,
+        "gl": 9
+      }
+    ]
+  },
+  "bracket": [
+    {
+      "date": "2026-07-07T09:24:39+00:00",
+      "stage": "Group Stage",
+      "team1": "BoomEsports",
+      "team2": "Team Falcons",
+      "score": "1-1",
+      "winner": "Draw",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-07T09:34:17+00:00",
+      "stage": "Group Stage",
+      "team1": "GamerLegion",
+      "team2": "Poor Rangers",
+      "score": "2-0",
+      "winner": "GamerLegion",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-07T09:38:28+00:00",
+      "stage": "Group Stage",
+      "team1": "Rune Eaters",
+      "team2": "Xtreme Gaming",
+      "score": "1-1",
+      "winner": "Draw",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-07T12:18:00+00:00",
+      "stage": "Group Stage",
+      "team1": "L1 TEAM",
+      "team2": "Nigma Galaxy",
+      "score": "0-2",
+      "winner": "Nigma Galaxy",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-07T12:26:15+00:00",
+      "stage": "Group Stage",
+      "team1": "PTime",
+      "team2": "Team Liquid",
+      "score": "1-1",
+      "winner": "Draw",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-07T12:51:00+00:00",
+      "stage": "Group Stage",
+      "team1": "Aurora Gaming",
+      "team2": "Level UP",
+      "score": "2-0",
+      "winner": "Aurora Gaming",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-07T15:06:38+00:00",
+      "stage": "Group Stage",
+      "team1": "MOUZ",
+      "team2": "Team Spirit",
+      "score": "1-1",
+      "winner": "Draw",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-07T15:24:18+00:00",
+      "stage": "Group Stage",
+      "team1": "PVISION",
+      "team2": "Team Nemesis",
+      "score": "2-0",
+      "winner": "PVISION",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-07T18:16:19+00:00",
+      "stage": "Group Stage",
+      "team1": "1w",
+      "team2": "Inner Circle",
+      "score": "2-0",
+      "winner": "1w",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-07T18:47:42+00:00",
+      "stage": "Group Stage",
+      "team1": "OG",
+      "team2": "Team Yandex",
+      "score": "1-1",
+      "winner": "Draw",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-08T09:00:57+00:00",
+      "stage": "Group Stage",
+      "team1": "Rune Eaters",
+      "team2": "Team Falcons",
+      "score": "0-2",
+      "winner": "Team Falcons",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-08T09:05:10+00:00",
+      "stage": "Group Stage",
+      "team1": "BoomEsports",
+      "team2": "Poor Rangers",
+      "score": "2-0",
+      "winner": "BoomEsports",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-08T09:08:23+00:00",
+      "stage": "Group Stage",
+      "team1": "GamerLegion",
+      "team2": "Xtreme Gaming",
+      "score": "0-2",
+      "winner": "Xtreme Gaming",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-08T11:47:00+00:00",
+      "stage": "Group Stage",
+      "team1": "L1 TEAM",
+      "team2": "PTime",
+      "score": "1-1",
+      "winner": "Draw",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-08T11:54:17+00:00",
+      "stage": "Group Stage",
+      "team1": "Level UP",
+      "team2": "Team Liquid",
+      "score": "0-2",
+      "winner": "Team Liquid",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-08T12:31:31+00:00",
+      "stage": "Group Stage",
+      "team1": "Aurora Gaming",
+      "team2": "Nigma Galaxy",
+      "score": "1-1",
+      "winner": "Draw",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-08T14:22:47+00:00",
+      "stage": "Group Stage",
+      "team1": "MOUZ",
+      "team2": "REKONIX",
+      "score": "2-0",
+      "winner": "MOUZ",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-08T14:45:01+00:00",
+      "stage": "Group Stage",
+      "team1": "Team Nemesis",
+      "team2": "Team Spirit",
+      "score": "0-2",
+      "winner": "Team Spirit",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-08T15:50:43+00:00",
+      "stage": "Group Stage",
+      "team1": "PVISION",
+      "team2": "Vici Gaming",
+      "score": "2-0",
+      "winner": "PVISION",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-08T17:13:02+00:00",
+      "stage": "Group Stage",
+      "team1": "LGD Gaming",
+      "team2": "OG",
+      "score": "2-0",
+      "winner": "LGD Gaming",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-08T17:44:13+00:00",
+      "stage": "Group Stage",
+      "team1": "Inner Circle",
+      "team2": "Team Yandex",
+      "score": "0-2",
+      "winner": "Team Yandex",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-08T18:34:01+00:00",
+      "stage": "Group Stage",
+      "team1": "1w",
+      "team2": "Virtus.pro",
+      "score": "2-0",
+      "winner": "1w",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-09T09:02:45+00:00",
+      "stage": "Group Stage",
+      "team1": "Poor Rangers",
+      "team2": "Xtreme Gaming",
+      "score": "1-1",
+      "winner": "Draw",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-09T09:05:35+00:00",
+      "stage": "Group Stage",
+      "team1": "GamerLegion",
+      "team2": "Team Falcons",
+      "score": "0-2",
+      "winner": "Team Falcons",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-09T09:15:12+00:00",
+      "stage": "Group Stage",
+      "team1": "BoomEsports",
+      "team2": "Rune Eaters",
+      "score": "1-1",
+      "winner": "Draw",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-09T11:55:00+00:00",
+      "stage": "Group Stage",
+      "team1": "Aurora Gaming",
+      "team2": "L1 TEAM",
+      "score": "2-0",
+      "winner": "Aurora Gaming",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-09T12:06:28+00:00",
+      "stage": "Group Stage",
+      "team1": "Level UP",
+      "team2": "PTime",
+      "score": "0-2",
+      "winner": "PTime",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-09T12:36:41+00:00",
+      "stage": "Group Stage",
+      "team1": "Nigma Galaxy",
+      "team2": "Team Liquid",
+      "score": "2-0",
+      "winner": "Nigma Galaxy",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-09T14:34:00+00:00",
+      "stage": "Group Stage",
+      "team1": "MOUZ",
+      "team2": "Team Nemesis",
+      "score": "1-1",
+      "winner": "Draw",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-09T14:46:15+00:00",
+      "stage": "Group Stage",
+      "team1": "PVISION",
+      "team2": "REKONIX",
+      "score": "2-0",
+      "winner": "PVISION",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-09T15:26:18+00:00",
+      "stage": "Group Stage",
+      "team1": "Team Spirit",
+      "team2": "Vici Gaming",
+      "score": "2-0",
+      "winner": "Team Spirit",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-09T17:40:25+00:00",
+      "stage": "Group Stage",
+      "team1": "Inner Circle",
+      "team2": "OG",
+      "score": "0-2",
+      "winner": "OG",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-09T17:48:02+00:00",
+      "stage": "Group Stage",
+      "team1": "Team Yandex",
+      "team2": "Virtus.pro",
+      "score": "2-0",
+      "winner": "Team Yandex",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-09T18:16:36+00:00",
+      "stage": "Group Stage",
+      "team1": "1w",
+      "team2": "LGD Gaming",
+      "score": "2-0",
+      "winner": "1w",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-10T09:00:01+00:00",
+      "stage": "Group Stage",
+      "team1": "Poor Rangers",
+      "team2": "Team Falcons",
+      "score": "0-2",
+      "winner": "Team Falcons",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-10T09:01:36+00:00",
+      "stage": "Group Stage",
+      "team1": "GamerLegion",
+      "team2": "Rune Eaters",
+      "score": "1-1",
+      "winner": "Draw",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-10T09:11:02+00:00",
+      "stage": "Group Stage",
+      "team1": "BoomEsports",
+      "team2": "Xtreme Gaming",
+      "score": "2-0",
+      "winner": "BoomEsports",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-10T11:32:02+00:00",
+      "stage": "Group Stage",
+      "team1": "L1 TEAM",
+      "team2": "Team Liquid",
+      "score": "0-2",
+      "winner": "Team Liquid",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-10T11:40:35+00:00",
+      "stage": "Group Stage",
+      "team1": "Aurora Gaming",
+      "team2": "PTime",
+      "score": "2-0",
+      "winner": "Aurora Gaming",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-10T14:12:01+00:00",
+      "stage": "Group Stage",
+      "team1": "Team Nemesis",
+      "team2": "Vici Gaming",
+      "score": "0-2",
+      "winner": "Vici Gaming",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-10T14:42:37+00:00",
+      "stage": "Group Stage",
+      "team1": "MOUZ",
+      "team2": "PVISION",
+      "score": "0-2",
+      "winner": "PVISION",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-10T14:58:27+00:00",
+      "stage": "Group Stage",
+      "team1": "REKONIX",
+      "team2": "Team Spirit",
+      "score": "0-2",
+      "winner": "Team Spirit",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-10T17:08:03+00:00",
+      "stage": "Group Stage",
+      "team1": "1w",
+      "team2": "OG",
+      "score": "1-1",
+      "winner": "Draw",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-10T17:23:19+00:00",
+      "stage": "Group Stage",
+      "team1": "LGD Gaming",
+      "team2": "Team Yandex",
+      "score": "0-2",
+      "winner": "Team Yandex",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-10T17:37:40+00:00",
+      "stage": "Group Stage",
+      "team1": "Inner Circle",
+      "team2": "Virtus.pro",
+      "score": "0-2",
+      "winner": "Virtus.pro",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-11T09:00:15+00:00",
+      "stage": "Group Stage",
+      "team1": "Poor Rangers",
+      "team2": "Rune Eaters",
+      "score": "0-2",
+      "winner": "Rune Eaters",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-11T09:00:55+00:00",
+      "stage": "Group Stage",
+      "team1": "BoomEsports",
+      "team2": "GamerLegion",
+      "score": "2-0",
+      "winner": "BoomEsports",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-11T09:26:04+00:00",
+      "stage": "Group Stage",
+      "team1": "Team Falcons",
+      "team2": "Xtreme Gaming",
+      "score": "2-0",
+      "winner": "Team Falcons",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-11T11:54:55+00:00",
+      "stage": "Group Stage",
+      "team1": "L1 TEAM",
+      "team2": "Level UP",
+      "score": "0-2",
+      "winner": "Level UP",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-11T12:25:00+00:00",
+      "stage": "Group Stage",
+      "team1": "Aurora Gaming",
+      "team2": "Team Liquid",
+      "score": "1-1",
+      "winner": "Draw",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-12T09:00:00+00:00",
+      "stage": "Group Stage",
+      "team1": "MOUZ",
+      "team2": "Vici Gaming",
+      "score": "0-2",
+      "winner": "Vici Gaming",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-12T09:05:02+00:00",
+      "stage": "Group Stage",
+      "team1": "REKONIX",
+      "team2": "Team Nemesis",
+      "score": "2-0",
+      "winner": "REKONIX",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-12T09:07:03+00:00",
+      "stage": "Group Stage",
+      "team1": "PVISION",
+      "team2": "Team Spirit",
+      "score": "1-1",
+      "winner": "Draw",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-12T11:58:01+00:00",
+      "stage": "Group Stage",
+      "team1": "1w",
+      "team2": "Team Yandex",
+      "score": "0-2",
+      "winner": "Team Yandex",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-12T12:04:01+00:00",
+      "stage": "Group Stage",
+      "team1": "Inner Circle",
+      "team2": "LGD Gaming",
+      "score": "0-2",
+      "winner": "LGD Gaming",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-12T12:20:06+00:00",
+      "stage": "Group Stage",
+      "team1": "OG",
+      "team2": "Virtus.pro",
+      "score": "0-2",
+      "winner": "Virtus.pro",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-14T11:01:04+00:00",
+      "stage": "Tiebreakers",
+      "team1": "Rune Eaters",
+      "team2": "Virtus.pro",
+      "score": "2-1",
+      "winner": "Rune Eaters",
+      "bo": 3
+    },
+    {
+      "date": "2026-07-14T11:09:24+00:00",
+      "stage": "Tiebreakers",
+      "team1": "Team Liquid",
+      "team2": "Xtreme Gaming",
+      "score": "2-1",
+      "winner": "Team Liquid",
+      "bo": 3
+    },
+    {
+      "date": "2026-07-14T16:37:02+00:00",
+      "stage": "Tiebreakers",
+      "team1": "LGD Gaming",
+      "team2": "MOUZ",
+      "score": "2-0",
+      "winner": "LGD Gaming",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-15T10:59:51+00:00",
+      "stage": "Qualifiers",
+      "team1": "Aurora Gaming",
+      "team2": "Rune Eaters",
+      "score": "0-2",
+      "winner": "Rune Eaters",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-15T11:07:17+00:00",
+      "stage": "Play-In",
+      "team1": "Team Liquid",
+      "team2": "Team Spirit",
+      "score": "1-2",
+      "winner": "Team Spirit",
+      "bo": 3
+    },
+    {
+      "date": "2026-07-15T14:01:53+00:00",
+      "stage": "Play-In",
+      "team1": "1w",
+      "team2": "Vici Gaming",
+      "score": "1-2",
+      "winner": "Vici Gaming",
+      "bo": 3
+    },
+    {
+      "date": "2026-07-15T15:40:21+00:00",
+      "stage": "Qualifiers",
+      "team1": "BoomEsports",
+      "team2": "LGD Gaming",
+      "score": "2-0",
+      "winner": "BoomEsports",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-16T11:06:45+00:00",
+      "stage": "Upper Bracket R1",
+      "team1": "Team Spirit",
+      "team2": "Team Yandex",
+      "score": "0-2",
+      "winner": "Team Yandex",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-16T14:19:10+00:00",
+      "stage": "Upper Bracket R1",
+      "team1": "PVISION",
+      "team2": "Rune Eaters",
+      "score": "2-0",
+      "winner": "PVISION",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-17T11:05:01+00:00",
+      "stage": "Upper Bracket R2",
+      "team1": "Team Falcons",
+      "team2": "Vici Gaming",
+      "score": "0-2",
+      "winner": "Vici Gaming",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-17T14:13:51+00:00",
+      "stage": "Upper Bracket R2",
+      "team1": "BoomEsports",
+      "team2": "Nigma Galaxy",
+      "score": "2-0",
+      "winner": "BoomEsports",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-18T11:06:40+00:00",
+      "stage": "Lower Bracket",
+      "team1": "BoomEsports",
+      "team2": "Vici Gaming",
+      "score": "2-0",
+      "winner": "BoomEsports",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-18T13:49:56+00:00",
+      "stage": "Semifinal",
+      "team1": "PVISION",
+      "team2": "Team Yandex",
+      "score": "2-1",
+      "winner": "PVISION",
+      "bo": 3
+    },
+    {
+      "date": "2026-07-19T10:09:40+00:00",
+      "stage": "Lower Bracket",
+      "team1": "Team Yandex",
+      "team2": "Vici Gaming",
+      "score": "2-0",
+      "winner": "Team Yandex",
+      "bo": 2
+    },
+    {
+      "date": "2026-07-19T13:42:12+00:00",
+      "stage": "Grand Final",
+      "team1": "BoomEsports",
+      "team2": "PVISION",
+      "score": "1-3",
+      "winner": "PVISION",
+      "bo": 4
+    }
+  ]
+}

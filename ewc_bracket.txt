@@ -1,0 +1,136 @@
+================================================================================
+  ESPORTS WORLD CUP 2026 — GROUP STANDINGS
+================================================================================
+
+  Group A:
+    1. Team Yandex          13pts  4W-1D-0L  (9-1 +8)  → Playoffs
+    2. 1w                   10pts  3W-1D-1L  (7-3 +4)  → Survival
+    3. LGD Gaming            7pts  2W-1D-2L  (5-5 0)  → Survival
+    4. Virtus.pro            7pts  2W-1D-2L  (5-5 0)  → Survival
+    5. OG                    5pts  1W-2D-2L  (4-6 -2)  ✗ Eliminated
+    6. Inner Circle          0pts  0W-0D-5L  (0-10 -10)  ✗ Eliminated
+
+  Group B:
+    1. PVISION              13pts  4W-1D-0L  (9-1 +8)  → Playoffs
+    2. Team Spirit          11pts  3W-2D-0L  (8-2 +6)  → Survival
+    3. Vici Gaming           9pts  3W-0D-2L  (6-4 +2)  → Survival
+    4. MOUZ                  5pts  1W-2D-2L  (4-6 -2)  → Survival
+    5. REKONIX               3pts  1W-0D-4L  (2-8 -6)  ✗ Eliminated
+    6. Team Nemesis          1pts  0W-1D-4L  (1-9 -8)  ✗ Eliminated
+
+  Group C:
+    1. Nigma Galaxy         13pts  4W-1D-0L  (9-1 +8)  → Playoffs
+    2. Aurora Gaming        11pts  3W-2D-0L  (8-2 +6)  → Survival
+    3. Team Liquid           8pts  2W-2D-1L  (6-4 +2)  → Survival
+    4. PTime                 5pts  1W-2D-2L  (4-6 -2)  → Survival
+    5. Level UP              3pts  1W-0D-4L  (2-8 -6)  ✗ Eliminated
+    6. L1 TEAM               1pts  0W-1D-4L  (1-9 -8)  ✗ Eliminated
+
+  Group D:
+    1. Team Falcons         13pts  4W-1D-0L  (9-1 +8)  → Playoffs
+    2. BoomEsports          11pts  3W-2D-0L  (8-2 +6)  → Survival
+    3. Rune Eaters           6pts  1W-3D-1L  (5-5 0)  → Survival
+    4. Xtreme Gaming         5pts  1W-2D-2L  (4-6 -2)  → Survival
+    5. GamerLegion           4pts  1W-1D-3L  (3-7 -4)  ✗ Eliminated
+    6. Poor Rangers          1pts  0W-1D-4L  (1-9 -8)  ✗ Eliminated
+
+================================================================================
+  PLAYOFF BRACKET
+================================================================================
+
+  --- Group Stage ---
+    07-07 09:24 | Bo2 | BoomEsports            1-1 Team Falcons         → Draw
+    07-07 09:34 | Bo2 | GamerLegion            2-0 Poor Rangers         → GamerLegion
+    07-07 09:38 | Bo2 | Rune Eaters            1-1 Xtreme Gaming        → Draw
+    07-07 12:18 | Bo2 | L1 TEAM                0-2 Nigma Galaxy         → Nigma Galaxy
+    07-07 12:26 | Bo2 | PTime                  1-1 Team Liquid          → Draw
+    07-07 12:51 | Bo2 | Aurora Gaming          2-0 Level UP             → Aurora Gaming
+    07-07 15:06 | Bo2 | MOUZ                   1-1 Team Spirit          → Draw
+    07-07 15:24 | Bo2 | PVISION                2-0 Team Nemesis         → PVISION
+    07-07 18:16 | Bo2 | 1w                     2-0 Inner Circle         → 1w
+    07-07 18:47 | Bo2 | OG                     1-1 Team Yandex          → Draw
+    07-08 09:00 | Bo2 | Rune Eaters            0-2 Team Falcons         → Team Falcons
+    07-08 09:05 | Bo2 | BoomEsports            2-0 Poor Rangers         → BoomEsports
+    07-08 09:08 | Bo2 | GamerLegion            0-2 Xtreme Gaming        → Xtreme Gaming
+    07-08 11:47 | Bo2 | L1 TEAM                1-1 PTime                → Draw
+    07-08 11:54 | Bo2 | Level UP               0-2 Team Liquid          → Team Liquid
+    07-08 12:31 | Bo2 | Aurora Gaming          1-1 Nigma Galaxy         → Draw
+    07-08 14:22 | Bo2 | MOUZ                   2-0 REKONIX              → MOUZ
+    07-08 14:45 | Bo2 | Team Nemesis           0-2 Team Spirit          → Team Spirit
+    07-08 15:50 | Bo2 | PVISION                2-0 Vici Gaming          → PVISION
+    07-08 17:13 | Bo2 | LGD Gaming             2-0 OG                   → LGD Gaming
+    07-08 17:44 | Bo2 | Inner Circle           0-2 Team Yandex          → Team Yandex
+    07-08 18:34 | Bo2 | 1w                     2-0 Virtus.pro           → 1w
+    07-09 09:02 | Bo2 | Poor Rangers           1-1 Xtreme Gaming        → Draw
+    07-09 09:05 | Bo2 | GamerLegion            0-2 Team Falcons         → Team Falcons
+    07-09 09:15 | Bo2 | BoomEsports            1-1 Rune Eaters          → Draw
+    07-09 11:55 | Bo2 | Aurora Gaming          2-0 L1 TEAM              → Aurora Gaming
+    07-09 12:06 | Bo2 | Level UP               0-2 PTime                → PTime
+    07-09 12:36 | Bo2 | Nigma Galaxy           2-0 Team Liquid          → Nigma Galaxy
+    07-09 14:34 | Bo2 | MOUZ                   1-1 Team Nemesis         → Draw
+    07-09 14:46 | Bo2 | PVISION                2-0 REKONIX              → PVISION
+    07-09 15:26 | Bo2 | Team Spirit            2-0 Vici Gaming          → Team Spirit
+    07-09 17:40 | Bo2 | Inner Circle           0-2 OG                   → OG
+    07-09 17:48 | Bo2 | Team Yandex            2-0 Virtus.pro           → Team Yandex
+    07-09 18:16 | Bo2 | 1w                     2-0 LGD Gaming           → 1w
+    07-10 09:00 | Bo2 | Poor Rangers           0-2 Team Falcons         → Team Falcons
+    07-10 09:01 | Bo2 | GamerLegion            1-1 Rune Eaters          → Draw
+    07-10 09:11 | Bo2 | BoomEsports            2-0 Xtreme Gaming        → BoomEsports
+    07-10 11:32 | Bo2 | L1 TEAM                0-2 Team Liquid          → Team Liquid
+    07-10 11:40 | Bo2 | Aurora Gaming          2-0 PTime                → Aurora Gaming
+    07-10 14:12 | Bo2 | Team Nemesis           0-2 Vici Gaming          → Vici Gaming
+    07-10 14:42 | Bo2 | MOUZ                   0-2 PVISION              → PVISION
+    07-10 14:58 | Bo2 | REKONIX                0-2 Team Spirit          → Team Spirit
+    07-10 17:08 | Bo2 | 1w                     1-1 OG                   → Draw
+    07-10 17:23 | Bo2 | LGD Gaming             0-2 Team Yandex          → Team Yandex
+    07-10 17:37 | Bo2 | Inner Circle           0-2 Virtus.pro           → Virtus.pro
+    07-11 09:00 | Bo2 | Poor Rangers           0-2 Rune Eaters          → Rune Eaters
+    07-11 09:00 | Bo2 | BoomEsports            2-0 GamerLegion          → BoomEsports
+    07-11 09:26 | Bo2 | Team Falcons           2-0 Xtreme Gaming        → Team Falcons
+    07-11 11:54 | Bo2 | L1 TEAM                0-2 Level UP             → Level UP
+    07-11 12:25 | Bo2 | Aurora Gaming          1-1 Team Liquid          → Draw
+    07-12 09:00 | Bo2 | MOUZ                   0-2 Vici Gaming          → Vici Gaming
+    07-12 09:05 | Bo2 | REKONIX                2-0 Team Nemesis         → REKONIX
+    07-12 09:07 | Bo2 | PVISION                1-1 Team Spirit          → Draw
+    07-12 11:58 | Bo2 | 1w                     0-2 Team Yandex          → Team Yandex
+    07-12 12:04 | Bo2 | Inner Circle           0-2 LGD Gaming           → LGD Gaming
+    07-12 12:20 | Bo2 | OG                     0-2 Virtus.pro           → Virtus.pro
+
+  --- Tiebreakers ---
+    07-14 11:01 | Bo3 | Rune Eaters            2-1 Virtus.pro           → Rune Eaters
+    07-14 11:09 | Bo3 | Team Liquid            2-1 Xtreme Gaming        → Team Liquid
+    07-14 16:37 | Bo2 | LGD Gaming             2-0 MOUZ                 → LGD Gaming
+
+  --- Qualifiers ---
+    07-15 10:59 | Bo2 | Aurora Gaming          0-2 Rune Eaters          → Rune Eaters
+
+  --- Play-In ---
+    07-15 11:07 | Bo3 | Team Liquid            1-2 Team Spirit          → Team Spirit
+    07-15 14:01 | Bo3 | 1w                     1-2 Vici Gaming          → Vici Gaming
+
+  --- Qualifiers ---
+    07-15 15:40 | Bo2 | BoomEsports            2-0 LGD Gaming           → BoomEsports
+
+  --- Upper Bracket R1 ---
+    07-16 11:06 | Bo2 | Team Spirit            0-2 Team Yandex          → Team Yandex
+    07-16 14:19 | Bo2 | PVISION                2-0 Rune Eaters          → PVISION
+
+  --- Upper Bracket R2 ---
+    07-17 11:05 | Bo2 | Team Falcons           0-2 Vici Gaming          → Vici Gaming
+    07-17 14:13 | Bo2 | BoomEsports            2-0 Nigma Galaxy         → BoomEsports
+
+  --- Lower Bracket ---
+    07-18 11:06 | Bo2 | BoomEsports            2-0 Vici Gaming          → BoomEsports
+
+  --- Semifinal ---
+    07-18 13:49 | Bo3 | PVISION                2-1 Team Yandex          → PVISION
+
+  --- Lower Bracket ---
+    07-19 10:09 | Bo2 | Team Yandex            2-0 Vici Gaming          → Team Yandex
+
+  --- Grand Final ---
+    07-19 13:42 | Bo4 | BoomEsports            1-3 PVISION              → PVISION
+
+**********************************************************************
+  ESPORTS WORLD CUP 2026 CHAMPION: PVISION
+**********************************************************************
