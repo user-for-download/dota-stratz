@@ -186,6 +186,10 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
     model_dir = Path(cfg.model_dir)
     model_dir.mkdir(parents=True, exist_ok=True)
 
+    # Mixed Precision (AMP) for GPU training — ~2x speedup on RTX 3060+
+    use_amp = device.type == 'cuda'
+    scaler = torch.amp.GradScaler(enabled=use_amp)
+
     for epoch in range(cfg.epochs):
         t_epoch = time.time()
         # Training
@@ -210,12 +214,20 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
             labels = shuffled_labels[start:end].to(device)
 
             optimizer.zero_grad()
-            logits = model(heroes, actions, tabular, patches)
-            loss = criterion(logits, labels)
-            loss.backward()
+
+            # Mixed precision forward pass
+            with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+                logits = model(heroes, actions, tabular, patches)
+                loss = criterion(logits, labels)
+
+            # Scaled backward pass
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
             scheduler.step()  # OneCycleLR steps per batch
+
             train_loss += loss.item() * len(labels)
             train_samples += len(labels)
 
@@ -231,8 +243,11 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
                 tabular = val_ds.tabular[start:end].to(device)
                 patches = val_ds.patches[start:end].to(device)
                 labels = val_ds.labels[start:end].to(device)
-                logits = model(heroes, actions, tabular, patches)
-                loss = criterion(logits, labels)
+
+                with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+                    logits = model(heroes, actions, tabular, patches)
+                    loss = criterion(logits, labels)
+
                 val_loss += loss.item() * len(labels)
                 val_samples += len(labels)
 
