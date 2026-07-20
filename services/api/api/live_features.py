@@ -1,7 +1,7 @@
 """Dynamic feature columns for live match prediction.
 
 Shared between trainer (training) and API (inference).
-30 real dynamic features (no placeholders).
+32 real dynamic features (no placeholders).
 """
 
 DYNAMIC_FEATURE_COLUMNS = [
@@ -23,9 +23,11 @@ DYNAMIC_FEATURE_COLUMNS = [
     "xp_adv_diff_1m",
     "gold_adv_diff_3m",
     "xp_adv_diff_3m",
-    # Time context
-    "minute",
-    "minute_sq",
+    # Time context (cyclical encoding for Dota 2 periodic events)
+    "minute",          # Linear game time
+    "minute_sin",      # 5-min bounty rune cycle
+    "minute_cos",      # 5-min bounty rune cycle
+    "day_night_sin",   # 10-min day/night cycle
     # Active Vulnerability (Death Timers & Buybacks)
     "radiant_dead_now",
     "dire_dead_now",

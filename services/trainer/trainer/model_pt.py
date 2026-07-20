@@ -38,15 +38,19 @@ class MultiModalDraftBERT(nn.Module):
             dim_feedforward=d_model * 4,
             dropout=transformer_dropout,
             batch_first=True,
+            norm_first=True,  # Pre-LayerNorm for stable gradients (GPT/LLaMA style)
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers, enable_nested_tensor=False)
 
-        # --- 2. Tabular Branch (Continuous Features) ---
+        # --- 2. Tabular Branch (Continuous Features, 2-layer residual MLP) ---
         tabular_dropout = min(0.5, dropout * 1.5)
+        self.tabular_norm = nn.LayerNorm(num_continuous_features)
         self.tabular_mlp = nn.Sequential(
-            nn.LayerNorm(num_continuous_features),
             nn.Linear(num_continuous_features, fusion_hidden),
-            nn.ReLU(),
+            nn.GELU(),
+            nn.Dropout(tabular_dropout),
+            nn.Linear(fusion_hidden, fusion_hidden),
+            nn.GELU(),
             nn.Dropout(tabular_dropout),
         )
 
@@ -77,7 +81,7 @@ class MultiModalDraftBERT(nn.Module):
         valid_lengths = (~pad_mask).sum(dim=1, keepdim=True).float().clamp(min=1.0)
         seq_repr = sum_embeddings / valid_lengths
 
-        tab_repr = self.tabular_mlp(continuous_features)
+        tab_repr = self.tabular_mlp(self.tabular_norm(continuous_features))
         patch_repr = self.patch_emb(patches)
 
         fused = torch.cat([seq_repr, tab_repr, patch_repr], dim=1)

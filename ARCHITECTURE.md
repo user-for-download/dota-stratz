@@ -82,7 +82,7 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 
 **Pipeline stages:**
 1. **Elo computation** — Chronological Elo ratings for all teams (K=32) into `ml.team_elo`
-2. **Aggregate population** — 7 populator functions with **exponential time decay** (half-life ~14 days) compute `ml.*_agg` tables per patch
+2. **Aggregate population** — 15 populator functions with **exponential time decay** (half-life ~14 days) in **atomic transaction** (single commit, rollback on failure) compute `ml.*_agg` + `ml.*_snapshot` tables per patch
 2. **Snapshot population** — 7 PIT-safe snapshot tables with cross-patch lookback and SCD state caching
 3. **Training** — PyTorch DraftBERT or LiveDraftBERT models with configurable hyperparameters
 4. **Export** — TorchScript JIT compilation for CPU inference
@@ -93,18 +93,19 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
   - Action embedding: `nn.Embedding(5, 128, padding_idx=0)` — tokens 1-4 for RadBan/DireBan/RadPick/DirePick
   - Positional embedding: `nn.Embedding(max_seq_len, 128)`
   - Embedding dropout: 0.3
+  - **Pre-LayerNorm** (`norm_first=True`) for stable gradient flow
   - Mean pooling over sequence dimension
   - `enable_nested_tensor=False` for CPU multi-threading
-- **Tabular branch:** MLP for 63 continuous features
-  - Input → Linear(63, 64) → ReLU → Dropout(0.3) → Linear(64, 64)
+- **Tabular branch:** 2-layer MLP with GELU for continuous features
+  - LayerNorm → Linear(63, 64) → GELU → Dropout(0.45) → Linear(64, 64) → GELU → Dropout(0.45)
 - **Fusion head (straight concat):** Sequence (128) + Tabular (64) → Linear(192, 64) → ReLU → Dropout(0.3) → Linear(64, 1)
 - **Output:** Raw logit for P(Radiant wins) via BCEWithLogitsLoss
-- **Parameter count:** ~639K
+- **Parameter count:** ~639K (requires retrain after architecture change)
 
 **Model architecture — LiveDraftBERT:**
-- **Sequence branch:** Same as DraftBERT (Transformer encoder)
-- **Tabular branch:** MLP for 143 static features (aggregates + SVD embeddings)
-- **Live branch:** MLP for 30 dynamic features (gold/xp, towers, Roshan, teamfights, power spikes, vision, neutral items)
+- **Sequence branch:** Same as DraftBERT (Pre-LayerNorm Transformer encoder)
+- **Static branch:** 2-layer MLP with GELU for 143 static features (aggregates + SVD embeddings)
+- **Dynamic branch:** 2-layer MLP with GELU for 30 dynamic features (gold/xp, towers, Roshan, teamfights, power spikes, vision, neutral items)
 - **Fusion:** 4-way concatenation (seq + static + dynamic + patch_emb) → Linear(248, 64) → ReLU → Dropout(0.3) → Linear(64, 1)
 
 **Training configuration (all from `deploy/.env`):**
@@ -247,10 +248,11 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 | **Tests** | `trainer/test_bot.py` | Component integration tests passing in Docker |
 
 **Architecture**:
-- All 7 aggregate tables cached in memory at startup
+- All 7 aggregate tables cached in memory at startup (vectorized `to_dict('records')` loading)
 - Feature computation mirrors `build_feature_vector()` from the API but uses in-memory dicts instead of DB round-trips
 - MCTS uses DraftBERT as a value network — no random rollouts needed due to prefix-augmented training data
-- MCTS applies GPM composition penalty for balanced team economies
+- MCTS state passing: each node caches (heroes, actions, rad_picks, dire_picks), child state built in O(1) from parent — eliminates O(depth) tree walk
+- MCTS applies GPM composition penalty (configurable `core_gpm_threshold`) for balanced team economies
 - Both bots expose `predict()` returning ranked hero lists with scores
 
 ---

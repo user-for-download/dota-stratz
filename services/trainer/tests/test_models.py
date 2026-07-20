@@ -44,7 +44,7 @@ class TestMultiModalDraftBERT:
 
     def test_all_padding(self):
         """Model should handle all-zero (all padding) input without crash."""
-        model = MultiModalDraftBERT(num_continuous_features=61)
+        model = MultiModalDraftBERT(num_continuous_features=61, max_seq_len=50)
         h = torch.zeros((1, 50), dtype=torch.long)
         a = torch.zeros((1, 50), dtype=torch.long)
         f = torch.zeros((1, 61))
@@ -69,12 +69,12 @@ class TestMultiModalDraftBERT:
 class TestLiveDraftBERT:
     def test_basic_forward_shape(self):
         model = LiveDraftBERT(
-            num_static_features=61, num_dynamic_features=30
+            num_static_features=61, num_dynamic_features=32
         )
         heroes = torch.randint(1, 160, (2, 24))
         actions = torch.randint(1, 5, (2, 24))
         static = torch.randn((2, 61))
-        dynamic = torch.randn((2, 30))
+        dynamic = torch.randn((2, 32))
         patches = torch.tensor([60, 59])
         out = model(heroes, actions, static, dynamic, patches)
         assert out.shape == (2,), f"Expected (2,), got {out.shape}"
@@ -92,13 +92,16 @@ class TestLiveDraftBERT:
 
     def test_dynamic_features_matter(self):
         """Changing only dynamic features should change the output."""
+        torch.manual_seed(42)
         model = LiveDraftBERT(num_static_features=61, num_dynamic_features=30)
         model.eval()
         h = torch.randint(1, 160, (1, 10))
         a = torch.randint(1, 5, (1, 10))
         s = torch.randn((1, 61))
-        d1 = torch.zeros((1, 30))
-        d2 = torch.ones((1, 30))
+        # Use non-constant inputs — LayerNorm maps all-constant inputs to zero
+        torch.manual_seed(0)
+        d1 = torch.randn((1, 30))
+        d2 = torch.randn((1, 30)) + 5.0  # Shifted distribution
         p = torch.tensor([60])
         with torch.no_grad():
             out1 = model(h, a, s, d1, p)

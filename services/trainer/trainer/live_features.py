@@ -24,7 +24,7 @@ DYNAMIC_FEATURE_COLUMNS = [
     "t1_tower_diff", "t2_tower_diff", "t3_tower_diff", "t4_tower_diff",
     "melee_rax_diff", "range_rax_diff", "roshan_diff", "ward_diff", "tf_diff",
     "gold_adv_diff_1m", "xp_adv_diff_1m", "gold_adv_diff_3m", "xp_adv_diff_3m",
-    "minute", "minute_sq",
+    "minute", "minute_sin", "minute_cos", "day_night_sin",
     "radiant_dead_now", "dire_dead_now", "buyback_diff",
     "bkb_diff", "blink_diff", "aghs_diff", "rapier_diff",
     "mega_creeps_radiant", "mega_creeps_dire", "courier_lost_diff", "aegis_diff",
@@ -183,9 +183,13 @@ def extract_dynamic_features(engine, patch_id: int, lookback: int = 2) -> pd.Dat
         raise ValueError(f"No data found for patch {patch_id}")
     df = df.sort_values(["match_id", "minute"]).reset_index(drop=True)
 
-    # Aegis (5-min rolling window)
-    df["radiant_aegis"] = df.groupby("match_id")["radiant_rosh_tick"].rolling(5, min_periods=1).sum().reset_index(0, drop=True)
-    df["dire_aegis"] = df.groupby("match_id")["dire_rosh_tick"].rolling(5, min_periods=1).sum().reset_index(0, drop=True)
+    # Aegis (5-min rolling window) — using transform for memory efficiency
+    df["radiant_aegis"] = df.groupby("match_id")["radiant_rosh_tick"].transform(
+        lambda x: x.rolling(5, min_periods=1).sum()
+    )
+    df["dire_aegis"] = df.groupby("match_id")["dire_rosh_tick"].transform(
+        lambda x: x.rolling(5, min_periods=1).sum()
+    )
     df["aegis_diff"] = (df["radiant_aegis"] > 0).astype(float) - (df["dire_aegis"] > 0).astype(float)
 
     # Cumulative ticks
@@ -197,18 +201,26 @@ def extract_dynamic_features(engine, patch_id: int, lookback: int = 2) -> pd.Dat
     df["mega_creeps_radiant"] = ((df["dire_melee"] + df["dire_range"]) >= 6).astype(float)
     df["mega_creeps_dire"] = ((df["radiant_melee"] + df["radiant_range"]) >= 6).astype(float)
 
-    # Dead heroes (rolling window)
-    rk = df.groupby("match_id")["radiant_kills_tick"]
-    dk = df.groupby("match_id")["dire_kills_tick"]
+    # Dead heroes (rolling window, time-dependent death timer)
+    # Using transform for memory efficiency — avoids intermediate MultiIndex
+    minute_lt_20 = (df["minute"] < 20).astype(float)
+    minute_20_40 = ((df["minute"] >= 20) & (df["minute"] < 40)).astype(float)
+    minute_gte_40 = (df["minute"] >= 40).astype(float)
+
+    def _rolling_dead(kills_col, window):
+        return df.groupby("match_id")[kills_col].transform(
+            lambda x: x.rolling(window, min_periods=1).sum()
+        )
+
     df["radiant_dead_now"] = (
-        dk.rolling(1, min_periods=1).sum().reset_index(0, drop=True) * (df["minute"] < 20).astype(float) +
-        dk.rolling(2, min_periods=1).sum().reset_index(0, drop=True) * ((df["minute"] >= 20) & (df["minute"] < 40)).astype(float) +
-        dk.rolling(3, min_periods=1).sum().reset_index(0, drop=True) * (df["minute"] >= 40).astype(float)
+        _rolling_dead("dire_kills_tick", 1) * minute_lt_20 +
+        _rolling_dead("dire_kills_tick", 2) * minute_20_40 +
+        _rolling_dead("dire_kills_tick", 3) * minute_gte_40
     )
     df["dire_dead_now"] = (
-        rk.rolling(1, min_periods=1).sum().reset_index(0, drop=True) * (df["minute"] < 20).astype(float) +
-        rk.rolling(2, min_periods=1).sum().reset_index(0, drop=True) * ((df["minute"] >= 20) & (df["minute"] < 40)).astype(float) +
-        rk.rolling(3, min_periods=1).sum().reset_index(0, drop=True) * (df["minute"] >= 40).astype(float)
+        _rolling_dead("radiant_kills_tick", 1) * minute_lt_20 +
+        _rolling_dead("radiant_kills_tick", 2) * minute_20_40 +
+        _rolling_dead("radiant_kills_tick", 3) * minute_gte_40
     )
 
     # Differentials
@@ -237,7 +249,11 @@ def extract_dynamic_features(engine, patch_id: int, lookback: int = 2) -> pd.Dat
     df["xp_adv_diff_1m"] = df["radiant_xp_adv"] - df["radiant_xp_adv_prev1"]
     df["gold_adv_diff_3m"] = df["radiant_gold_adv"] - df["radiant_gold_adv_prev3"]
     df["xp_adv_diff_3m"] = df["radiant_xp_adv"] - df["radiant_xp_adv_prev3"]
-    df["minute_sq"] = df["minute"] ** 2
+    # Cyclical time encoding (replaces minute_sq)
+    # 5-min bounty rune cycle, 10-min day/night cycle
+    df["minute_sin"] = np.sin(2 * np.pi * df["minute"] / 5.0)
+    df["minute_cos"] = np.cos(2 * np.pi * df["minute"] / 5.0)
+    df["day_night_sin"] = np.sin(2 * np.pi * df["minute"] / 10.0)
 
     # Neutral items (real — time-filtered via player_neutral_item_history)
     df["neutral_tier_diff"] = df["radiant_neutr"] - df["dire_neutr"]

@@ -59,6 +59,7 @@ class MCTSNode:
         hero_action: int | None,
         turn_idx: int,
         draft_format: list[tuple[bool, bool]],
+        state: tuple[list[int], list[int], list[int], list[int]] | None = None,
     ):
         self.parent = parent
         self.hero_action = hero_action  # Hero ID picked/banned to reach this node
@@ -69,6 +70,10 @@ class MCTSNode:
         self.radiant_wins: float = 0.0  # Sum of Radiant win probs (absolute)
         self.visits: int = 0
         self.untried_heroes: list[int] = []
+
+        # Cached draft state: (heroes, actions, rad_picks, dire_picks)
+        # Avoids O(depth) tree walk per evaluation
+        self.state = state
 
         # Terminal check
         self.is_terminal = self.turn_idx >= len(self.draft_format)
@@ -127,52 +132,102 @@ class MCTSDraftBot:
         # Valid heroes: those with >0 games in baseline cache
         self.valid_heroes = state_builder.cache.valid_hero_ids
 
-    def _get_state_from_node(
-        self,
-        node: MCTSNode,
-        base_heroes: list[int],
-        base_actions: list[int],
-        base_rad_picks: list[int],
-        base_dire_picks: list[int],
+        # Progressive widening: prune heroes with very low pick rates
+        # This narrows the MCTS search space from ~120 to ~80-90 heroes
+        self.pruned_heroes = [
+            h for h in self.valid_heroes
+            if state_builder.cache.get_baseline(h).get("total_picks", 0) > 5
+        ]
+        if len(self.pruned_heroes) < 50:
+            # Fallback: don't prune if too aggressive
+            self.pruned_heroes = self.valid_heroes
+
+    @staticmethod
+    def _build_child_state(
+        parent_state: tuple[list[int], list[int], list[int], list[int]],
+        hero_id: int,
+        is_radiant_turn: bool,
+        is_pick: bool,
     ) -> tuple[list[int], list[int], list[int], list[int]]:
-        """Walk up the tree to construct the full current state lists."""
-        heroes, actions, rad_picks, dire_picks = [], [], [], []
-        curr = node
+        """Build child state from parent state in O(1) (no tree walk)."""
+        p_heroes, p_actions, p_rad, p_dire = parent_state
+        if is_radiant_turn and is_pick:
+            token = 3
+        elif not is_radiant_turn and is_pick:
+            token = 4
+        elif is_radiant_turn:
+            token = 1
+        else:
+            token = 2
 
-        # Trace path back to root
-        while curr.parent is not None:
-            heroes.append(curr.hero_action)
-            # Parent's turn type defines the action token
-            is_rad, is_pick = curr.parent.is_radiant_turn, curr.parent.is_pick
-            if is_rad and is_pick:
-                token = 3
-            elif not is_rad and is_pick:
-                token = 4
-            elif is_rad:
-                token = 1
+        heroes = p_heroes + [hero_id]
+        actions = p_actions + [token]
+        rad_picks = p_rad + ([hero_id] if is_pick and is_radiant_turn else [])
+        dire_picks = p_dire + ([hero_id] if is_pick and not is_radiant_turn else [])
+        return heroes, actions, rad_picks, dire_picks
+
+    def _evaluate_batch(
+        self,
+        nodes: list[MCTSNode],
+    ) -> list[float]:
+        """Evaluate multiple leaf nodes in a single batched forward pass.
+
+        Returns list of Radiant win probabilities, one per node.
+        """
+        if not nodes:
+            return []
+
+        batch_size = len(nodes)
+        batch_heroes = torch.zeros((batch_size, self.max_seq_len), dtype=torch.long)
+        batch_actions = torch.zeros((batch_size, self.max_seq_len), dtype=torch.long)
+        batch_tabulars = []
+        batch_patches = []
+        is_radiant_list = []
+
+        for i, node in enumerate(nodes):
+            heroes, actions, rad_picks, dire_picks = node.state
+            seq_len = len(heroes)
+
+            batch_heroes[i, :seq_len] = torch.tensor(heroes, dtype=torch.long)
+            batch_actions[i, :seq_len] = torch.tensor(actions, dtype=torch.long)
+
+            if seq_len > 0:
+                last_hero = heroes[-1]
+                last_is_pick = actions[-1] in (3, 4)
+                last_is_radiant = actions[-1] in (1, 3)
             else:
-                token = 2
-            actions.append(token)
+                last_hero = 0
+                last_is_pick = node.is_pick
+                last_is_radiant = node.is_radiant_turn
 
-            if is_pick:
-                if is_rad:
-                    rad_picks.append(curr.hero_action)
-                else:
-                    dire_picks.append(curr.hero_action)
-            curr = curr.parent
+            tabular_array = self.state_builder.build_tabular_features(
+                hypothetical_hero_id=last_hero,
+                is_radiant_turn=last_is_radiant,
+                is_pick=last_is_pick,
+                radiant_picks=rad_picks,
+                dire_picks=dire_picks,
+            )
+            batch_tabulars.append(tabular_array)
+            batch_patches.append(self.state_builder.cache.patch_id)
+            is_radiant_list.append(last_is_radiant)
 
-        # Reverse because we traversed from leaf to root
-        heroes.reverse()
-        actions.reverse()
-        rad_picks.reverse()
-        dire_picks.reverse()
+        batch_tabular = torch.from_numpy(np.array(batch_tabulars, dtype=np.float32))
+        batch_patch = torch.tensor(batch_patches, dtype=torch.long)
 
-        return (
-            base_heroes + heroes,
-            base_actions + actions,
-            base_rad_picks + rad_picks,
-            base_dire_picks + dire_picks,
-        )
+        with torch.no_grad():
+            logits = self.model(
+                batch_heroes.to(self.device),
+                batch_actions.to(self.device),
+                batch_tabular.to(self.device),
+                batch_patch.to(self.device),
+            )
+            probs = torch.sigmoid(logits).cpu().tolist()
+
+        # Convert to absolute Radiant win probability
+        results = []
+        for prob, is_rad in zip(probs, is_radiant_list):
+            results.append(prob if is_rad else 1.0 - prob)
+        return results
 
     @torch.no_grad()
     def _evaluate_state(
@@ -237,15 +292,16 @@ class MCTSDraftBot:
         if len(team_picks) == 0:
             return available_heroes
 
+        threshold = self.state_builder.cache.core_gpm_threshold
         current_cores = sum(
             1 for h in team_picks
-            if self.state_builder.cache.get_baseline(h).get("avg_gpm", 0.0) > 420.0
+            if self.state_builder.cache.get_baseline(h).get("avg_gpm", 0.0) > threshold
         )
         current_supports = len(team_picks) - current_cores
 
         filtered = []
         for h in available_heroes:
-            is_core = self.state_builder.cache.get_baseline(h).get("avg_gpm", 0.0) > 420.0
+            is_core = self.state_builder.cache.get_baseline(h).get("avg_gpm", 0.0) > threshold
             if is_core and current_cores >= 3:
                 continue
             if not is_core and current_supports >= 2:
@@ -288,13 +344,15 @@ class MCTSDraftBot:
         tuple[int, float]
             (best_hero_id, expected_win_probability)
         """
+        root_state = (list(current_heroes), list(current_actions), list(radiant_picks), list(dire_picks))
         root = MCTSNode(
             parent=None,
             hero_action=None,
             turn_idx=turn_idx,
             draft_format=self.draft_format,
+            state=root_state,
         )
-        root.untried_heroes = [h for h in self.valid_heroes if h not in current_heroes]
+        root.untried_heroes = [h for h in self.pruned_heroes if h not in current_heroes]
 
         # Apply composition constraint for pick turns at root
         if root.is_pick:
@@ -308,6 +366,9 @@ class MCTSDraftBot:
             iterations, turn_idx, len(root.untried_heroes),
         )
 
+        eval_batch_size = 32
+        pending_nodes: list[MCTSNode] = []
+
         for _ in range(iterations):
             node = root
 
@@ -318,24 +379,27 @@ class MCTSDraftBot:
             # 2. EXPANSION (add a new node to the tree)
             if not node.is_terminal and len(node.untried_heroes) > 0:
                 hero_to_try = node.untried_heroes.pop()
+                # Build child state from parent state in O(1)
+                child_state = self._build_child_state(
+                    node.state, hero_to_try, node.is_radiant_turn, node.is_pick,
+                )
                 child_node = MCTSNode(
                     parent=node,
                     hero_action=hero_to_try,
                     turn_idx=node.turn_idx + 1,
                     draft_format=self.draft_format,
+                    state=child_state,
                 )
 
-                # Setup untried heroes for the child
-                path_heroes, _, path_rad, path_dire = self._get_state_from_node(
-                    child_node, current_heroes, current_actions, radiant_picks, dire_picks
-                )
+                # Setup untried heroes for the child (uses cached state, no tree walk)
+                child_heroes, _, child_rad, child_dire = child_state
                 child_node.untried_heroes = [
-                    h for h in self.valid_heroes if h not in path_heroes
+                    h for h in self.valid_heroes if h not in child_heroes
                 ]
 
                 # Apply composition constraint for pick turns in expansion
                 if child_node.is_pick:
-                    child_team_picks = path_rad if child_node.is_radiant_turn else path_dire
+                    child_team_picks = child_rad if child_node.is_radiant_turn else child_dire
                     child_node.untried_heroes = self._filter_valid_composition(
                         child_node.untried_heroes, child_team_picks
                     )
@@ -345,20 +409,29 @@ class MCTSDraftBot:
                 node.children[hero_to_try] = child_node
                 node = child_node
 
-            # 3. EVALUATION (ask DraftBERT who is winning this partial draft)
-            sim_heroes, sim_actions, sim_rad, sim_dire = self._get_state_from_node(
-                node, current_heroes, current_actions, radiant_picks, dire_picks
-            )
-            radiant_win_prob = self._evaluate_state(
-                sim_heroes, sim_actions, sim_rad, sim_dire, node
-            )
+            # 3. Queue for batched evaluation
+            pending_nodes.append(node)
 
-            # 4. BACKPROPAGATION (update values up to the root)
-            curr = node
-            while curr is not None:
-                curr.visits += 1
-                curr.radiant_wins += radiant_win_prob
-                curr = curr.parent
+            # 4. Flush batch when full
+            if len(pending_nodes) >= eval_batch_size:
+                probs = self._evaluate_batch(pending_nodes)
+                for n, prob in zip(pending_nodes, probs):
+                    curr = n
+                    while curr is not None:
+                        curr.visits += 1
+                        curr.radiant_wins += prob
+                        curr = curr.parent
+                pending_nodes.clear()
+
+        # Flush remaining pending nodes
+        if pending_nodes:
+            probs = self._evaluate_batch(pending_nodes)
+            for n, prob in zip(pending_nodes, probs):
+                curr = n
+                while curr is not None:
+                    curr.visits += 1
+                    curr.radiant_wins += prob
+                    curr = curr.parent
 
         # 5. Return the most visited child (most robust move)
         if not root.children:
@@ -398,13 +471,15 @@ class MCTSDraftBot:
         list[dict]
             Top-k suggestions with hero_id, win_probability, and visits.
         """
+        root_state = (list(current_heroes), list(current_actions), list(radiant_picks), list(dire_picks))
         root = MCTSNode(
             parent=None,
             hero_action=None,
             turn_idx=turn_idx,
             draft_format=self.draft_format,
+            state=root_state,
         )
-        root.untried_heroes = [h for h in self.valid_heroes if h not in current_heroes]
+        root.untried_heroes = [h for h in self.pruned_heroes if h not in current_heroes]
 
         # Apply composition constraint for pick turns at root
         if root.is_pick:
@@ -412,6 +487,9 @@ class MCTSDraftBot:
             root.untried_heroes = self._filter_valid_composition(root.untried_heroes, team_picks)
 
         random.shuffle(root.untried_heroes)
+
+        eval_batch_size = 32
+        pending_nodes: list[MCTSNode] = []
 
         for _ in range(iterations):
             node = root
@@ -423,22 +501,24 @@ class MCTSDraftBot:
             # Expansion
             if not node.is_terminal and len(node.untried_heroes) > 0:
                 hero_to_try = node.untried_heroes.pop()
+                child_state = self._build_child_state(
+                    node.state, hero_to_try, node.is_radiant_turn, node.is_pick,
+                )
                 child_node = MCTSNode(
                     parent=node,
                     hero_action=hero_to_try,
                     turn_idx=node.turn_idx + 1,
                     draft_format=self.draft_format,
+                    state=child_state,
                 )
-                path_heroes, _, path_rad, path_dire = self._get_state_from_node(
-                    child_node, current_heroes, current_actions, radiant_picks, dire_picks
-                )
+                child_heroes, _, child_rad, child_dire = child_state
                 child_node.untried_heroes = [
-                    h for h in self.valid_heroes if h not in path_heroes
+                    h for h in self.valid_heroes if h not in child_heroes
                 ]
 
                 # Apply composition constraint for pick turns in expansion
                 if child_node.is_pick:
-                    child_team_picks = path_rad if child_node.is_radiant_turn else path_dire
+                    child_team_picks = child_rad if child_node.is_radiant_turn else child_dire
                     child_node.untried_heroes = self._filter_valid_composition(
                         child_node.untried_heroes, child_team_picks
                     )
@@ -447,20 +527,29 @@ class MCTSDraftBot:
                 node.children[hero_to_try] = child_node
                 node = child_node
 
-            # Evaluation
-            sim_heroes, sim_actions, sim_rad, sim_dire = self._get_state_from_node(
-                node, current_heroes, current_actions, radiant_picks, dire_picks
-            )
-            radiant_win_prob = self._evaluate_state(
-                sim_heroes, sim_actions, sim_rad, sim_dire, node
-            )
+            # Queue for batched evaluation
+            pending_nodes.append(node)
 
-            # Backpropagation
-            curr = node
-            while curr is not None:
-                curr.visits += 1
-                curr.radiant_wins += radiant_win_prob
-                curr = curr.parent
+            # Flush batch when full
+            if len(pending_nodes) >= eval_batch_size:
+                probs = self._evaluate_batch(pending_nodes)
+                for n, prob in zip(pending_nodes, probs):
+                    curr = n
+                    while curr is not None:
+                        curr.visits += 1
+                        curr.radiant_wins += prob
+                        curr = curr.parent
+                pending_nodes.clear()
+
+        # Flush remaining pending nodes
+        if pending_nodes:
+            probs = self._evaluate_batch(pending_nodes)
+            for n, prob in zip(pending_nodes, probs):
+                curr = n
+                while curr is not None:
+                    curr.visits += 1
+                    curr.radiant_wins += prob
+                    curr = curr.parent
 
         # Sort children by visits
         sorted_children = sorted(

@@ -36,6 +36,7 @@ class TestValidTables:
 
     def test_all_expected_tables_present(self):
         expected = {
+            "ml.team_elo",
             "ml.team_hero_agg", "ml.player_hero_agg",
             "ml.hero_synergy_agg", "ml.hero_counter_agg",
             "ml.team_h2h_agg", "ml.hero_baseline_agg",

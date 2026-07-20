@@ -81,14 +81,13 @@ def _clean_patch_rows(conn, table: str, patch_id: int) -> None:
 
 
 def _bulk_upsert(conn, table: str, patch_id: int, query: str, rows: list[tuple], batch_size: int) -> int:
-    """Handles deletion of stale rows, batch insertion, and committing."""
+    """Handles deletion of stale rows and batch insertion (no commit — caller manages transaction)."""
     _clean_patch_rows(conn, table, patch_id)
     total = 0
     with conn.cursor() as cur:
         for batch in _batched(rows, batch_size):
             psycopg2.extras.execute_values(cur, query, batch, template=None)
             total += len(batch)
-    conn.commit()
     logger.info("populate_%s: %s rows for patch %s", table.split('.')[-1], total, patch_id)
     return total
 
@@ -140,7 +139,6 @@ def populate_team_elo(cfg: TrainerConfig, conn) -> int:
     with conn.cursor() as cur:
         cur.execute("TRUNCATE TABLE ml.team_elo")
         psycopg2.extras.execute_values(cur, "INSERT INTO ml.team_elo (team_id, elo) VALUES %s", rows)
-    conn.commit()
     logger.info("populate_team_elo: computed Elo for %d teams", len(rows))
     return len(rows)
 
@@ -231,7 +229,6 @@ def populate_team_hero(cfg: TrainerConfig, conn) -> int:
         for batch in _batched(rows, cfg.agg_batch_size):
             psycopg2.extras.execute_values(cur, POPULATE_TEAM_HERO, batch, template=None)
             total += len(batch)
-    conn.commit()
     logger.info("populate_team_hero: %s rows for patch %s", total, patch_id)
     return total
 
@@ -294,7 +291,6 @@ def populate_player_hero(cfg: TrainerConfig, conn) -> int:
         for batch in _batched(rows, cfg.agg_batch_size):
             psycopg2.extras.execute_values(cur, POPULATE_PLAYER_HERO, batch, template=None)
             total += len(batch)
-    conn.commit()
     logger.info("populate_player_hero: %s rows for patch %s", total, patch_id)
     return total
 
@@ -334,7 +330,6 @@ def populate_synergy(cfg: TrainerConfig, conn) -> int:
         for batch in _batched(rows, cfg.agg_batch_size):
             psycopg2.extras.execute_values(cur, POPULATE_SYNERGY, batch, template=None)
             total += len(batch)
-    conn.commit()
     logger.info("populate_synergy: %s rows for patch %s", total, patch_id)
     return total
 
@@ -375,7 +370,6 @@ def populate_counter(cfg: TrainerConfig, conn) -> int:
         for batch in _batched(rows, cfg.agg_batch_size):
             psycopg2.extras.execute_values(cur, POPULATE_COUNTER, batch, template=None)
             total += len(batch)
-    conn.commit()
     logger.info("populate_counter: %s rows for patch %s", total, patch_id)
     return total
 
@@ -418,7 +412,6 @@ def populate_h2h(cfg: TrainerConfig, conn) -> int:
         for batch in _batched(rows, cfg.agg_batch_size):
             psycopg2.extras.execute_values(cur, POPULATE_H2H, batch, template=None)
             total += len(batch)
-    conn.commit()
     logger.info("populate_h2h: %s rows for patch %s", total, patch_id)
     return total
 
@@ -487,7 +480,6 @@ def populate_baseline(cfg: TrainerConfig, conn) -> int:
         for batch in _batched(rows, cfg.agg_batch_size):
             psycopg2.extras.execute_values(cur, POPULATE_BASELINE, batch, template=None)
             total += len(batch)
-    conn.commit()
     logger.info("populate_baseline: %s rows for patch %s", total, patch_id)
     return total
 
@@ -532,7 +524,6 @@ def populate_hero_draft_slot(cfg: TrainerConfig, conn) -> int:
         for batch in _batched(rows, cfg.agg_batch_size):
             psycopg2.extras.execute_values(cur, POPULATE_HERO_DRAFT_SLOT, batch, template=None)
             total += len(batch)
-    conn.commit()
     logger.info("populate_hero_draft_slot: %s rows for patch %s", total, patch_id)
     return total
 
@@ -725,7 +716,6 @@ def populate_team_hero_snapshot(cfg, conn) -> int:
         for batch in _batched(rows, cfg.agg_batch_size):
             psycopg2.extras.execute_values(cur, POPULATE_TEAM_HERO_SNAPSHOT, batch, template=None)
             total += len(batch)
-    conn.commit()
     logger.info("populate_team_hero_snapshot: %s rows for patch %s (lookback=%d, prior_w=%.2f)", total, patch_id, lookback, prior_weight)
     return total
 
@@ -778,7 +768,6 @@ def populate_player_hero_snapshot(cfg, conn) -> int:
         for batch in _batched(rows, cfg.agg_batch_size):
             psycopg2.extras.execute_values(cur, POPULATE_PLAYER_HERO_SNAPSHOT, batch, template=None)
             total += len(batch)
-    conn.commit()
     logger.info("populate_player_hero_snapshot: %s rows for patch %s (lookback=%d, prior_w=%.2f)", total, patch_id, lookback, prior_weight)
     return total
 
@@ -819,7 +808,6 @@ def populate_synergy_snapshot(cfg, conn) -> int:
         for batch in _batched(rows, cfg.agg_batch_size):
             psycopg2.extras.execute_values(cur, POPULATE_SYNERGY_SNAPSHOT, batch, template=None)
             total += len(batch)
-    conn.commit()
     logger.info("populate_synergy_snapshot: %s rows for patch %s (lookback=%d, prior_w=%.2f)", total, patch_id, lookback, prior_weight)
     return total
 
@@ -861,7 +849,6 @@ def populate_counter_snapshot(cfg, conn) -> int:
                     last_emitted[(hid, ehid)] = state
             if rows:
                 psycopg2.extras.execute_values(cur, POPULATE_COUNTER_SNAPSHOT, rows, template=None)
-        conn.commit()
         total += len(rows)
     logger.info("populate_counter_snapshot: %s rows for patch %s", total, patch_id)
     return total
@@ -902,7 +889,6 @@ def populate_h2h_snapshot(cfg, conn) -> int:
         for batch in _batched(rows, cfg.agg_batch_size):
             psycopg2.extras.execute_values(cur, POPULATE_H2H_SNAPSHOT, batch, template=None)
             total += len(batch)
-    conn.commit()
     logger.info("populate_h2h_snapshot: %s rows for patch %s", total, patch_id)
     return total
 
@@ -944,7 +930,6 @@ def populate_baseline_snapshot(cfg, conn) -> int:
         for batch in _batched(rows, cfg.agg_batch_size):
             psycopg2.extras.execute_values(cur, POPULATE_BASELINE_SNAPSHOT, batch, template=None)
             total += len(batch)
-    conn.commit()
     logger.info("populate_baseline_snapshot: %s rows for patch %s", total, patch_id)
     return total
 
@@ -988,7 +973,6 @@ def populate_hero_draft_slot_snapshot(cfg, conn) -> int:
         for batch in _batched(rows, cfg.agg_batch_size):
             psycopg2.extras.execute_values(cur, POPULATE_HERO_DRAFT_SLOT_SNAPSHOT, batch, template=None)
             total += len(batch)
-    conn.commit()
     logger.info("populate_hero_draft_slot_snapshot: %s rows for patch %s", total, patch_id)
     return total
 
@@ -1022,9 +1006,17 @@ def _analyze_ml_tables(conn) -> None:
 
 
 def populate_all(cfg: TrainerConfig, conn) -> dict[str, int]:
+    """Run all populators in a single transaction. Commit once on success, rollback on failure."""
     counts = {}
-    for name, fn in ALL_POPULATORS:
-        logger.info("Populating %s ...", name)
-        counts[name] = fn(cfg, conn)
+    try:
+        for name, fn in ALL_POPULATORS:
+            logger.info("Populating %s ...", name)
+            counts[name] = fn(cfg, conn)
+        conn.commit()
+        logger.info("All %d populators committed successfully.", len(counts))
+    except Exception:
+        conn.rollback()
+        logger.exception("Populator failed — rolled back all changes.")
+        raise
     _analyze_ml_tables(conn)
     return counts

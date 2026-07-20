@@ -151,8 +151,10 @@ def load_live_dataset(cfg: TrainerConfig, engine, max_len: int = 25):
     # --- SUBSAMPLE PER-MATCH MINUTES ---
     # Randomly sample up to PER_MATCH_SAMPLES minutes per match to reduce
     # within-match correlation (near-duplicate rows sharing draft/outcome).
+    # Uses OS entropy (not fixed seed) to prevent seeing the same samples
+    # every training run, reducing overfitting to specific minute selections.
     PER_MATCH_SAMPLES = 12
-    rng = np.random.RandomState(42)
+    rng = np.random.default_rng()
     valid_mask = (minutes_arr != 0) & np.array([mid in draft_lookup for mid in mids])
     valid_indices = np.where(valid_mask)[0]
 
@@ -281,7 +283,7 @@ class StreamingLiveDataset(IterableDataset):
             dyn_minutes = dynamic_df["minute"].values
 
             # Yield samples one at a time (subsampled per match)
-            rng = np.random.RandomState(42)
+            rng = np.random.default_rng()
             for mid in match_list:
                 if mid not in draft_lookup:
                     continue

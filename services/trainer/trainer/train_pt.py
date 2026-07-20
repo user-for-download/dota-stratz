@@ -170,8 +170,14 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     criterion = nn.BCEWithLogitsLoss()
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=cfg.lr_scheduler_factor, patience=cfg.lr_scheduler_patience,
+    steps_per_epoch = n_train // batch_size
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=cfg.lr,
+        epochs=cfg.epochs,
+        steps_per_epoch=max(steps_per_epoch, 1),
+        pct_start=cfg.lr_scheduler_pct_start,
+        anneal_strategy='cos',
     )
 
     # 3. Training Loop (vectorized — direct tensor slicing, no DataLoader)
@@ -209,6 +215,7 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             optimizer.step()
+            scheduler.step()  # OneCycleLR steps per batch
             train_loss += loss.item() * len(labels)
             train_samples += len(labels)
 
@@ -231,7 +238,6 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
 
         avg_train = train_loss / max(train_samples, 1)
         avg_val = val_loss / max(val_samples, 1)
-        scheduler.step(avg_val)
         current_lr = optimizer.param_groups[0]['lr']
 
         logger.info(
@@ -246,16 +252,30 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
             torch.save(model.state_dict(), model_dir / f"draftbert_w_{cfg.patch_id}_{run_id}.pt")
 
             model_eval = copy.deepcopy(model).cpu().eval()
-            with torch.no_grad():
-                dummy_h = torch.tensor([[5, 10, 15] + [0] * (cfg.max_seq_len - 3)], dtype=torch.long)
-                dummy_a = torch.tensor([[3, 4, 1] + [0] * (cfg.max_seq_len - 3)], dtype=torch.long)
-                dummy_f = torch.zeros((1, num_continuous), dtype=torch.float32)
-                dummy_p = torch.tensor([cfg.patch_id], dtype=torch.long)
-                traced = torch.jit.trace(model_eval, (dummy_h, dummy_a, dummy_f, dummy_p))
-                traced.save(model_dir / f"draftbert_compiled_{cfg.patch_id}_{run_id}.pt")
 
+            # INT8 dynamic quantization for ~2x CPU inference speedup
+            quantized_model = torch.quantization.quantize_dynamic(
+                model_eval, {nn.Linear, nn.LayerNorm}, dtype=torch.qint8,
+            )
+
+            dummy_h = torch.tensor([[5, 10, 15] + [0] * (cfg.max_seq_len - 3)], dtype=torch.long)
+            dummy_a = torch.tensor([[3, 4, 1] + [0] * (cfg.max_seq_len - 3)], dtype=torch.long)
+            dummy_f = torch.zeros((1, num_continuous), dtype=torch.float32)
+            dummy_p = torch.tensor([cfg.patch_id], dtype=torch.long)
+
+            # Save quantized TorchScript model
+            with torch.no_grad():
+                traced_q = torch.jit.trace(quantized_model, (dummy_h, dummy_a, dummy_f, dummy_p))
+                traced_q.save(model_dir / f"draftbert_compiled_{cfg.patch_id}_{run_id}.pt")
+
+            # Also save unquantized for reference
+            with torch.no_grad():
+                traced = torch.jit.trace(model_eval, (dummy_h, dummy_a, dummy_f, dummy_p))
+                traced.save(model_dir / f"draftbert_compiled_fp32_{cfg.patch_id}_{run_id}.pt")
+
+            # Canonical model files (overwritten each run)
             torch.save(model.state_dict(), model_dir / f"draftbert_weights_{cfg.patch_id}.pt")
-            traced.save(model_dir / f"draftbert_compiled_{cfg.patch_id}.pt")
+            traced_q.save(model_dir / f"draftbert_compiled_{cfg.patch_id}.pt")
         else:
             patience_counter += 1
             if patience_counter >= cfg.early_stop_patience:
@@ -272,6 +292,8 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
         "n_val_sequences": metadata["n_val_sequences"],
         "n_continuous_features": num_continuous,
         "model_type": "draftbert_pytorch",
+        "quantized": True,
+        "quantization": "int8_dynamic",
     }
     (model_dir / f"model_patch_{cfg.patch_id}_meta.json").write_text(json.dumps(meta, indent=2))
 

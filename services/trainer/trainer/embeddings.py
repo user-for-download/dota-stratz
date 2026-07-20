@@ -14,6 +14,7 @@ Tables created:
 from __future__ import annotations
 
 import logging
+import os
 
 import numpy as np
 import pandas as pd
@@ -27,7 +28,7 @@ HERO_EMB_DIM = 32
 TEAM_EMB_DIM = 16
 PLAYER_EMB_DIM = 16
 SPATIAL_EMB_DIM = 16
-MAX_HERO_ID = 160
+MAX_HERO_ID = int(os.getenv("TRAINER_MAX_HERO_ID", "160"))
 
 
 def populate_embeddings(cfg, engine) -> None:
@@ -88,12 +89,16 @@ def _compute_hero_embeddings(conn, engine, patch_id: int) -> None:
         logger.warning("  No synergy data, skipping hero embeddings")
         return
 
+    # Vectorized matrix fill (no iterrows)
     mat = np.zeros((MAX_HERO_ID + 1, MAX_HERO_ID + 1))
-    for _, row in df.iterrows():
-        a, b = int(row["hero_a"]), int(row["hero_b"])
-        if a <= MAX_HERO_ID and b <= MAX_HERO_ID:
-            mat[a, b] = row["games"]
-            mat[b, a] = row["games"]
+    mask = (df["hero_a"] <= MAX_HERO_ID) & (df["hero_b"] <= MAX_HERO_ID)
+    valid = df[mask]
+    if not valid.empty:
+        a_idx = valid["hero_a"].values.astype(int)
+        b_idx = valid["hero_b"].values.astype(int)
+        games = valid["games"].values
+        mat[a_idx, b_idx] = games
+        mat[b_idx, a_idx] = games
     mat = np.log1p(mat)
 
     svd = TruncatedSVD(n_components=HERO_EMB_DIM, random_state=42)

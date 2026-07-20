@@ -89,6 +89,7 @@ def _make_draft_row(match_id: int, slot: int) -> dict[str, object]:
         "dire_team_id": 200,
         "radiant_win": bool(match_id % 2),
         "start_time": match_id,
+        "patch_id": 7,
     }
 
 

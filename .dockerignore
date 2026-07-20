@@ -1,46 +1,12 @@
-# Version control
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.pytest_cache/
+**/.venv/
+**/venv/
+**/env/
 .git/
 .gitignore
-
-# Local build artifacts
-bin/
-tmp/
-
-# IDE / editor config
-.vscode/
-.idea/
-.opencode/
-
-# Environment (may contain secrets)
-.env
-.env.*
-
-# OS metadata
-.DS_Store
-Thumbs.db
-# Ignore massive backup files
-backups/
-*.tar
-*.tar.gz
-*.sql.gz
-
-# Ignore local dumps and logs
-dump_out/
-*.log
-
-# Ignore Git history
-.git/
-.gitignore
-
-# Ignore Python caches
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Ignore local env files
-.env
-
-# Ignore Go build caches
-*.exe
-*.test
+*.md
+deploy/.env

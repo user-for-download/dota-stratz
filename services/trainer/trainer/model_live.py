@@ -40,23 +40,30 @@ class LiveDraftBERT(nn.Module):
             d_model=d_model, nhead=nhead,
             dim_feedforward=d_model * 4, dropout=transformer_dropout,
             batch_first=True,
+            norm_first=True,  # Pre-LayerNorm for stable gradients
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers, enable_nested_tensor=False)
 
-        # Branch 2: Static MLP
+        # Branch 2: Static MLP (2-layer residual)
         tabular_dropout = min(0.5, dropout * 1.5)
+        self.static_norm = nn.LayerNorm(num_static_features)
         self.static_mlp = nn.Sequential(
-            nn.LayerNorm(num_static_features),
             nn.Linear(num_static_features, static_hidden),
-            nn.ReLU(),
+            nn.GELU(),
+            nn.Dropout(tabular_dropout),
+            nn.Linear(static_hidden, static_hidden),
+            nn.GELU(),
             nn.Dropout(tabular_dropout),
         )
 
-        # Branch 3: Dynamic MLP
+        # Branch 3: Dynamic MLP (2-layer residual)
+        self.dynamic_norm = nn.LayerNorm(num_dynamic_features)
         self.dynamic_mlp = nn.Sequential(
-            nn.LayerNorm(num_dynamic_features),
             nn.Linear(num_dynamic_features, dynamic_hidden),
-            nn.ReLU(),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(dynamic_hidden, dynamic_hidden),
+            nn.GELU(),
             nn.Dropout(dropout),
         )
 
@@ -87,8 +94,8 @@ class LiveDraftBERT(nn.Module):
         valid_lengths = (~pad_mask).sum(dim=1, keepdim=True).float().clamp(min=1.0)
         seq_repr = sum_embeddings / valid_lengths
 
-        static_repr = self.static_mlp(static_features)
-        dynamic_repr = self.dynamic_mlp(dynamic_features)
+        static_repr = self.static_mlp(self.static_norm(static_features))
+        dynamic_repr = self.dynamic_mlp(self.dynamic_norm(dynamic_features))
         patch_repr = self.patch_emb(patches)
 
         fused = torch.cat([seq_repr, static_repr, dynamic_repr, patch_repr], dim=1)
@@ -96,7 +103,7 @@ class LiveDraftBERT(nn.Module):
         return logits
 
     def forward_dynamic(self, seq_repr, static_repr, dynamic_features, patches):
-        dynamic_repr = self.dynamic_mlp(dynamic_features)
+        dynamic_repr = self.dynamic_mlp(self.dynamic_norm(dynamic_features))
         patch_repr = self.patch_emb(patches)
         fused = torch.cat([seq_repr, static_repr, dynamic_repr, patch_repr], dim=1)
         logits = self.fusion_head(fused).squeeze(-1)
@@ -117,6 +124,6 @@ class LiveDraftBERT(nn.Module):
         valid_lengths = (~pad_mask).sum(dim=1, keepdim=True).float().clamp(min=1.0)
         seq_repr = sum_embeddings / valid_lengths
 
-        static_repr = self.static_mlp(static_features)
+        static_repr = self.static_mlp(self.static_norm(static_features))
         patch_repr = self.patch_emb(patches)
         return seq_repr, static_repr, patch_repr

@@ -58,9 +58,10 @@ class InferenceCache:
     present and doesn't need PIT safety.
     """
 
-    def __init__(self, engine: Engine, patch_id: int):
+    def __init__(self, engine: Engine, patch_id: int, core_gpm_threshold: float = 420.0):
         self.engine = engine
         self.patch_id = patch_id
+        self.core_gpm_threshold = core_gpm_threshold
 
         # Caches: key -> dict of stats
         self.baseline: dict[int, dict] = {}
@@ -80,15 +81,14 @@ class InferenceCache:
         """Load all 7 aggregate tables into memory."""
         logger.info("Loading Inference Cache for patch %s into RAM...", self.patch_id)
 
-        # 1. Hero Baseline
+        # 1. Hero Baseline — vectorized load (no iterrows)
         df_bl = pd.read_sql(
             "SELECT * FROM ml.hero_baseline_agg WHERE patch_id = %(pid)s",
             self.engine, params={"pid": self.patch_id},
         )
-        self.baseline = {
-            int(row["hero_id"]): row.to_dict()
-            for _, row in df_bl.iterrows()
-        }
+        if not df_bl.empty:
+            df_bl["hero_id"] = df_bl["hero_id"].astype(int)
+            self.baseline = df_bl.set_index("hero_id").to_dict("index")
         logger.info("  baseline: %d heroes", len(self.baseline))
 
         # 2. Hero Synergy (hero_a < hero_b in DB)
@@ -96,10 +96,10 @@ class InferenceCache:
             "SELECT hero_a, hero_b, win_rate, games FROM ml.hero_synergy_agg WHERE patch_id = %(pid)s",
             self.engine, params={"pid": self.patch_id},
         )
-        self.synergy = {
-            (int(row["hero_a"]), int(row["hero_b"])): row.to_dict()
-            for _, row in df_sy.iterrows()
-        }
+        if not df_sy.empty:
+            df_sy["hero_a"] = df_sy["hero_a"].astype(int)
+            df_sy["hero_b"] = df_sy["hero_b"].astype(int)
+            self.synergy = {(r["hero_a"], r["hero_b"]): r for r in df_sy.to_dict("records")}
         logger.info("  synergy: %d pairs", len(self.synergy))
 
         # 3. Hero Counter
@@ -108,10 +108,10 @@ class InferenceCache:
             "FROM ml.hero_counter_agg WHERE patch_id = %(pid)s",
             self.engine, params={"pid": self.patch_id},
         )
-        self.counter = {
-            (int(row["hero_id"]), int(row["enemy_hero_id"])): row.to_dict()
-            for _, row in df_co.iterrows()
-        }
+        if not df_co.empty:
+            df_co["hero_id"] = df_co["hero_id"].astype(int)
+            df_co["enemy_hero_id"] = df_co["enemy_hero_id"].astype(int)
+            self.counter = {(r["hero_id"], r["enemy_hero_id"]): r for r in df_co.to_dict("records")}
         logger.info("  counter: %d matchups", len(self.counter))
 
         # 4. Team-Hero
@@ -119,10 +119,10 @@ class InferenceCache:
             "SELECT * FROM ml.team_hero_agg WHERE patch_id = %(pid)s",
             self.engine, params={"pid": self.patch_id},
         )
-        self.team_hero = {
-            (int(row["team_id"]), int(row["hero_id"])): row.to_dict()
-            for _, row in df_th.iterrows()
-        }
+        if not df_th.empty:
+            df_th["team_id"] = df_th["team_id"].astype(int)
+            df_th["hero_id"] = df_th["hero_id"].astype(int)
+            self.team_hero = {(r["team_id"], r["hero_id"]): r for r in df_th.to_dict("records")}
         logger.info("  team_hero: %d combos", len(self.team_hero))
 
         # 5. Player-Hero
@@ -130,10 +130,10 @@ class InferenceCache:
             "SELECT * FROM ml.player_hero_agg WHERE patch_id = %(pid)s",
             self.engine, params={"pid": self.patch_id},
         )
-        self.player_hero = {
-            (int(row["account_id"]), int(row["hero_id"])): row.to_dict()
-            for _, row in df_ph.iterrows()
-        }
+        if not df_ph.empty:
+            df_ph["account_id"] = df_ph["account_id"].astype(int)
+            df_ph["hero_id"] = df_ph["hero_id"].astype(int)
+            self.player_hero = {(r["account_id"], r["hero_id"]): r for r in df_ph.to_dict("records")}
         logger.info("  player_hero: %d combos", len(self.player_hero))
 
         # 6. Team H2H
@@ -141,10 +141,10 @@ class InferenceCache:
             "SELECT * FROM ml.team_h2h_agg WHERE patch_id = %(pid)s",
             self.engine, params={"pid": self.patch_id},
         )
-        self.team_h2h = {
-            (int(row["team_id"]), int(row["enemy_team_id"])): row.to_dict()
-            for _, row in df_h2h.iterrows()
-        }
+        if not df_h2h.empty:
+            df_h2h["team_id"] = df_h2h["team_id"].astype(int)
+            df_h2h["enemy_team_id"] = df_h2h["enemy_team_id"].astype(int)
+            self.team_h2h = {(r["team_id"], r["enemy_team_id"]): r for r in df_h2h.to_dict("records")}
         logger.info("  team_h2h: %d matchups", len(self.team_h2h))
 
         # 7. Hero Draft Slot
@@ -152,13 +152,13 @@ class InferenceCache:
             "SELECT * FROM ml.hero_draft_slot_agg WHERE patch_id = %(pid)s",
             self.engine, params={"pid": self.patch_id},
         )
-        self.draft_slot = {
-            (int(row["hero_id"]), int(row["team_pick_ordinal"])): row.to_dict()
-            for _, row in df_ds.iterrows()
-        }
+        if not df_ds.empty:
+            df_ds["hero_id"] = df_ds["hero_id"].astype(int)
+            df_ds["team_pick_ordinal"] = df_ds["team_pick_ordinal"].astype(int)
+            self.draft_slot = {(r["hero_id"], r["team_pick_ordinal"]): r for r in df_ds.to_dict("records")}
         logger.info("  draft_slot: %d combos", len(self.draft_slot))
 
-        # 8. SVD Embeddings
+        # 8. SVD Embeddings — vectorized load
         try:
             h_cols = [f"emb_{i}" for i in range(32)]
             t_cols = [f"emb_{i}" for i in range(16)]
@@ -166,24 +166,32 @@ class InferenceCache:
                 "SELECT hero_id, {} FROM ml.hero_embeddings WHERE patch_id = %(pid)s".format(", ".join(h_cols)),
                 self.engine, params={"pid": self.patch_id},
             )
-            self.hero_embeddings = {int(row["hero_id"]): row[h_cols].tolist() for _, row in df_he.iterrows()}
+            if not df_he.empty:
+                df_he["hero_id"] = df_he["hero_id"].astype(int)
+                self.hero_embeddings = {r["hero_id"]: [r[c] for c in h_cols] for r in df_he.to_dict("records")}
             df_te = pd.read_sql(
                 "SELECT team_id, {} FROM ml.team_embeddings WHERE patch_id = %(pid)s".format(", ".join(t_cols)),
                 self.engine, params={"pid": self.patch_id},
             )
-            self.team_embeddings = {int(row["team_id"]): row[t_cols].tolist() for _, row in df_te.iterrows()}
+            if not df_te.empty:
+                df_te["team_id"] = df_te["team_id"].astype(int)
+                self.team_embeddings = {r["team_id"]: [r[c] for c in t_cols] for r in df_te.to_dict("records")}
             df_pe = pd.read_sql(
                 "SELECT account_id, {} FROM ml.player_embeddings WHERE patch_id = %(pid)s".format(", ".join(t_cols)),
                 self.engine, params={"pid": self.patch_id},
             )
-            self.player_embeddings = {int(row["account_id"]): row[t_cols].tolist() for _, row in df_pe.iterrows()}
+            if not df_pe.empty:
+                df_pe["account_id"] = df_pe["account_id"].astype(int)
+                self.player_embeddings = {r["account_id"]: [r[c] for c in t_cols] for r in df_pe.to_dict("records")}
 
             s_cols = [f"spatial_emb_{i}" for i in range(16)]
             df_hse = pd.read_sql(
                 "SELECT hero_id, {} FROM ml.hero_spatial_embeddings WHERE patch_id = %(pid)s".format(", ".join(s_cols)),
                 self.engine, params={"pid": self.patch_id},
             )
-            self.hero_spatial_embeddings = {int(row["hero_id"]): row[s_cols].tolist() for _, row in df_hse.iterrows()}
+            if not df_hse.empty:
+                df_hse["hero_id"] = df_hse["hero_id"].astype(int)
+                self.hero_spatial_embeddings = {r["hero_id"]: [r[c] for c in s_cols] for r in df_hse.to_dict("records")}
 
             logger.info("  embeddings: %d heroes, %d spatial, %d teams, %d players",
                         len(self.hero_embeddings), len(self.hero_spatial_embeddings),

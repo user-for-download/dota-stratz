@@ -89,6 +89,8 @@ class TrainerConfig:
     """Epochs to wait before reducing LR."""
     lr_scheduler_factor: float = float(os.getenv("TRAINER_LR_SCHEDULER_FACTOR", "0.5"))
     """Factor by which LR is reduced."""
+    lr_scheduler_pct_start: float = float(os.getenv("TRAINER_LR_SCHEDULER_PCT_START", "0.1"))
+    """OneCycleLR: fraction of training used for warmup (0.0-1.0)."""
     log_interval: int = int(os.getenv("TRAINER_LOG_INTERVAL", "50"))
     """Log training progress every N batches."""
 
@@ -119,6 +121,9 @@ class TrainerConfig:
     elo_calibration_weight: float = float(os.getenv("TRAINER_ELO_CALIBRATION_WEIGHT", "0.15"))
     """Max probability swing from Elo calibration in predict-match (0.0-1.0).
     elo_adjustment = tanh(elo_diff / 400) * weight."""
+
+    core_gpm_threshold: float = float(os.getenv("TRAINER_CORE_GPM_THRESHOLD", "420.0"))
+    """GPM threshold to distinguish core heroes from supports in MCTS composition filter."""
 
     @property
     def pg_dsn(self) -> str:
