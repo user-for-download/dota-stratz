@@ -40,10 +40,12 @@ logger = logging.getLogger(__name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _shrunk_wr(wins: float, games: float, prior_games: float = 3.0, prior_wr: float = 0.5) -> float:
+def _shrunk_wr(wins, games, prior_games: float = 3.0, prior_wr: float = 0.5) -> float:
     """Bayesian-shrunken win rate: (wins + prior_games * prior_wr) / (games + prior_games).
-    Accepts float *wins/games* (fractional counts from cross-patch weighting)."""
-    return (wins + prior_games * prior_wr) / (games + prior_games) if games > 0 else prior_wr
+    Accepts float or Decimal *wins/games* (fractional counts from time decay)."""
+    w = float(wins or 0)
+    g = float(games or 0)
+    return (w + prior_games * prior_wr) / (g + prior_games) if g > 0 else prior_wr
 
 
 def _batched(rows: list[tuple], batch_size: int):
@@ -475,6 +477,10 @@ def populate_baseline(cfg: TrainerConfig, conn) -> int:
         rows = []
         for r in cur.fetchall():
             hid, picks, wins, bans, ag, ax, ak, ad, aa, ag10, ax10, tot = r
+            picks = float(picks or 0)
+            wins = float(wins or 0)
+            bans = float(bans or 0)
+            tot = float(tot or 1)
             rows.append((patch_id, hid, picks, wins, bans, _shrunk_wr(wins, picks, pg, pw), picks/tot if tot>0 else 0, bans/tot if tot>0 else 0, ag, ax, ak, ad, aa, ag10, ax10))
     total = 0
     with conn.cursor() as cur:
@@ -518,6 +524,8 @@ def populate_hero_draft_slot(cfg: TrainerConfig, conn) -> int:
         rows = []
         for r in cur.fetchall():
             hid, tpo, games, wins = r
+            games = float(games or 0)
+            wins = float(wins or 0)
             rows.append((patch_id, hid, tpo, games, wins, _shrunk_wr(wins, games, pg, pw)))
     total = 0
     with conn.cursor() as cur:
