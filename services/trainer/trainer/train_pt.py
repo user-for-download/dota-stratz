@@ -253,29 +253,19 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
 
             model_eval = copy.deepcopy(model).cpu().eval()
 
-            # INT8 dynamic quantization for ~2x CPU inference speedup
-            quantized_model = torch.quantization.quantize_dynamic(
-                model_eval, {nn.Linear, nn.LayerNorm}, dtype=torch.qint8,
-            )
-
             dummy_h = torch.tensor([[5, 10, 15] + [0] * (cfg.max_seq_len - 3)], dtype=torch.long)
             dummy_a = torch.tensor([[3, 4, 1] + [0] * (cfg.max_seq_len - 3)], dtype=torch.long)
             dummy_f = torch.zeros((1, num_continuous), dtype=torch.float32)
             dummy_p = torch.tensor([cfg.patch_id], dtype=torch.long)
 
-            # Save quantized TorchScript model
-            with torch.no_grad():
-                traced_q = torch.jit.trace(quantized_model, (dummy_h, dummy_a, dummy_f, dummy_p))
-                traced_q.save(model_dir / f"draftbert_compiled_{cfg.patch_id}_{run_id}.pt")
-
-            # Also save unquantized for reference
+            # Trace float model for TorchScript (quantization applied at load time)
             with torch.no_grad():
                 traced = torch.jit.trace(model_eval, (dummy_h, dummy_a, dummy_f, dummy_p))
-                traced.save(model_dir / f"draftbert_compiled_fp32_{cfg.patch_id}_{run_id}.pt")
+                traced.save(model_dir / f"draftbert_compiled_{cfg.patch_id}_{run_id}.pt")
 
             # Canonical model files (overwritten each run)
             torch.save(model.state_dict(), model_dir / f"draftbert_weights_{cfg.patch_id}.pt")
-            traced_q.save(model_dir / f"draftbert_compiled_{cfg.patch_id}.pt")
+            traced.save(model_dir / f"draftbert_compiled_{cfg.patch_id}.pt")
         else:
             patience_counter += 1
             if patience_counter >= cfg.early_stop_patience:
@@ -292,8 +282,6 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
         "n_val_sequences": metadata["n_val_sequences"],
         "n_continuous_features": num_continuous,
         "model_type": "draftbert_pytorch",
-        "quantized": True,
-        "quantization": "int8_dynamic",
     }
     (model_dir / f"model_patch_{cfg.patch_id}_meta.json").write_text(json.dumps(meta, indent=2))
 
