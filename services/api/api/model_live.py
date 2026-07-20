@@ -39,7 +39,7 @@ class LiveDraftBERT(nn.Module):
             dropout=transformer_dropout,
             batch_first=True,
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers, enable_nested_tensor=False)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
         self.static_mlp = nn.Sequential(
             nn.LayerNorm(num_static_features),

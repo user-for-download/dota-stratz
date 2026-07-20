@@ -42,7 +42,7 @@ class LiveDraftBERT(nn.Module):
             batch_first=True,
             norm_first=True,  # Pre-LayerNorm for stable gradients
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers, enable_nested_tensor=False)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
         # Branch 2: Static MLP (2-layer residual)
         tabular_dropout = min(0.5, dropout * 1.5)

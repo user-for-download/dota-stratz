@@ -40,7 +40,7 @@ class MultiModalDraftBERT(nn.Module):
             batch_first=True,
             norm_first=True,  # Pre-LayerNorm for stable gradients (GPT/LLaMA style)
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers, enable_nested_tensor=False)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
         # --- 2. Tabular Branch (Continuous Features, 2-layer residual MLP) ---
         tabular_dropout = min(0.5, dropout * 1.5)
