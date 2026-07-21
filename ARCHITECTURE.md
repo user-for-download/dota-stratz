@@ -105,7 +105,7 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 **Model architecture — LiveDraftBERT:**
 - **Sequence branch:** Same as DraftBERT (Pre-LayerNorm Transformer encoder)
 - **Static branch:** 2-layer MLP with GELU for 143 static features (aggregates + SVD embeddings)
-- **Dynamic branch:** 2-layer MLP with GELU for 30 dynamic features (gold/xp, towers, Roshan, teamfights, power spikes, vision, neutral items)
+- **Dynamic branch:** 2-layer MLP with GELU for 32 dynamic features (gold/xp, towers, Roshan, teamfights, power spikes, vision, neutral items)
 - **Fusion:** 4-way concatenation (seq + static + dynamic + patch_emb) → Linear(248, 64) → ReLU → Dropout(0.3) → Linear(64, 1)
 
 **Training configuration (all from `deploy/.env`):**
@@ -129,6 +129,8 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 | Lookback patches | `TRAINER_LOOKBACK_PATCHES` | 2 | Patches for cross-patch lookback |
 | Decay ref time | `TRAINER_DECAY_REF_TIME` | 0 (NOW) | Unix timestamp for time-decay reference |
 | Elo calibration weight | `TRAINER_ELO_CALIBRATION_WEIGHT` | 0.15 | Max probability swing from Elo calibration |
+| Core GPM threshold | `TRAINER_CORE_GPM_THRESHOLD` | 420.0 | GPM threshold for core/support classification in MCTS |
+| Per-match samples | `TRAINER_PER_MATCH_SAMPLES` | 12 | Max dynamic feature samples per match in streaming dataset |
 
 **Key behaviors:**
 - TorchScript export uses `copy.deepcopy()` before `.cpu()` to avoid severing optimizer references
@@ -149,7 +151,7 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 - `draftbert_compiled_{patch_id}.pt` — TorchScript model for API
 - `draftbert_weights_{patch_id}.pt` — PyTorch state dict for resume
 - `model_patch_{patch_id}_meta.json` — Training metadata
-- `feature_schema_patch_{patch_id}.json` — Feature contract (143 aggregate columns + SVD embeddings + `max_seq_len`)
+- `feature_schema_patch_{patch_id}.json` — Feature contract (143 static features: 63 base + 80 SVD embeddings + `max_seq_len`)
 
 ---
 
@@ -241,7 +243,7 @@ Event-driven pipeline services connected via RabbitMQ. See original documentatio
 | Component | File | Description |
 |-----------|------|-------------|
 | **Inference Cache** | `trainer/inference_cache.py` | Loads 7 `ml.*_agg` tables into Python dicts for O(1) feature lookups |
-| **Draft State** | `trainer/draft_state.py` | Builds 63-dim feature arrays for hypothetical picks in RAM (mirrors SQL logic) |
+| **Draft State** | `trainer/draft_state.py` | Builds 143-dim feature arrays for hypothetical picks in RAM (mirrors SQL logic) |
 | **Greedy Bot** | `trainer/bot_greedy.py` | Single-step lookahead via batched PyTorch (~5ms per 120 heroes) |
 | **MCTS Bot** | `trainer/bot_mcts.py` | Monte Carlo Tree Search with UCB1, DraftBERT as value network (AlphaZero-style) |
 | **Interactive Bot** | `trainer/bot_interactive.py` | Captain's Mode interactive mode with AI suggestions |
@@ -382,6 +384,20 @@ A comprehensive audit across ~100 source files found **55 items** — 9 blockers
 | INFO | 28 | 0 | 28 |
 | **Total** | **55** | **27** | **28** |
 
+### Critical Bug Fixes (July 2026)
+
+| Bug | File | Fix |
+|-----|------|-----|
+| B1 | `bot_mcts.py` | Fixed `CAPTAINS_MODE_FORMAT` from 26→24 actions (16→14 bans) to match official Dota 2 CM pattern |
+| B2 | `test_bot.py` | Fixed `DummyModel.forward()` missing `patches` parameter |
+| B3 | `dataset_live.py` | Fixed `StreamingLiveDataset.__iter__` undefined `cfg` → `self.cfg` |
+| B4 | `aggregates.py` | Replaced `TRUNCATE TABLE` with `DELETE FROM` for `ml.team_elo` to avoid ACCESS EXCLUSIVE lock |
+| M3 | `bot_interactive.py` | Pass `core_gpm_threshold` from `TrainerConfig` to `InferenceCache` |
+| M4 | `train_pt.py` | Fixed `_log_experiment` connection leak with `try/finally` cleanup |
+| M7 | `ewc_sim.py` | Replaced `os._exit(1)` with `sys.exit(1)` for proper Python cleanup |
+| M10 | `config.py` + `dataset_live.py` | Made `PER_MATCH_SAMPLES` configurable via `TRAINER_PER_MATCH_SAMPLES` env var |
+| — | `bot_mcts.py` | Removed dead `_evaluate_state` method (only `_evaluate_batch` used) |
+
 **Key fixes**:
 - Feature vector now uses `self._max_hero_id + 1` instead of hardcoded `156` — new heroes no longer silently excluded (B2)
 - Trainer `command: ["sleep", "infinity"]` removed from compose.yaml — trainer actually trains (B3)
@@ -415,7 +431,7 @@ A comprehensive audit across ~100 source files found **55 items** — 9 blockers
 - StandardScaler normalization (faster convergence)
 - Feature drift detection (early warning for data quality)
 - Model versioning (experiment tracking)
-- Dynamic feature sizing (24→35→30 for LiveDraftBERT) — removed 15 constant-zero placeholders
+- Dynamic feature sizing (24→35→32 for LiveDraftBERT) — removed 15 constant-zero placeholders
 - Team composition features (gpm_budget, xpm_budget)
 - Draft phase awareness (draft_phase_id)
 - Team pick propensity (team_pick_propensity)
@@ -453,7 +469,7 @@ cd services/trainer && python -m pytest trainer/test_bot.py -v
 
 ## Known Issues
 
-1. **LiveDraftBERT training** — Currently running on CUDA machine with 30 dynamic features
+1. **LiveDraftBERT training** — Currently running on CUDA machine with 32 dynamic features
 2. **Full data training** — Patches 58-60 processed
 3. **Retrain DraftBERT** — Done (cross-patch with patch_id embedding)
 4. **Model deployment** — Updated models deployed to API

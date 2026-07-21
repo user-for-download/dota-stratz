@@ -26,7 +26,7 @@ OpenDota API  ──►  ID Fetcher  ──►  Detail Fetcher  ──►  Parse
                                                   (Draft Predictor UI)
 ```
 
-Six microservices (4 Go + 2 Python) + 1 Nginx frontend, connected via RabbitMQ message queues, with a Redis-backed proxy pool for API rate-limit avoidance. The ML pipeline uses PyTorch DraftBERT (Transformer + MLP multi-modal architecture) for draft prediction with Monte Carlo rollouts for strategic lookahead. LiveDraftBERT adds 30 dynamic game state features for real-time match prediction.
+Six microservices (4 Go + 2 Python) + 1 Nginx frontend, connected via RabbitMQ message queues, with a Redis-backed proxy pool for API rate-limit avoidance. The ML pipeline uses PyTorch DraftBERT (Transformer + MLP multi-modal architecture) for draft prediction with Monte Carlo rollouts for strategic lookahead. LiveDraftBERT adds 32 dynamic game state features for real-time match prediction.
 
 **See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full system design, service details, database schema, and deployment topology.**
 
@@ -85,10 +85,10 @@ make downv                # Stop and remove volumes (destructive)
 | Component | Technology | Description |
 |-----------|-----------|-------------|
 | **Trainer** | PyTorch DraftBERT | Transformer (128d, 4 heads, 3 layers) + MLP (63 tabular features) |
-| **Live Trainer** | PyTorch LiveDraftBERT | Transformer + Tabular + Live branches (30 dynamic features) |
+| **Live Trainer** | PyTorch LiveDraftBERT | Transformer + Tabular + Live branches (32 dynamic features) |
 | **Inference** | TorchScript JIT | <2ms batched CPU inference via C++ graph |
 | **Lookahead** | Monte Carlo Rollouts | 40 simulations per top-15 candidate, batch-evaluated |
-| **Features** | 63 aggregate + sequence | Team/player hero stats, team composition, economy budget, draft propensity |
+| **Features** | 143 static + sequence | 63 base aggregates + 80 SVD embeddings, team/player hero stats |
 | **Calibration** | BCEWithLogitsLoss | Direct logit training, sigmoid output |
 | **Early Stopping** | Patience-based | Stops training when validation loss plateaus (patience=5) |
 | **Normalization** | StandardScaler | mean/std computed from training data, applied at inference |
@@ -123,6 +123,8 @@ Configuration is managed through `deploy/.env`. See `deploy/.env.example` for al
 | `TRAINER_ELO_CALIBRATION_WEIGHT` | 0.15 | Max probability swing from Elo calibration |
 | `TRAINER_DYNAMIC_HIDDEN` | 24 | LiveDraftBERT dynamic MLP hidden dim |
 | `TRAINER_LR_SCHEDULER_PATIENCE` | 1 | Epochs before LR reduction |
+| `TRAINER_CORE_GPM_THRESHOLD` | 420.0 | GPM threshold for core/support classification in MCTS |
+| `TRAINER_PER_MATCH_SAMPLES` | 12 | Max dynamic feature samples per match in streaming dataset |
 
 ## Project Structure
 
@@ -158,12 +160,10 @@ Configuration is managed through `deploy/.env`. See `deploy/.env.example` for al
 │   │   │   ├── model_live.py    # LiveDraftBERT inference
 │   │   │   ├── lookahead.py     # MCTS rollouts
 │   │   │   ├── draft_state.py   # DraftContext
-│   │   │   ├── live_features.py # 30 dynamic features
+│   │   │   ├── live_features.py # 32 dynamic features
 │   │   │   └── live_predict.py  # Live feature extraction
 │   │   └── tests/
 │   └── frontend/          # Nginx draft predictor UI (:80)
-├── ewc_sim.py             # EWC tournament simulation (real rosters + Elo)
-├── ewc_bracket.json       # Real EWC 2026 bracket data
 ├── shared/go-common/      # Shared Go library (mq, db, proxypool)
 ├── deploy/                # Docker Compose, migrations, monitoring
 ├── Makefile               # Build/deploy/test orchestration
