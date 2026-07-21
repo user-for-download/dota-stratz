@@ -10,3 +10,10 @@
 .gitignore
 *.md
 deploy/.env
+backups/
+deploy/models/
+*.tar
+*.tar.gz
+*.zip
+tests/
+*.log
