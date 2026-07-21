@@ -1,5 +1,6 @@
 # Environment files (credentials, secrets)
 .env
+*.tar
 
 # Python
 __pycache__/

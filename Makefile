@@ -38,7 +38,7 @@ POSTGRES_CONTAINER := dota2-postgres
 CYAN   := \033[36m
 YELLOW := \033[33m
 RESET  := \033[0m
-
+DB_PHYSICAL_BACKUP_DIR ?= ./backups
 # ==============================================================================
 # Help
 # ==============================================================================
@@ -140,6 +140,63 @@ db-reset: ## Drop and recreate database, then run migrations
 		-c "DROP DATABASE IF EXISTS $(POSTGRES_DB) WITH (FORCE);" \
 		-c "CREATE DATABASE $(POSTGRES_DB);"
 	$(MAKE) migrate
+
+.PHONY: db-backup-physical
+db-backup-physical:
+	@echo "$(YELLOW)Creating physical backup of $(POSTGRES_CONTAINER)...$(RESET)"
+	@mkdir -p "$(DB_PHYSICAL_BACKUP_DIR)"
+	@backup="pgdata_$$(date +%Y%m%d_%H%M%S).tar"; \
+	echo "Stopping $(POSTGRES_CONTAINER)..."; \
+	docker stop "$(POSTGRES_CONTAINER)"; \
+	echo "Writing backup to $(DB_PHYSICAL_BACKUP_DIR)/$$backup..."; \
+	docker run --rm \
+		--volumes-from "$(POSTGRES_CONTAINER)" \
+		-v "$$(pwd)/$(DB_PHYSICAL_BACKUP_DIR):/backup" \
+		alpine \
+		tar cf "/backup/$$backup" -C /var/lib/postgresql/data .; \
+	status=$$?; \
+	echo "Starting $(POSTGRES_CONTAINER)..."; \
+	docker start "$(POSTGRES_CONTAINER)"; \
+	if [ $$status -ne 0 ]; then \
+		echo "$(YELLOW)Backup failed.$(RESET)"; \
+		exit $$status; \
+	fi; \
+	echo "$(CYAN)Backup complete: $(DB_PHYSICAL_BACKUP_DIR)/$$backup$(RESET)"
+
+.PHONY: db-restore-physical
+db-restore-physical: ## Restore physical Postgres backup. Usage: make db-restore-physical DUMP=pgdata_xxx.tar
+	@if [ -z "$(DUMP)" ]; then \
+		echo "Usage: make db-restore-physical DUMP=pgdata_xxx.tar"; \
+		echo "Backups directory: $(DB_PHYSICAL_BACKUP_DIR)"; \
+		exit 1; \
+	fi
+	@echo "$(YELLOW)WARNING: This will WIPE current Postgres data in $(POSTGRES_CONTAINER).$(RESET)"
+	@read -p "Continue? [y/N] " ans && [ "$${ans:-N}" = "y" ]
+	@dump_path="$(DUMP)"; \
+	if [ ! -f "$$dump_path" ]; then \
+		dump_path="$(DB_PHYSICAL_BACKUP_DIR)/$(DUMP)"; \
+	fi; \
+	if [ ! -f "$$dump_path" ]; then \
+		echo "Backup file not found: $(DUMP)"; \
+		exit 1; \
+	fi; \
+	echo "Stopping $(POSTGRES_CONTAINER)..."; \
+	docker stop "$(POSTGRES_CONTAINER)"; \
+	echo "Restoring $$dump_path..."; \
+	docker run --rm \
+		--volumes-from "$(POSTGRES_CONTAINER)" \
+		-v "$$(pwd):/work" \
+		alpine \
+		sh -c "rm -rf /var/lib/postgresql/data/* && tar xf /work/$$dump_path -C /var/lib/postgresql/data"; \
+	status=$$?; \
+	echo "Starting $(POSTGRES_CONTAINER)..."; \
+	docker start "$(POSTGRES_CONTAINER)"; \
+	if [ $$status -ne 0 ]; then \
+		echo "$(YELLOW)Restore failed.$(RESET)"; \
+		exit $$status; \
+	fi; \
+	echo "$(CYAN)Restore complete from $$dump_path$(RESET)"
+
 
 # ==============================================================================
 # Go Toolchain
