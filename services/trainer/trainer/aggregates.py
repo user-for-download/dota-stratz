@@ -137,7 +137,9 @@ def populate_team_elo(cfg: TrainerConfig, conn) -> int:
 
     rows = [(t, e) for t, e in elos.items()]
     with conn.cursor() as cur:
-        cur.execute("TRUNCATE TABLE ml.team_elo")
+        # NOTE: team_elo is global (no patch_id) — Elo is cumulative across patches.
+        # Use DELETE instead of TRUNCATE to avoid ACCESS EXCLUSIVE lock that blocks concurrent reads.
+        cur.execute("DELETE FROM ml.team_elo")
         psycopg2.extras.execute_values(cur, "INSERT INTO ml.team_elo (team_id, elo) VALUES %s", rows)
     logger.info("populate_team_elo: computed Elo for %d teams", len(rows))
     return len(rows)

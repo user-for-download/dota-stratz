@@ -59,7 +59,7 @@ def run_interactive(patch_id, use_mcts, iterations):
 
     _load_hero_names(engine)
     logger.info("Loading inference cache for patch %d...", patch_id)
-    cache = InferenceCache(engine, patch_id)
+    cache = InferenceCache(engine, patch_id, core_gpm_threshold=cfg.core_gpm_threshold)
     builder = DraftStateBuilder(cache)
 
     # Load model

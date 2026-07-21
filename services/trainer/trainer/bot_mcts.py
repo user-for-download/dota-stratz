@@ -31,23 +31,30 @@ from .draft_state import DraftStateBuilder
 logger = logging.getLogger(__name__)
 
 # Standard Captain's Mode Sequence (24 steps: 14 bans, 10 picks)
+# Source: official Dota 2 patch 60 draft pattern from Stratz API
+# "B1 B1 B0 B0 B1 B0 B0 P1 P0 B1 B1 B0 P0 P1 P1 P0 P0 P1 B1 B0 B1 B0 P1 P0"
 # (is_radiant_turn, is_pick)
 CAPTAINS_MODE_FORMAT: list[tuple[bool, bool]] = [
-    # Phase 1 Bans (8 bans: R D R D R D D R)
-    (True, False), (False, False), (True, False), (False, False),
-    (True, False), (False, False), (False, False), (True, False),
-    # Phase 1 Picks (4 picks: R D D R)
-    (True, True), (False, True), (False, True), (True, True),
-    # Phase 2 Bans (6 bans: R D R D R D)
-    (True, False), (False, False), (True, False), (False, False),
-    (True, False), (False, False),
-    # Phase 2 Picks (4 picks: D R D R)
-    (False, True), (True, True), (False, True), (True, True),
-    # Phase 3 Bans (2 bans: R D)
-    (True, False), (False, False),
-    # Phase 3 Picks (2 picks: R D)
-    (True, True), (False, True),
+    # Phase 1 Bans (7 bans: D D R R D R R)
+    (False, False), (False, False), (True, False), (True, False),
+    (False, False), (True, False), (True, False),
+    # Phase 1 Picks (2 picks: D R)
+    (False, True), (True, True),
+    # Phase 2 Bans (3 bans: D D R)
+    (False, False), (False, False), (True, False),
+    # Phase 2 Picks (6 picks: R D D R R D)
+    (True, True), (False, True), (False, True), (True, True), (True, True), (False, True),
+    # Phase 3 Bans (4 bans: D R D R)
+    (False, False), (True, False), (False, False), (True, False),
+    # Phase 3 Picks (2 picks: D R)
+    (False, True), (True, True),
 ]
+
+assert len(CAPTAINS_MODE_FORMAT) == 24, f"Expected 24 actions, got {len(CAPTAINS_MODE_FORMAT)}"
+_assert_bans = sum(1 for _, p in CAPTAINS_MODE_FORMAT if not p)
+_assert_picks = sum(1 for _, p in CAPTAINS_MODE_FORMAT if p)
+assert _assert_bans == 14, f"Expected 14 bans, got {_assert_bans}"
+assert _assert_picks == 10, f"Expected 10 picks, got {_assert_picks}"
 
 
 class MCTSNode:
@@ -228,62 +235,6 @@ class MCTSDraftBot:
         for prob, is_rad in zip(probs, is_radiant_list):
             results.append(prob if is_rad else 1.0 - prob)
         return results
-
-    @torch.no_grad()
-    def _evaluate_state(
-        self,
-        heroes: list[int],
-        actions: list[int],
-        rad_picks: list[int],
-        dire_picks: list[int],
-        node: MCTSNode,
-    ) -> float:
-        """Run DraftBERT once to get the Radiant win probability."""
-        seq_len = len(heroes)
-
-        batch_heroes = torch.zeros((1, self.max_seq_len), dtype=torch.long)
-        batch_actions = torch.zeros((1, self.max_seq_len), dtype=torch.long)
-        batch_heroes[0, :seq_len] = torch.tensor(heroes, dtype=torch.long)
-        batch_actions[0, :seq_len] = torch.tensor(actions, dtype=torch.long)
-
-        # Build tabular features for the last hero in the sequence
-        # This represents the state AFTER that hero was picked/banned
-        if seq_len > 0:
-            last_hero = heroes[-1]
-            # Determine if the last action was a pick or ban
-            last_is_pick = actions[-1] in (3, 4)
-            last_is_radiant = actions[-1] in (1, 3)
-        else:
-            last_hero = 0
-            last_is_pick = node.is_pick
-            last_is_radiant = node.is_radiant_turn
-
-        tabular_array = self.state_builder.build_tabular_features(
-            hypothetical_hero_id=last_hero,
-            is_radiant_turn=last_is_radiant,
-            is_pick=last_is_pick,
-            radiant_picks=rad_picks,
-            dire_picks=dire_picks,
-        )
-
-        batch_tabular = torch.from_numpy(tabular_array).unsqueeze(0)
-        batch_patch = torch.tensor([self.state_builder.cache.patch_id], dtype=torch.long)
-
-        logits = self.model(
-            batch_heroes.to(self.device),
-            batch_actions.to(self.device),
-            batch_tabular.to(self.device),
-            batch_patch.to(self.device),
-        )
-        # DraftBERT predicts win prob for the ACTING team
-        acting_team_win_prob = torch.sigmoid(logits).item()
-
-        # Convert to absolute Radiant win probability for consistent backprop
-        # The model predicts P(last acting team wins). Convert to P(Radiant wins).
-        if not node.is_terminal:
-            last_is_radiant = actions[-1] in (1, 3) if len(actions) > 0 else node.is_radiant_turn
-            return acting_team_win_prob if last_is_radiant else 1.0 - acting_team_win_prob
-        return acting_team_win_prob
 
     def _filter_valid_composition(
         self, available_heroes: list[int], team_picks: list[int]

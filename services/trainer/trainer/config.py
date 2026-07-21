@@ -125,6 +125,9 @@ class TrainerConfig:
     core_gpm_threshold: float = float(os.getenv("TRAINER_CORE_GPM_THRESHOLD", "420.0"))
     """GPM threshold to distinguish core heroes from supports in MCTS composition filter."""
 
+    per_match_samples: int = int(os.getenv("TRAINER_PER_MATCH_SAMPLES", "12"))
+    """Max dynamic feature samples per match in StreamingLiveDataset."""
+
     @property
     def pg_dsn(self) -> str:
         return (

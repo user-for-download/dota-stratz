@@ -310,6 +310,7 @@ def train_pytorch_model(cfg: TrainerConfig, engine) -> float:
 
 
 def _log_experiment(cfg: TrainerConfig, run_id: str, val_loss: float, engine):
+    conn = None
     try:
         conn = engine.raw_connection()
         with conn.cursor() as cur:
@@ -328,6 +329,11 @@ def _log_experiment(cfg: TrainerConfig, run_id: str, val_loss: float, engine):
                     "epochs": cfg.epochs, "max_seq_len": cfg.max_seq_len,
                 })))
         conn.commit()
-        conn.close()
     except Exception as e:
         logger.warning("Could not log experiment: %s", e)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass

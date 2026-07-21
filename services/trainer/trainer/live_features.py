@@ -1,14 +1,18 @@
 """Feature extraction for LiveDraftBERT training.
 
 Extracts per-minute dynamic features capturing the full game state:
-1. Active Vulnerability (Death Timers & Buybacks)
-2. Power Spikes (BKB, Blink, Aghs, Rapier)
-3. Objectives (Towers, Barracks, Roshan, Courier)
-4. Win Conditions (Mega Creeps)
-5. Vision & Map Control (Wards, Deep Vision)
-6. Neutral Item Control
+1. Core Advantages (Gold, XP)
+2. Objectives (Towers T1-T4, Melee/Rax, Roshan, Ward, Teamfight)
+3. Momentum (Gold/XP swings 1m, 3m)
+4. Time Context (minute, minute_sin, minute_cos, day_night_sin)
+5. Active Vulnerability (Death Timers & Buybacks)
+6. Power Spikes (BKB, Blink, Aghs, Rapier)
+7. Win Conditions (Mega Creeps)
+8. Vision & Map Control (Deep Wards, Courier)
+9. Aegis Control
+10. Neutral Item Control
 
-30 real dynamic features (non-placeholder).
+32 dynamic features (DYNAMIC_FEATURE_COLUMNS is source of truth).
 """
 
 from __future__ import annotations

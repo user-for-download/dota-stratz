@@ -94,7 +94,7 @@ def test_greedy_bot(cache, builder):
             super().__init__()
             self.linear = torch.nn.Linear(builder.num_features, 1)
 
-        def forward(self, heroes, actions, tabular):
+        def forward(self, heroes, actions, tabular, patches):
             # Just use the tabular features
             return self.linear(tabular).squeeze(-1)
 
@@ -134,7 +134,7 @@ def test_mcts_bot(cache, builder):
             super().__init__()
             self.linear = torch.nn.Linear(builder.num_features, 1)
 
-        def forward(self, heroes, actions, tabular):
+        def forward(self, heroes, actions, tabular, patches):
             return self.linear(tabular).squeeze(-1)
 
     model = DummyModel()
